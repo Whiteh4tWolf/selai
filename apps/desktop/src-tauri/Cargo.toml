@@ -1,0 +1,23 @@
+[package]
+name = "selai-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Selai desktop application (Tauri composition root)"
+
+[lib]
+name = "selai_desktop_lib"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+selai-domain = { version = "0.1.0", path = "../../../crates/selai-domain" }
+selai-storage = { version = "0.1.0", path = "../../../crates/selai-storage" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+
+[lints]
+workspace = true

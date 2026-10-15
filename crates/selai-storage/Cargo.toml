@@ -1,0 +1,17 @@
+[package]
+name = "selai-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+selai-domain = { version = "0.1.0", path = "../selai-domain" }
+thiserror = "2.0.21"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

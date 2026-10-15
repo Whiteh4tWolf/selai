@@ -1,0 +1,3 @@
+# Panicking helpers are fine in tests; production code must propagate errors.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

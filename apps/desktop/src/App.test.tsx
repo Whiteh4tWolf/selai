@@ -1,0 +1,60 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { App } from './App';
+import * as ipc from './ipc';
+
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class {
+    loadAddon() {}
+    open() {}
+    writeln() {}
+    dispose() {}
+  },
+}));
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit() {}
+  },
+}));
+
+describe('App shell', () => {
+  beforeEach(() => {
+    vi.spyOn(ipc, 'appInfo').mockResolvedValue({ name: 'Selai', version: '0.1.0' });
+    vi.spyOn(ipc, 'storageStatus').mockResolvedValue({
+      schemaVersion: 2,
+      journalMode: 'wal',
+      interruptedTasksAtStartup: 0,
+      interruptedExecutionsAtStartup: 0,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows the three tabs and starts on Connections', async () => {
+    render(<App />);
+    expect(screen.getByRole('tab', { name: 'Connections' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'AI' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/schema v2, wal mode/)).toBeInTheDocument());
+  });
+
+  it('switches tabs and states that AI is not available yet', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }));
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText(/AI agent is not available yet/)).toBeInTheDocument();
+  });
+
+  it('reports a storage failure with its code instead of hiding it', async () => {
+    vi.spyOn(ipc, 'storageStatus').mockRejectedValue({
+      code: 'STORAGE_BUSY',
+      message: 'database is busy',
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByText('database unavailable: STORAGE_BUSY: database is busy')).toBeInTheDocument(),
+    );
+  });
+});
