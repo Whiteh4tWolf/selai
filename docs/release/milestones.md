@@ -150,6 +150,46 @@ during review, not by a failing test.
 - `cargo deny check advisories licenses bans sources`: pass.
 - `actionlint` on `.github/workflows/release.yml` and `ci.yml`: pass.
 
+### Application run (2026-10-16, Linux, debug build)
+
+Built with `pnpm tauri build --debug --no-bundle` and run on a virtual display
+with an unlocked keyring. Target: the OpenSSH 9.6 fixture on Ubuntu 24.04. Provider:
+a local OpenAI-compatible mock with tool calling. Steps and results:
+
+- Pass: add host through the form; first contact shows the fingerprint and trust
+  is explicit; provider added and tool calling verified; the API key is never
+  shown again.
+- Pass: `@` picker with keyboard (arrow and Enter); `df -hP` ran on the host and
+  its output was shown; the task finished `completed`.
+- Pass: a free-form command shows an approval card with the exact command, host
+  and expiry. Approve ran it on the host. Deny did not run it and the row reads
+  `denied`.
+- Pass: AI history after a restart; filters; execution details; JSON export
+  (3 rows, no password or key in the file); output purge (previews cleared, rows kept,
+  one `output_purged` audit event); audit chain verified (36 events).
+- Pass: terminal connect and a shell command.
+- Pass: the SSH password and provider key appear in neither the database, nor the
+  export, nor any model request body.
+- Pass: the host's key changed; connection blocked with `SSH_HOSTKEY_CHANGED`.
+  The key was replaced only through the explicit replace action, after the new
+  fingerprint was checked with `ssh-keyscan` out of band.
+- Pass: restart keeps hosts, provider verification and history.
+
+Bugs found by this run and fixed (each has a regression test):
+
+1. The composer kept an empty provider list until the app restarted
+   (`AgentPanel.test.tsx`: picks up a provider saved elsewhere).
+2. The AI history tab loaded once and showed nothing for runs that finished
+   later (`HistoryTab.test.tsx`: loads again when the tab is shown).
+3. A denied command never showed its outcome in the transcript
+   (`runtime.rs`: a denied command is reported as finished).
+
+Seen and not fixed: the approval card keeps the text "Approved. Waiting for the
+result." after the command has finished. Cosmetic.
+
+Not covered by this run: Stop during a slow remote command, reconnect after a
+network drop, opening an export in another application, and Windows or macOS.
+
 ## M6 — Not planned
 
 Nothing beyond M5 is started. The master plan lists v1.1 and later work (SFTP, tunnels, multi-host AI, and so on).

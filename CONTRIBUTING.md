@@ -85,3 +85,8 @@ SELAI_LIVE_COMPAT_BASE_URL=http://127.0.0.1:8000/v1 SELAI_LIVE_COMPAT_MODEL=... 
 
 Record the provider, model and date in `docs/release/milestones.md`. Do not
 mark a provider as supported from a run you did not perform.
+
+Do not run two fixtures at once. Each `Sshd::start()` sets the password of the
+same OS user (`selai-test`) to a new random value, so a second fixture, from another
+test binary or a manual `serve`, makes the first one's password wrong. Tests
+inside one binary share one password and are not affected.

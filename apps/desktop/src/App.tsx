@@ -104,7 +104,7 @@ export function App() {
           <AiTab />
         </div>
         <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" hidden={tab !== 'history'}>
-          <HistoryTab />
+          <HistoryTab visible={tab === 'history'} />
         </div>
       </main>
 

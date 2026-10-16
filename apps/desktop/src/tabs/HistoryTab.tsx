@@ -27,7 +27,9 @@ function dayBoundary(date: string, end: boolean): number | null {
   return at.getTime();
 }
 
-export function HistoryTab() {
+/** `visible` comes from the app shell. The panel stays mounted while hidden, so it
+ *  reloads each time it is shown and picks up runs that finished meanwhile. */
+export function HistoryTab({ visible }: { visible: boolean }) {
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [hostId, setHostId] = useState('');
   const [states, setStates] = useState<string[]>([]);
@@ -79,11 +81,11 @@ export function HistoryTab() {
     }
   }
 
-  // Load the first page whenever the host changes.
+  // Load the first page when the tab is shown or the host changes. The filter is
+  // applied by the Apply button, not on every change.
   useEffect(() => {
-    if (hostId) void search(false);
-    // The filter is applied by the Apply button, not on every change.
-  }, [hostId]);
+    if (visible && hostId) void search(false);
+  }, [visible, hostId]);
 
   function toggleState(state: string) {
     setStates((prev) => (prev.includes(state) ? prev.filter((s) => s !== state) : [...prev, state]));

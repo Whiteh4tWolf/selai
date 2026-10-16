@@ -59,16 +59,30 @@ function mockHistory(rows: ipc.ExecutionView[] = [execution()]) {
 describe('HistoryTab', () => {
   it('lists the chosen host history, including archived hosts', async () => {
     const query = mockHistory();
-    render(<HistoryTab />);
+    render(<HistoryTab visible />);
 
     expect(await screen.findByText('df -hP')).toBeInTheDocument();
     expect(query).toHaveBeenCalledWith('h1', { states: [] , sinceMs: null, untilMs: null }, undefined);
     expect(screen.getByRole('option', { name: 'retired-db (archived)' })).toBeInTheDocument();
   });
 
+  it('loads again when the tab is shown, so runs finished while hidden appear', async () => {
+    const query = vi
+      .spyOn(ipc, 'historyQuery')
+      .mockResolvedValue({ items: [execution()], nextCursor: null });
+    vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [host], nextCursor: null });
+    const { rerender } = render(<HistoryTab visible={false} />);
+    await waitFor(() => expect(ipc.hostList).toHaveBeenCalled());
+    expect(query).not.toHaveBeenCalled();
+
+    rerender(<HistoryTab visible />);
+    expect(await screen.findByText('df -hP')).toBeInTheDocument();
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   it('sends the chosen states when the filter is applied', async () => {
     const query = mockHistory();
-    render(<HistoryTab />);
+    render(<HistoryTab visible />);
     await screen.findByText('df -hP');
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'denied' }));
@@ -89,7 +103,7 @@ describe('HistoryTab', () => {
       execution({ id: 'e1', commandRedacted: 'uptime' }),
       execution({ id: 'e2', commandRedacted: 'df -hP', state: 'denied' }),
     ]);
-    render(<HistoryTab />);
+    render(<HistoryTab visible />);
     fireEvent.click(await screen.findByText('df -hP'));
 
     expect(timeline).toHaveBeenCalledWith('t1');
@@ -106,7 +120,7 @@ describe('HistoryTab', () => {
       extraRedactions: 0,
       disclosure: 'x',
     });
-    render(<HistoryTab />);
+    render(<HistoryTab visible />);
     await screen.findByText('df -hP');
     fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
 
@@ -119,7 +133,7 @@ describe('HistoryTab', () => {
     mockHistory();
     const purge = vi.spyOn(ipc, 'historyPurgeOutput').mockResolvedValue({ executions: 1 });
     vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
-    render(<HistoryTab />);
+    render(<HistoryTab visible />);
     await screen.findByText('df -hP');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear stored output' }));

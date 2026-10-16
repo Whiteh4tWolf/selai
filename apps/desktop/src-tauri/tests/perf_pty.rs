@@ -79,15 +79,22 @@ fn percentile(sorted: &[Duration], p: f64) -> Option<f64> {
 #[ignore = "measurement harness; run with --ignored --nocapture"]
 async fn five_terminals_streaming_keep_input_responsive() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let services = Services::open(&dir.path().join("selai.sqlite3"), Arc::new(MemoryStore::new()))
-        .expect("open");
+    let services = Services::open(
+        &dir.path().join("selai.sqlite3"),
+        Arc::new(MemoryStore::new()),
+    )
+    .expect("open");
     let sshd = Sshd::start();
     let view = services
         .host_save(password_host("perf-host", sshd.port))
         .expect("save");
     let probe_host = services.host_probe(&view.id).await.expect("probe");
     services
-        .host_trust(&view.id, &probe_host.observed.fingerprint_sha256, TrustMode::First)
+        .host_trust(
+            &view.id,
+            &probe_host.observed.fingerprint_sha256,
+            TrustMode::First,
+        )
         .expect("trust");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<(usize, TerminalEvent)>();
@@ -121,9 +128,8 @@ async fn five_terminals_streaming_keep_input_responsive() {
         }
         // printf builds the marker, so the echoed input never contains the full
         // marker and only the program output can match it.
-        let cmd = format!(
-            "seq 1 {LINES_PER_STREAM} | sed 's/^/s{i}-/'; printf 'PERF-%s\\n' DONE-{i}\n"
-        );
+        let cmd =
+            format!("seq 1 {LINES_PER_STREAM} | sed 's/^/s{i}-/'; printf 'PERF-%s\\n' DONE-{i}\n");
         services.terminal_input(id, cmd).await.expect("input");
     }
 
@@ -177,8 +183,14 @@ async fn five_terminals_streaming_keep_input_responsive() {
     let peak = proc_status_kib("VmHWM:");
 
     samples.sort();
-    println!("terminals={TERMINALS} streaming={} probe=1 lines_per_stream={LINES_PER_STREAM}", TERMINALS - 1);
-    println!("stream_bytes={total} wall_seconds={:.2}", elapsed.as_secs_f64());
+    println!(
+        "terminals={TERMINALS} streaming={} probe=1 lines_per_stream={LINES_PER_STREAM}",
+        TERMINALS - 1
+    );
+    println!(
+        "stream_bytes={total} wall_seconds={:.2}",
+        elapsed.as_secs_f64()
+    );
     println!(
         "throughput_mib_per_s={:.2}",
         total as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0)

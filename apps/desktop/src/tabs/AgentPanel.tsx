@@ -15,6 +15,7 @@ import {
   type ProviderView,
 } from '../ipc';
 import { applyEvent, isTerminal, setApprovalState, type TranscriptItem } from './agentTranscript';
+import { PROVIDERS_CHANGED } from './ProvidersPanel';
 
 interface HostChip {
   hostId: string;
@@ -41,6 +42,12 @@ export function AgentPanel() {
 
   useEffect(() => {
     let active = true;
+    const reload = () => {
+      providerList()
+        .then((page) => active && setProviders(page.items))
+        .catch(() => undefined);
+    };
+    window.addEventListener(PROVIDERS_CHANGED, reload);
     // The remembered provider wins when it is still verified; otherwise the first
     // verified one. A missing preference is not an error.
     Promise.all([providerList(), Promise.resolve().then(preferencesGet).catch(() => null)])
@@ -55,6 +62,7 @@ export function AgentPanel() {
       .catch((err: unknown) => active && setError(describeError(err)));
     return () => {
       active = false;
+      window.removeEventListener(PROVIDERS_CHANGED, reload);
     };
   }, []);
 

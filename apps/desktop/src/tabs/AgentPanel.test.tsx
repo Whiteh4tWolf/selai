@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as ipc from '../ipc';
 import { AgentPanel } from './AgentPanel';
+import { PROVIDERS_CHANGED } from './ProvidersPanel';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -143,6 +144,22 @@ describe('AgentPanel', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith('t1'));
+  });
+
+  it('shows a provider saved elsewhere without restarting the tab', async () => {
+    const list = vi
+      .spyOn(ipc, 'providerList')
+      .mockResolvedValueOnce({ items: [], nextCursor: null })
+      .mockResolvedValue({ items: [verified], nextCursor: null });
+    render(<AgentPanel />);
+    expect(await screen.findByText('No providers configured')).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new Event(PROVIDERS_CHANGED));
+    });
+
+    expect(await screen.findByRole('option', { name: /local-vllm/ })).toBeInTheDocument();
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it('verifies the audit chain on demand', async () => {

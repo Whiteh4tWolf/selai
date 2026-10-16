@@ -1083,3 +1083,48 @@ async fn a_step_that_cannot_be_recorded_stops_the_task_before_any_command() {
         "no command may run without its checkpoint"
     );
 }
+
+/// A refused command is reported as finished, so the transcript shows its outcome.
+#[tokio::test]
+async fn a_denied_command_is_reported_as_finished_with_its_reason() {
+    let w = world();
+    let (server, _) = model(vec![
+        Turn::Tool("ssh_run_command", command("id")),
+        Turn::Text("ok"),
+    ])
+    .await;
+    let exec = FakeExec::default();
+    let op = FakeOperator {
+        db: Arc::clone(&w.db),
+        mode: Operator::DenyInDb,
+        asked: Mutex::new(0),
+    };
+    let (sink, events) = sink();
+    run_task(
+        spec(&w, &server.uri(), Limits::default()),
+        &store(&w, false),
+        &client(),
+        &exec,
+        &op,
+        sink,
+        CancellationToken::new(),
+    )
+    .await;
+
+    let finished: Vec<(String, Option<String>)> = events
+        .lock()
+        .expect("lock")
+        .iter()
+        .filter_map(|e| match e {
+            TaskEvent::ToolFinished {
+                state, error_code, ..
+            } => Some((state.clone(), error_code.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        finished,
+        vec![("denied".to_owned(), Some("POLICY_DENIED".to_owned()))]
+    );
+    assert!(exec.calls().is_empty());
+}

@@ -64,6 +64,8 @@ function fromProvider(p: ProviderView): FormState {
   };
 }
 
+export const PROVIDERS_CHANGED = 'selai:providers-changed';
+
 export function ProvidersPanel() {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [templates, setTemplates] = useState<TemplateView[]>([]);
@@ -77,6 +79,8 @@ export function ProvidersPanel() {
   async function refresh() {
     try {
       setProviders((await providerList()).items);
+      // Other panels (the AI composer) keep their own copy; let them reload.
+      window.dispatchEvent(new Event(PROVIDERS_CHANGED));
     } catch (err) {
       setError(describeError(err));
     }

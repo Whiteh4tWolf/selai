@@ -387,10 +387,9 @@ where
     });
 
     if let Decision::Deny(code) = decision {
-        set_execution(
+        deny_execution(
             ctx,
             execution,
-            ExecStatus::Denied,
             &ExecutionOutcome {
                 error_code: Some(code.as_str().to_owned()),
                 ..Default::default()
@@ -487,10 +486,9 @@ where
                     format!("the expiry could not be recorded: {e}"),
                 )
             })?;
-            set_execution(
+            deny_execution(
                 ctx,
                 execution,
-                ExecStatus::Denied,
                 &ExecutionOutcome {
                     error_code: Some("APPROVAL_EXPIRED".into()),
                     ..Default::default()
@@ -502,10 +500,9 @@ where
             }))
         }
         WaitOutcome::Decided(ApprovalDecision::Deny) => {
-            set_execution(
+            deny_execution(
                 ctx,
                 execution,
-                ExecStatus::Denied,
                 &ExecutionOutcome {
                     error_code: Some("POLICY_DENIED".into()),
                     ..Default::default()
@@ -539,10 +536,9 @@ where
             })?;
             let still_waiting = current.is_some_and(|e| e.state == ExecStatus::AwaitingApproval);
             if !valid || !still_waiting {
-                set_execution(
+                deny_execution(
                     ctx,
                     execution,
-                    ExecStatus::Denied,
                     &ExecutionOutcome {
                         error_code: Some("POLICY_DENIED".into()),
                         ..Default::default()
@@ -697,6 +693,23 @@ fn model_text(out: &ExecOutput, stdout: &str, stderr: &str, limit: usize) -> Str
         text.push_str("\n[stderr truncated]");
     }
     text
+}
+
+/// Marks an execution denied and tells the operator. Every refusal goes through
+/// here, so the transcript never shows a proposal without its outcome.
+fn deny_execution<S: AgentStore, E: RemoteExecutor, W: ApprovalWaiter>(
+    ctx: &Ctx<'_, S, E, W>,
+    execution: ExecutionId,
+    outcome: &ExecutionOutcome,
+) -> Result<(), Stop> {
+    set_execution(ctx, execution, ExecStatus::Denied, outcome)?;
+    (ctx.sink)(TaskEvent::ToolFinished {
+        execution,
+        state: ExecStatus::Denied.as_str().to_owned(),
+        exit_code: None,
+        error_code: outcome.error_code.clone(),
+    });
+    Ok(())
 }
 
 fn set_execution<S: AgentStore, E: RemoteExecutor, W: ApprovalWaiter>(
