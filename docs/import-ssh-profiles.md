@@ -21,9 +21,9 @@ The importer recognizes common alternate headers, including `name`, `address`, `
 ## Password manager exports
 
 - **Bitwarden:** A plaintext CSV or JSON export can be selected directly when an SSH login has an `ssh://` or `sftp://` URI. Website logins and other vault item types are skipped. [Bitwarden documents its CSV and JSON fields](https://bitwarden.com/en-gb/help/condition-bitwarden-import/).
-- **Passbolt:** If your administrator permits a plaintext CSV export, choose that file and check its mapping. [Passbolt 5.10 and later disable cleartext CSV export by default](https://www.passbolt.com/docs/user/basic-features/browser/export/). Encrypted KDBX is not accepted by this importer.
+- **Passbolt:** Select its password-protected KDBX export and enter the export passphrase in Selai. The vault is decrypted locally; only entries whose URL starts with `ssh://` or `sftp://` appear in the preview. A permitted plaintext CSV export is also supported. [Passbolt documents KDBX export and passphrase use](https://www.passbolt.com/docs/user/basic-features/browser/export/).
 - **Termius and other SSH managers:** Convert their exported host list to the shared CSV columns above, or use a compatible plaintext JSON host list. This importer does not connect to another app or account and does not decrypt a proprietary vault.
 
 Passwords and key passphrases are never displayed in the preview. The existing host-save path writes them to the operating system's credential store. Notes are excluded by default because Selai stores host notes in its local database; enable the notes checkbox only when the source notes contain no secrets. Selai does not copy or retain the source export file, but the original plaintext file remains wherever you exported it.
 
-The file limit is 2 MB and 500 rows. An import does not connect to a host or trust its SSH key. The first connection still uses Selai's host-key confirmation flow.
+CSV and JSON files are limited to 2 MB; KDBX files are limited to 10 MB. Imports are limited to 500 profiles. An import does not connect to a host or trust its SSH key. The first connection still uses Selai's host-key confirmation flow.

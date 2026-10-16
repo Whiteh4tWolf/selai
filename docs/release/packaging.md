@@ -27,6 +27,8 @@ Bundle targets:
   `apps/desktop/src-tauri/installer-art/`; the macOS DMG uses its branded
   background from that directory. The SVG files there are the artwork sources;
   their configured BMP and PNG outputs are included in the release bundles.
+  NSIS's welcome/finish background and the WiX page banner stay neutral so the
+  installer copy remains readable and does not overlap the Selai branding.
 - `bundle.targets` is `"all"`. On Linux the workflow limits the build to
   `deb appimage` (`--bundles`), so `rpm` is not built. Windows and macOS use
   the default targets for their platform.

@@ -24,7 +24,7 @@ never included in requests to an AI provider.
 | **SSH hosts** | Add, edit, filter, and archive profiles; use password or local private key authentication; save a host and connect in one flow. Labels can contain spaces. |
 | **Host verification** | Inspect and explicitly trust a fingerprint on first connection. A changed host key blocks connection until you confirm its replacement. |
 | **Terminal** | Open interactive SSH terminals in tabs, resize them, adjust the terminal font with Ctrl+Plus or Ctrl+Minus, see connection and exit status, reconnect, and edit a host after a failed login. Open a terminal for **This computer** too. |
-| **AI chat** | Discuss a question without a server, or bind a task to one SSH host or This computer. Mention a host with `@` for one message, follow the focused terminal, or pin a server in the chat. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
+| **AI chat** | Discuss a question without a server, or bind a task to one or more SSH hosts or This computer. Mention hosts with `@` for one message to run independent tasks in parallel, follow the focused terminal, or pin a server in the chat. Each host has its own output and change approvals. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
 | **Command control** | Fixed diagnostic commands may run without a prompt. Every free-form command needs approval for the exact command and host. Denied, expired, and interrupted work is not replayed automatically. |
 | **Providers** | Configure OpenAI Responses, OpenAI Chat Completions and compatible endpoints, or Anthropic Messages. Check an API key, choose or enter a model ID, and test a real tool-call round trip. |
 | **History** | Review tasks and individual command attempts by host, their status and provider token counts. Filter the timeline, export redacted JSON, purge saved output previews, and verify the local audit chain. |
@@ -53,12 +53,23 @@ restarts.
 The assistant has two useful modes:
 
 1. With **No server** selected, chat is a multi-turn conversation with no
-   command tools. No host is contacted. This conversation is not stored on
-   disk, but its messages are sent to the configured AI provider.
-2. With a server selected, a message starts one task bound to that server. Use
-   the `@` picker for a specific host, or use the server associated with the
+   command tools. No host is contacted. Messages from the selected session
+   are sent to the configured AI provider.
+2. With servers selected, a message starts an independent task on each server in parallel. Use
+   the `@` picker for one or more hosts, or use the server associated with the
    focused terminal. You can pin a server while switching tabs. The model
    cannot switch the task to a different host.
+
+Chats are saved as named sessions in Selai's local SQLite database. Edit the
+**Session** title to describe the work, use **New session** to start a separate
+conversation, and open **Session history** to search and reopen earlier chats.
+An initial title is generated from the first request. Each session keeps its own
+conversation context; live replies continue in their original session while you
+work in another. The latest session opens again after restarting Selai. Reopening
+history displays previous commands and decisions without executing them again;
+unfinished runs are marked as detached and old approval controls are inactive.
+Credential input fields, including sudo passwords, are excluded from the saved
+transcript. Session transcripts are limited to 2 MB and 1,000 task replies.
 
 Assistant replies support GitHub Flavored Markdown, including headings, lists,
 tables, task lists, links, and fenced code blocks. A fenced `mermaid` block is
@@ -96,24 +107,9 @@ OpenAI, Anthropic, or compatible service has been verified for this preview.
 
 ### Import SSH profiles
 
-Open **Hosts → Import SSH profiles**. Select a `.csv` or plaintext `.json`
-file, check the detected column mapping and preview, select rows, and import.
-The drawer provides a downloadable CSV template. It recognizes common host
-columns, Bitwarden login entries with `ssh://` or `sftp://` URIs, and compatible
-host-list JSON such as Termius API Bridge-shaped host objects. Passbolt CSV
-and exports from other tools can be mapped to the same fields. Selai skips
-non-SSH entries and existing labels or matching host/port/username
-combinations; it reports failures per row.
+Open **Hosts -> Import SSH profiles**. Select a `.csv`, plaintext `.json`, or password-protected `.kdbx` file, review the detected column mapping and preview, select rows, and import. The drawer provides a downloadable CSV template. It recognizes common host columns, Bitwarden login entries with `ssh://` or `sftp://` URIs, compatible host-list JSON such as Termius API Bridge-shaped host objects, and Passbolt exports. KDBX vaults are decrypted locally after entering the passphrase; only entries with `ssh://` or `sftp://` URLs are included. Selai skips non-SSH entries and existing labels or matching host/port/username combinations, and reports failures per row.
 
-The preview hides passwords. Imported passwords and key passphrases use the
-same OS credential-store path as a manually added host. Notes are excluded by
-default because host notes are stored in the local database. Private key
-contents, encrypted vault files such as KDBX, and direct account connections
-are not supported. Supply a path to an existing local key file instead.
-Imports are limited to **2 MB and 500 rows** and do not connect to a server or
-trust its host key. The source export remains wherever you saved it; handle a
-plaintext export as a file containing secrets. See the [format and vendor
-examples](docs/import-ssh-profiles.md).
+The preview hides passwords. Imported passwords and key passphrases use the same OS credential-store path as a manually added host. Notes are excluded by default because host notes are stored in the local database. Private key contents and direct account connections are not supported; supply a path to an existing local key file instead. CSV/JSON imports are limited to **2 MB**, KDBX files to **10 MB**, and both to **500 profiles**. Import does not connect to a server or trust its host key. The source export remains wherever you saved it; handle a plaintext export as a file containing secrets. See the [format and vendor examples](docs/import-ssh-profiles.md).
 
 ## Get started
 

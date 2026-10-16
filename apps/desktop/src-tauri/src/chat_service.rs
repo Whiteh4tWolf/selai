@@ -1,7 +1,6 @@
 //! Plain technical discussion with a model: no host, no tools, no SSH. The
-//! conversation is held by the webview and sent with each message, bounded
-//! here. Nothing from a host is ever part of it, so no audit trail is needed;
-//! only the provider sees the text.
+//! selected session's messages are sent by the webview, bounded here. Named
+//! transcripts are persisted separately by chat_sessions; this path has no tools.
 
 use std::sync::Arc;
 

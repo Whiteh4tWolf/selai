@@ -131,6 +131,19 @@ export function hostSave(input: HostInput): Promise<HostView> {
   return invoke<HostView>('host_save', { input });
 }
 
+export interface KdbxProfile {
+  title: string;
+  url: string;
+  username: string;
+  password: string;
+  notes: string;
+}
+
+/** Decrypts a KDBX file locally and returns only entries with SSH/SFTP URLs. */
+export function kdbxPreview(fileBase64: string, passphrase: string): Promise<KdbxProfile[]> {
+  return invoke<KdbxProfile[]>('kdbx_preview', { fileBase64, passphrase });
+}
+
 export function hostArchive(id: string): Promise<void> {
   return invoke<void>('host_archive', { id });
 }
@@ -368,6 +381,25 @@ export type ChatEvent =
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export function chatSessionList(): Promise<ChatSessionSummary[]> {
+  return invoke<ChatSessionSummary[]>('chat_session_list');
+}
+
+export function chatSessionGet(id: string): Promise<ChatSessionSummary & { transcript: string }> {
+  return invoke<ChatSessionSummary & { transcript: string }>('chat_session_get', { id });
+}
+
+export function chatSessionSave(input: { id: string; title: string; transcript: string }): Promise<void> {
+  return invoke<void>('chat_session_save', { input });
 }
 
 /** Streams one reply. The returned id can be cancelled with `agentCancel`. */

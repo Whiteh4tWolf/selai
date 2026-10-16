@@ -3,9 +3,11 @@
 
 pub mod agent_service;
 pub mod chat_service;
+pub mod chat_sessions;
 pub mod commands;
 pub mod dto;
 pub mod history_service;
+pub mod kdbx_import;
 pub mod local_exec;
 mod local_terminal;
 pub mod provider_service;
@@ -56,6 +58,7 @@ pub fn run() {
             commands::host_list,
             commands::host_get,
             commands::host_save,
+            commands::kdbx_preview,
             commands::host_archive,
             commands::host_probe,
             commands::host_trust,
@@ -74,6 +77,9 @@ pub fn run() {
             commands::agent_start,
             commands::agent_cancel,
             commands::chat_send,
+            commands::chat_session_list,
+            commands::chat_session_get,
+            commands::chat_session_save,
             commands::approval_decide,
             commands::sudo_options,
             commands::host_forget_sudo_password,

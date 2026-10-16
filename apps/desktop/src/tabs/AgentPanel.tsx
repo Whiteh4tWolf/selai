@@ -20,6 +20,7 @@ import {
   type HostView,
   type ProviderView,
   type TaskEvent,
+  type ChatMessage,
 } from '../ipc';
 import { HostAvatar } from '../ui/HostAvatar';
 import { collectPages } from '../ui/collectPages';
@@ -30,6 +31,7 @@ import {
   AtIcon,
   CheckIcon,
   CloseIcon,
+  ClockIcon,
   PinIcon,
   PlusIcon,
   SendIcon,
@@ -40,6 +42,7 @@ import {
 import { SelaiLogo } from '../ui/SelaiLogo';
 import { applyEvent, isTerminal, setApprovalState, type TranscriptItem } from './agentTranscript';
 import { PROVIDERS_CHANGED } from './ProvidersPanel';
+import { useChatSessions, type ChatTurn as Turn } from './useChatSessions';
 
 /** Load targets once; the @ picker filters this list without an IPC call per key. */
 async function loadTargets(): Promise<HostView[]> {
@@ -50,22 +53,20 @@ async function loadTargets(): Promise<HostView[]> {
   return [...(local ? [local] : []), ...hosts.filter((h) => !h.archived)];
 }
 
-/** The "@query" being typed at the end of the request. Labels may hold spaces. */
-const MENTION = /(^|\s)@([^\n@]{0,64})$/;
+/** The trailing "@query" being typed at the end of the request. */
+function activeMention(value: string): { at: number; query: string } | null {
+  const at = value.lastIndexOf('@');
+  if (at < 0 || (at > 0 && !/\s/.test(value[at - 1]!))) return null;
+  const query = value.slice(at + 1);
+  return query.length <= 64 && !query.includes('\n') ? { at, query } : null;
+}
 
-interface Turn {
-  id: number;
-  /** Null for plain discussion: no host, no tools, nothing runs anywhere. */
-  hostId: string | null;
-  hostLabel: string | null;
-  /** The "@Label" text inside the prompt, highlighted in the bubble. */
-  mentionText: string | null;
-  prompt: string;
-  items: TranscriptItem[];
-  taskId: string | null;
-  running: boolean;
-  notice: string | null;
-  error: string | null;
+interface PendingKey {
+  turn: Turn;
+  host: HostView;
+  problem: HostKeyProblem;
+  executionProviderId: string;
+  history: ChatMessage[];
 }
 
 const SUGGESTIONS = [
@@ -74,8 +75,6 @@ const SUGGESTIONS = [
   { title: 'Explain a config', text: 'Explain what this nginx config does:\n' },
   { title: 'Plan a change', text: 'Help me plan a zero-downtime PostgreSQL major upgrade.' },
 ];
-
-let nextTurnId = 0;
 
 interface Props {
   onOpenProviders?: () => void;
@@ -91,7 +90,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [providerId, setProviderId] = useState('');
   /** A server mentioned with `@` in the message being written: this message only. */
-  const [host, setHost] = useState<HostView | null>(null);
+  const [hosts, setHosts] = useState<HostView[]>([]);
   /**
    * The chat's server: messages without a mention go there, so the operator does not
    * mention it every time. It follows the terminal in focus unless pinned. The model
@@ -102,21 +101,26 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   const [pinned, setPinned] = useState(false);
   const [contextMenu, setContextMenu] = useState(false);
   const [targets, setTargets] = useState<HostView[]>([]);
-  const [draftMention, setDraftMention] = useState<string | null>(null);
+  const [draftMentions, setDraftMentions] = useState<string[]>([]);
   const [prompt, setPrompt] = useState('');
   const [mention, setMention] = useState<string | null>(null);
   const [active, setActive] = useState(0);
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const sessions = useChatSessions();
+  const { turns, setTurns, updateAllTurns } = sessions;
+  const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
+  const [sessionQuery, setSessionQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [audit, setAudit] = useState<{ ok: boolean; text: string } | null>(null);
-  const [keyPrompt, setKeyPrompt] = useState<{ turn: Turn; host: HostView; problem: HostKeyProblem } | null>(null);
+  const [keyPrompt, setKeyPrompt] = useState<PendingKey | null>(null);
+  const keyPromptRef = useRef<PendingKey | null>(null);
+  const keyPromptQueue = useRef<PendingKey[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pendingText = useRef(new Map<number, string>());
+  const pendingText = useRef(new Map<string, string>());
   const textFlushTimer = useRef<number | null>(null);
 
   const running = turns.some((t) => t.running);
-  const runningTask = turns.find((t) => t.running)?.taskId ?? null;
+  const runningTasks = turns.filter((t) => t.running).flatMap((t) => t.taskId ? [t.taskId] : []);
 
   useEffect(() => {
     let active = true;
@@ -220,25 +224,30 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
 
   function onPromptChange(value: string) {
     setPrompt(value);
-    if (draftMention && !value.includes(draftMention)) {
-      // The operator deleted the mention, so the target goes with it.
-      setDraftMention(null);
-      setHost(null);
+    const remaining = draftMentions.filter((m) => value.includes(m));
+    if (remaining.length !== draftMentions.length) {
+      setDraftMentions(remaining);
+      setHosts((current) => current.filter((h) => remaining.includes(`@${h.label}`)));
     }
-    const m = MENTION.exec(value);
-    if (!m || (draftMention && `@${m[2] ?? ''}`.startsWith(draftMention))) {
+    const m = activeMention(value);
+    if (!m) {
       setMention(null);
       return;
     }
-    setMention(m[2] ?? '');
+    setMention(m.query);
     setActive(0);
   }
 
   function pickHost(h: HostView) {
     const text = `@${h.label}`;
-    setHost(h);
-    setDraftMention(text);
-    setPrompt((p) => p.replace(MENTION, `$1${text} `));
+    if (!hosts.some((item) => item.id === h.id)) {
+      setHosts((current) => [...current, h]);
+      setDraftMentions((current) => [...current, text]);
+    }
+    setPrompt((p) => {
+      const active = activeMention(p);
+      return active ? `${p.slice(0, active.at)}${text} ` : `${p}${text} `;
+    });
     setMention(null);
     textareaRef.current?.focus();
   }
@@ -248,10 +257,14 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     textareaRef.current?.focus();
   }
 
-  function clearTarget() {
-    if (draftMention) setPrompt((p) => p.replace(draftMention, '').replace(/^\s+/, ''));
-    setDraftMention(null);
-    setHost(null);
+  function clearTarget(hostId: string) {
+    const selected = hosts.find((h) => h.id === hostId);
+    if (selected) {
+      const text = `@${selected.label}`;
+      setPrompt((p) => p.replace(text, '').replace(/\s{2,}/g, ' ').trimStart());
+      setDraftMentions((current) => current.filter((m) => m !== text));
+      setHosts((current) => current.filter((h) => h.id !== hostId));
+    }
   }
 
   function onPromptKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -302,8 +315,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     (contextRequest?.host.id === contextId ? contextRequest.host : null);
   // The server for this message: a mention, else the chat's server, else none
   // (plain discussion, which any provider can answer). A server needs tool calling.
-  const target = host ?? contextHost;
-  const canSend = !running && provider !== undefined && (target === null || verified) && prompt.trim().length > 0;
+  const messageHosts = hosts.length ? hosts : contextHost ? [contextHost] : [];
+  const target = hosts[0] ?? contextHost;
+  const canSend = sessions.ready && !sessions.loading && !running && provider !== undefined && (messageHosts.length === 0 || verified) && prompt.trim().length > 0;
 
   /** Pinned servers are remembered across restarts; a failed save keeps the choice for now. */
   function rememberPin(id: string | null) {
@@ -331,8 +345,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     }
   }
 
-  const updateTurn = (id: number, change: (t: Turn) => Turn) =>
-    setTurns((prev) => {
+  const updateTurn = (id: string, change: (t: Turn) => Turn) =>
+    updateAllTurns((prev) => {
       const index = prev.findIndex((t) => t.id === id);
       if (index < 0) return prev;
       const next = change(prev[index]!);
@@ -350,13 +364,13 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     if (!pendingText.current.size) return;
     const pending = pendingText.current;
     pendingText.current = new Map();
-    setTurns((prev) => prev.map((turn) => {
+    updateAllTurns((prev) => prev.map((turn) => {
       const text = pending.get(turn.id);
       return text ? { ...turn, items: applyEvent(turn.items, { type: 'textDelta', text }) } : turn;
     }));
   }
 
-  function displayEvent(id: number, event: TaskEvent) {
+  function displayEvent(id: string, event: TaskEvent) {
     if (event.type === 'textDelta') {
       pendingText.current.set(id, (pendingText.current.get(id) ?? '') + event.text);
       if (pendingText.current.get(id)!.length >= 32_768) flushText();
@@ -376,11 +390,10 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     pendingText.current.clear();
   }, []);
 
-  async function startTurn(turn: Turn, target: HostView) {
-    updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [] }));
+  async function startTurn(turn: Turn, target: HostView, executionProviderId = providerId, history = conversation()) {
     try {
       // The new message has no reply yet, so it is not part of its own history.
-      const id = await agentStart(target.id, providerId, turn.prompt, conversation(), (event) => {
+      const id = await agentStart(target.id, executionProviderId, turn.taskPrompt, history, (event) => {
         displayEvent(turn.id, event);
       });
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
@@ -388,7 +401,12 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
       const problem = hostKeyProblem(err);
       if (problem) {
         updateTurn(turn.id, (t) => ({ ...t, running: false, notice: 'Waiting for you to approve the server key…' }));
-        setKeyPrompt({ turn, host: target, problem });
+        const promptForKey = { turn, host: target, problem, executionProviderId, history };
+        keyPromptQueue.current.push(promptForKey);
+        if (!keyPromptRef.current) {
+          keyPromptRef.current = keyPromptQueue.current.shift() ?? null;
+          setKeyPrompt(keyPromptRef.current);
+        }
         return;
       }
       updateTurn(turn.id, (t) => ({ ...t, running: false, error: describeError(err) }));
@@ -424,36 +442,39 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
 
   async function send() {
     if (!canSend) return;
-    nextTurnId += 1;
-    const turn: Turn = {
-      id: nextTurnId,
-      hostId: target?.id ?? null,
-      hostLabel: target?.label ?? null,
-      mentionText: host ? draftMention : null,
-      prompt: prompt.trim(),
+    const selectedTargets = hosts.length ? hosts : contextHost ? [contextHost] : [];
+    const originalPrompt = prompt.trim();
+    const taskPrompt = draftMentions.reduce((text, mention) => text.replaceAll(mention, ''), originalPrompt).replace(/\s{2,}/g, ' ').trim();
+    const newTurns: Turn[] = (selectedTargets.length ? selectedTargets : [null]).map((server, index) => ({
+      id: crypto.randomUUID(),
+      hostId: server?.id ?? null,
+      hostLabel: server?.label ?? null,
+      showPrompt: index === 0,
+      taskPrompt,
+      mentionText: draftMentions.length ? [...draftMentions] : null,
+      prompt: originalPrompt,
       items: [],
       taskId: null,
       running: true,
       notice: null,
       error: null,
-    };
+    }));
     const history = conversation();
-    const server = target;
-    setTurns((prev) => [...prev, turn]);
+    setTurns((prev) => [...prev, ...newTurns]);
     setPrompt('');
-    // A mention applies to this message only. The chat's server stays.
-    setDraftMention(null);
-    setHost(null);
+    // Explicit mentions apply to this message only. The chat server stays.
+    setDraftMentions([]);
+    setHosts([]);
     setMention(null);
     setError(null);
-    if (server) await startTurn(turn, server);
-    else await startChat(turn, history);
+    if (selectedTargets.length) await Promise.all(newTurns.map((turn, index) => startTurn(turn, selectedTargets[index]!)));
+    else await startChat(newTurns[0]!, history);
   }
 
   async function stop() {
-    if (!runningTask) return;
+    if (!runningTasks.length) return;
     try {
-      await agentCancel(runningTask);
+      await Promise.all(runningTasks.map((taskId) => agentCancel(taskId)));
     } catch (err) {
       setError(describeError(err));
     }
@@ -461,7 +482,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
 
   const decide = useCallback(async (approvalId: string, approve: boolean, sudo?: SudoAnswer) => {
     const update = (state: 'sending' | 'approved' | 'denied' | 'pending', why: string | null = null) =>
-      setTurns((prev) => prev.map((t) => ({ ...t, items: setApprovalState(t.items, approvalId, state, why) })));
+      updateAllTurns((prev) => prev.map((t) => t.items.some((item) => item.kind === 'approval' && item.approvalId === approvalId)
+        ? { ...t, items: setApprovalState(t.items, approvalId, state, why) } : t));
     update('sending');
     try {
       await approvalDecide(approvalId, approve, sudo);
@@ -470,7 +492,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
       // The database refused it (expired or already decided). Show why.
       update('pending', describeError(err));
     }
-  }, []);
+  }, [updateAllTurns]);
 
   async function verifyAudit() {
     try {
@@ -485,6 +507,30 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     }
   }
 
+  function resetComposer() {
+    setPrompt('');
+    setHosts([]);
+    setDraftMentions([]);
+    setMention(null);
+    setError(null);
+    setAudit(null);
+    setSessionHistoryOpen(false);
+    setSessionQuery('');
+    textareaRef.current?.focus();
+  }
+
+  function newSession() {
+    flushText();
+    sessions.newSession();
+    resetComposer();
+  }
+
+  async function openSession(id: string) {
+    flushText();
+    await sessions.selectSession(id);
+    resetComposer();
+  }
+
   return (
     <section aria-label="AI Agent" className="chat">
       <header className="panel-head">
@@ -494,10 +540,10 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
         <button
           type="button"
           className="icon-btn"
-          aria-label="New chat"
-          title="New chat"
-          onClick={() => setTurns([])}
-          disabled={running || turns.length === 0}
+          aria-label="New session"
+          title="New session"
+          onClick={newSession}
+          disabled={!sessions.ready || sessions.loading}
         >
           <PlusIcon size={15} />
         </button>
@@ -510,6 +556,37 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
           </button>
         )}
       </header>
+
+      <div className="chat-session-bar">
+        <label className="chat-session-title">
+          <span className="context-label">Session</span>
+          <input aria-label="Session title" value={sessions.current.title} maxLength={120}
+            placeholder="Name this session" disabled={!sessions.ready || sessions.loading}
+            onChange={(event) => sessions.rename(event.target.value)} />
+        </label>
+        <button type="button" className="icon-btn" aria-label="Session history" title="Session history"
+          aria-expanded={sessionHistoryOpen} onClick={() => setSessionHistoryOpen((open) => !open)}>
+          <ClockIcon size={15} />
+        </button>
+      </div>
+      {sessionHistoryOpen && (
+        <section className="chat-session-history" aria-label="Chat sessions">
+          <input aria-label="Search sessions" placeholder="Search sessions…" value={sessionQuery}
+            onChange={(event) => setSessionQuery(event.target.value)} />
+          <ul>
+            {sessions.sessions.filter((session) => session.title.toLowerCase().includes(sessionQuery.toLowerCase())).map((session) => (
+              <li key={session.id}>
+                <button type="button" aria-current={session.id === sessions.current.id ? 'true' : undefined}
+                  disabled={sessions.loading} onClick={() => void openSession(session.id)}>
+                  <span>{session.title || 'New session'}</span>
+                  <small>{session.running ? 'Running' : new Date(session.updatedAtMs).toLocaleString()}</small>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {sessions.loading && <p role="status">Opening session…</p>}
+        </section>
+      )}
 
       <div className="chat-scroll" ref={scrollRef}>
         {audit && (
@@ -538,7 +615,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                   type="button"
                   className="suggestion"
                   onClick={() => {
-                    setPrompt(draftMention ? `${draftMention} ${s.text}` : s.text);
+                    setPrompt(draftMentions.length ? `${draftMentions.join(' ')} ${s.text}` : s.text);
                     textareaRef.current?.focus();
                   }}
                 >
@@ -556,12 +633,18 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
       </div>
 
       <div className="composer-wrap">
+        {sessions.saveError && (
+          <p role="alert" className="banner" data-tone="danger">
+            <span className="grow">{sessions.saveError}</span>
+            <button type="button" className="btn btn-sm" onClick={sessions.retrySave}>Retry</button>
+          </p>
+        )}
         {error && (
           <p role="alert" className="banner" data-tone="danger" style={{ maxWidth: 820, margin: '0 auto 0.6rem' }}>
             {error}
           </p>
         )}
-        {(providers.length === 0 || (target !== null && !verified)) && (
+        {(providers.length === 0 || (messageHosts.length > 0 && !verified)) && (
           <div className="banner" data-tone="warning" style={{ maxWidth: 820, margin: '0 auto 0.6rem' }}>
             <AlertIcon />
             <span className="grow">
@@ -569,7 +652,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                 ? 'Add an AI provider first.'
                 : 'Working on a server needs a provider whose tool calling test passed.'}
             </span>
-            {providers.length > 0 && host === null && contextHost && (
+            {providers.length > 0 && hosts.length === 0 && contextHost && (
               <button type="button" className="btn btn-sm" onClick={() => chooseContext(null)}>
                 Chat without server
               </button>
@@ -615,22 +698,21 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
             </ul>
           )}
           <div className="context-row">
-            <span className="context-label">{host ? 'This message' : contextHost ? pinned ? 'Pinned server' : 'Following terminal' : 'Context'}</span>
-            {host ? (
-              <span className="target-chip" data-kind="mention" title={`${host.username}@${host.hostname}`}>
+            <span className="context-label">{hosts.length ? `This message · ${hosts.length} server${hosts.length === 1 ? '' : 's'}` : contextHost ? pinned ? 'Pinned server' : 'Following terminal' : 'Context'}</span>
+            {hosts.map((h) => (
+              <span key={h.id} className="target-chip" data-kind="mention" title={`${h.username}@${h.hostname}`}>
                 <AtIcon size={12} />
-                {host.label}
-                <small>this message</small>
-                <button type="button" aria-label={`Remove ${host.label}`} onClick={clearTarget}>
+                {h.label}
+                <button type="button" aria-label={`Remove ${h.label}`} onClick={() => clearTarget(h.id)}>
                   <CloseIcon size={11} />
                 </button>
               </span>
-            ) : null}
+            ))}
             {contextHost ? (
               <span
                 className="target-chip"
-                data-muted={host ? 'true' : undefined}
-                title={host ? `This message goes to ${host.label} instead` : `${contextHost.username}@${contextHost.hostname}`}
+                data-muted={hosts.length ? 'true' : undefined}
+                title={hosts.length ? `This message goes to ${hosts.map((h) => h.label).join(', ')}` : `${contextHost.username}@${contextHost.hostname}`}
               >
                 <button
                   type="button"
@@ -658,7 +740,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                 </button>
               </span>
             ) : (
-              !host && (
+              hosts.length === 0 && (
                 <button
                   type="button"
                   className="target-chip"
@@ -704,7 +786,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
             onChange={(e) => onPromptChange(e.target.value)}
             onKeyDown={onPromptKeyDown}
             rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
-            placeholder={target ? `Ask about ${target.label}, or anything…` : 'Ask anything…'}
+            placeholder={hosts.length > 1 ? `Ask about ${hosts.length} servers, or anything…` : target ? `Ask about ${target.label}, or anything…` : 'Ask anything…'}
           />
           <div className="composer-bar">
             <button type="button" className="icon-btn" aria-label="Mention a host" title="Ask about another host for this message (@)" onClick={insertAt}>
@@ -732,7 +814,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
             </select>
             <span className="grow" />
             {running ? (
-              <button type="button" className="btn btn-danger send-btn" aria-label="Stop" title="Stop" onClick={stop} disabled={!runningTask}>
+              <button type="button" className="btn btn-danger send-btn" aria-label="Stop" title="Stop all server tasks" onClick={stop} disabled={!runningTasks.length}>
                 <StopIcon size={14} />
               </button>
             ) : (
@@ -750,8 +832,10 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
           </div>
         </div>
         <p className="composer-note">
-          {host
-            ? `This message goes to ${host.label}. Changes wait for your approval.`
+          {hosts.length > 0
+            ? hosts.length === 1
+              ? `This message goes to ${hosts[0]!.label}. Changes wait for your approval.`
+              : `This message runs on ${hosts.map((h) => h.label).join(', ')} in parallel. Changes wait for approval on each server.`
             : contextHost
               ? `Working on ${contextHost.label}: commands run only when needed, and changes wait for your approval.`
               : 'Plain chat: nothing runs on any server.'}
@@ -765,17 +849,23 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
           address={`${keyPrompt.host.hostname}:${keyPrompt.host.port}`}
           problem={keyPrompt.problem}
           onTrusted={() => {
-            const { turn, host: target } = keyPrompt;
+            const { turn, host: target, executionProviderId, history } = keyPrompt;
+            keyPromptRef.current = null;
             setKeyPrompt(null);
-            void startTurn(turn, target);
+            updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null }));
+            void startTurn(turn, target, executionProviderId, history);
+            keyPromptRef.current = keyPromptQueue.current.shift() ?? null;
+            setKeyPrompt(keyPromptRef.current);
           }}
           onCancel={() => {
             updateTurn(keyPrompt.turn.id, (t) => ({
               ...t,
+              running: false,
               notice: null,
               error: 'Not started: the server key was not approved, so nothing was sent to the host.',
             }));
-            setKeyPrompt(null);
+            keyPromptRef.current = keyPromptQueue.current.shift() ?? null;
+            setKeyPrompt(keyPromptRef.current);
           }}
         />
       )}
@@ -789,17 +879,20 @@ const TurnEntry = memo(function TurnEntry({ turn, onDecide }: {
   turn: Turn;
   onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer) => void;
 }) {
+  const awaitingApproval = turn.items.some((i) => i.kind === 'approval' && i.state === 'pending');
+  const commandRunning = turn.items.some((i) => i.kind === 'tool' && (i.status === 'proposed' || i.status === 'running'));
+  const hasReplyText = turn.items.some((i) => i.kind === 'text');
   return (
     <Fragment>
-      <li className="turn-user">
+      {turn.showPrompt && <li className="turn-user">
         <div className="bubble">{highlight(turn.prompt, turn.mentionText)}</div>
-      </li>
+      </li>}
       <li className="turn-ai">
         <span className="ai-avatar" role="img" aria-label="Selai assistant">
           <SelaiLogo size={26} />
         </span>
         <div className="ai-body">
-          {turn.hostLabel && turn.items.some((i) => i.kind === 'tool' || i.kind === 'approval') && (
+          {turn.hostLabel && (
             <div className="ai-meta">
               <span className="host-tag" title="Commands in this reply ran on this host">
                 <TerminalIcon size={11} /> {turn.hostLabel}
@@ -809,15 +902,20 @@ const TurnEntry = memo(function TurnEntry({ turn, onDecide }: {
           {turn.items.map((item, i) => (
             <TranscriptRow key={i} item={item} items={turn.items} onDecide={onDecide} />
           ))}
-          {turn.running &&
-            !turn.items.some((i) => i.kind === 'text') &&
-            !turn.items.some((i) => i.kind === 'approval' && i.state === 'pending') && (
+          {turn.running && !awaitingApproval && !commandRunning && (
+            hasReplyText ? (
+              <div className="turn-progress" role="status" aria-label="Working">
+                <span className="spinner" aria-hidden="true" />
+                <span>Working…</span>
+              </div>
+            ) : (
               <span className="typing" aria-label="Working">
                 <span />
                 <span />
                 <span />
               </span>
-            )}
+            )
+          )}
           {turn.notice && <p className="status-line">{turn.notice}</p>}
           {turn.error && (
             <p role="alert" className="banner" data-tone="danger">
@@ -841,17 +939,30 @@ function TargetAvatar({ host }: { host: HostView }) {
 }
 
 /** Shows the bound "@Label" as a pill inside the sent message. */
-function highlight(text: string, mentionText: string | null): ReactNode {
-  if (!mentionText) return text;
-  const at = text.indexOf(mentionText);
-  if (at < 0) return text;
-  return (
-    <>
-      {text.slice(0, at)}
-      <span className="mention">{mentionText}</span>
-      {text.slice(at + mentionText.length)}
-    </>
-  );
+function highlight(text: string, mentionTexts: string[] | null): ReactNode {
+  if (!mentionTexts?.length) return text;
+  const tokens = [...mentionTexts].sort((a, b) => b.length - a.length);
+  const parts: ReactNode[] = [];
+  let remainder = text;
+  while (remainder) {
+    let bestAt = -1;
+    let bestToken = '';
+    for (const token of tokens) {
+      const at = remainder.indexOf(token);
+      if (at >= 0 && (bestAt < 0 || at < bestAt)) {
+        bestAt = at;
+        bestToken = token;
+      }
+    }
+    if (bestAt < 0) {
+      parts.push(remainder);
+      break;
+    }
+    if (bestAt > 0) parts.push(remainder.slice(0, bestAt));
+    parts.push(<span className="mention" key={`${bestToken}-${parts.length}`}>{bestToken}</span>);
+    remainder = remainder.slice(bestAt + bestToken.length);
+  }
+  return <>{parts}</>;
 }
 
 function TranscriptRow({
@@ -900,9 +1011,11 @@ type ApprovalItem = Extract<TranscriptItem, { kind: 'approval' }>;
 function StatusBadge({ item }: { item: ToolItem }) {
   const done = item.status === 'completed';
   const bad = ['failed', 'denied', 'timed_out', 'cancelled', 'interrupted'].includes(item.status);
+  const running = item.status === 'proposed' || item.status === 'running';
   return (
     <span className="badge" data-tone={done ? 'success' : bad ? 'danger' : 'accent'}>
-      {item.status.replace(/_/g, ' ')}
+      {running && <span className="spinner" role="status" aria-label="Running command" style={{ width: 11, height: 11, borderWidth: 1.5 }} />}
+      {running ? 'running' : item.status.replace(/_/g, ' ')}
       {item.exitCode !== null ? ` · exit ${item.exitCode}` : ''}
     </span>
   );
@@ -916,9 +1029,9 @@ function Activity({ item }: { item: ToolItem }) {
   return (
     <div className="activity" aria-label="Command" data-tone={done ? 'success' : bad ? 'danger' : undefined}>
       <span className="mark">
-        {pending ? <span className="spinner" style={{ width: 12, height: 12 }} /> : done ? <CheckIcon size={11} /> : bad ? <CloseIcon size={11} /> : <TerminalIcon size={11} />}
+        {pending ? <span className="spinner" role="status" aria-label="Running command" style={{ width: 12, height: 12 }} /> : done ? <CheckIcon size={11} /> : bad ? <CloseIcon size={11} /> : <TerminalIcon size={11} />}
       </span>
-      <span className="when">{pending ? 'Running' : 'Ran'}</span>
+      <span className="when">{pending ? 'Running' : item.status === 'detached' ? 'Check History' : 'Ran'}</span>
       <code title={item.command}>{item.command}</code>
       {!pending && (
         <span className="when">

@@ -1,6 +1,7 @@
 import type { AuthMethod, HostInput, HostView } from '../ipc';
 
 export const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
+export const MAX_KDBX_BYTES = 10 * 1024 * 1024;
 export const MAX_IMPORT_ROWS = 500;
 
 export const TEMPLATE = 'label,hostname,port,username,auth_method,password,private_key_path,key_passphrase,notes\r\nExample,example.com,22,ops,password,,,,\r\n';
@@ -138,7 +139,7 @@ function jsonRow(item: unknown): Record<string, string> {
 export function parseProfileTable(text: string, filename: string): ProfileTable {
   if (new TextEncoder().encode(text).length > MAX_IMPORT_BYTES) throw new Error('Import file is larger than 2 MB.');
   const source = text.replace(/^\uFEFF/, '');
-  if (/\.kdbx$/i.test(filename)) throw new Error('Encrypted KDBX exports are not supported. Export a CSV or convert to the Selai template.');
+  if (/\.kdbx$/i.test(filename)) throw new Error('Enter the KDBX passphrase to unlock this file.');
   if (/\.json$/i.test(filename)) {
     let data: unknown;
     try { data = JSON.parse(source); } catch { throw new Error('Invalid JSON file.'); }

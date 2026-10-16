@@ -11,6 +11,7 @@ use crate::{
         AgentEventView, AuditVerifyView, ExecutionView, SudoAnswerInput, SudoOptionsView,
     },
     chat_service::{ChatEventView, ChatMessageInput},
+    chat_sessions::{ChatSessionInput, ChatSessionView},
     dto::{
         AppInfo, CommandError, GroupView, HostInput, HostView, ModelsView, ProbeView,
         ProviderInput, ProviderModelsInput, ProviderTestView, ProviderView, StorageStatus,
@@ -61,6 +62,15 @@ pub fn host_get(state: State<'_, AppState>, id: String) -> Result<HostView, Comm
 #[tauri::command]
 pub fn host_save(state: State<'_, AppState>, input: HostInput) -> Result<HostView, CommandError> {
     services(&state)?.host_save(input)
+}
+
+#[tauri::command]
+pub fn kdbx_preview(
+    file_base64: String,
+    passphrase: String,
+) -> Result<Vec<crate::kdbx_import::KdbxProfile>, CommandError> {
+    crate::kdbx_import::preview(&file_base64, passphrase)
+        .map_err(|message| CommandError::new(selai_domain::ErrorCode::InvalidInput, message))
 }
 
 #[tauri::command]
@@ -220,6 +230,27 @@ pub async fn chat_send(
 #[tauri::command]
 pub fn agent_cancel(state: State<'_, AppState>, task_id: String) -> Result<bool, CommandError> {
     services(&state)?.agent_cancel(&task_id)
+}
+
+#[tauri::command]
+pub fn chat_session_list(state: State<'_, AppState>) -> Result<Vec<ChatSessionView>, CommandError> {
+    services(&state)?.chat_session_list()
+}
+
+#[tauri::command]
+pub fn chat_session_get(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ChatSessionView, CommandError> {
+    services(&state)?.chat_session_get(&id)
+}
+
+#[tauri::command]
+pub fn chat_session_save(
+    state: State<'_, AppState>,
+    input: ChatSessionInput,
+) -> Result<(), CommandError> {
+    services(&state)?.chat_session_save(input)
 }
 
 #[tauri::command]

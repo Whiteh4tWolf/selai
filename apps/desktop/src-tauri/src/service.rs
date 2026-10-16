@@ -867,7 +867,7 @@ pub(crate) fn ssh_error(err: &SshError) -> CommandError {
     out
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()

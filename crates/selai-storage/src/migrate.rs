@@ -29,6 +29,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: include_str!("../migrations/0005_local_host.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("../migrations/0006_chat_sessions.sql"),
+    },
 ];
 
 /// Applies every migration newer than the database's recorded version.

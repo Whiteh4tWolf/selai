@@ -1,7 +1,9 @@
 //! SQLite persistence for Selai: connection setup, migrations, startup
-//! reconciliation and error mapping. Secret material never reaches this crate.
+//! reconciliation and error mapping. Host and provider credential values stay
+//! in the OS credential store; chat transcripts contain user-provided text.
 
 mod agent;
+mod chat_sessions;
 mod db;
 mod error;
 mod history;
@@ -17,6 +19,7 @@ pub use agent::{
     ApprovalDecision, ApprovalRecord, ExecutionOutcome, ExecutionRecord, NewApproval, NewExecution,
     NewTask, TaskRecord, PROMPT_PREVIEW_MAX,
 };
+pub use chat_sessions::ChatSessionRecord;
 pub use db::Database;
 pub use error::StorageError;
 pub use history::{HistoryFilter, HostUsageSummary, PurgeScope};

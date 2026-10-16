@@ -1282,6 +1282,22 @@ details.advanced > .form-section {
   border-radius: var(--radius-sm);
 }
 
+.kdbx-unlock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.5rem 0.75rem;
+}
+
+.kdbx-unlock .field,
+.kdbx-unlock .hint {
+  grid-column: 1 / -1;
+}
+
+.kdbx-unlock .hint {
+  margin: 0;
+}
+
 .import-row {
   display: grid;
   grid-template-columns: 15px minmax(0, 1fr) minmax(90px, 120px);
@@ -1668,6 +1684,89 @@ details.advanced > .form-section {
 .approval-foot .grow {
   flex: 1;
   color: var(--muted);
+}
+
+.chat-session-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.chat-session-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-session-title input {
+  min-width: 0;
+  width: 100%;
+  padding: 5px 6px;
+  background: transparent;
+  border-color: transparent;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.chat-session-title input:hover,
+.chat-session-title input:focus {
+  border-color: var(--border-strong);
+}
+
+.chat-session-history {
+  flex: none;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.chat-session-history > input {
+  width: 100%;
+  font-size: 12px;
+}
+
+.chat-session-history ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.chat-session-history li button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 9px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.chat-session-history li button > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-session-history li small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chat-session-history li button:hover,
+.chat-session-history li button[aria-current='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .chat-empty {
@@ -2778,6 +2877,21 @@ option {
   display: inline-flex;
   gap: 4px;
   padding: 0.4rem 0;
+}
+
+.turn-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.turn-progress .spinner {
+  width: 13px;
+  height: 13px;
+  border-width: 1.5px;
 }
 
 .typing span {

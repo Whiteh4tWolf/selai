@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { describeError, hostList, hostSave, type HostView } from '../ipc';
+import { describeError, hostList, hostSave, kdbxPreview, type HostView } from '../ipc';
 import { Drawer } from '../ui/Overlay';
 import { collectPages } from '../ui/collectPages';
 import {
-  FIELDS, MAX_IMPORT_BYTES, TEMPLATE, guessMapping, parseProfileTable, prepareProfiles,
+  FIELDS, MAX_IMPORT_BYTES, MAX_KDBX_BYTES, TEMPLATE, guessMapping, parseProfileTable, prepareProfiles,
   type ColumnMapping, type ImportField, type ProfileTable,
 } from './sshProfileImport';
 
@@ -22,12 +22,24 @@ async function allHosts(): Promise<HostView[]> {
   return collectPages((cursor) => hostList(undefined, false, cursor));
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return window.btoa(binary);
+}
+
 export function HostImport({ onClose, onImported }: Props) {
   const [table, setTable] = useState<ProfileTable | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>(() => guessMapping([]));
   const [existing, setExisting] = useState<HostView[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [fileName, setFileName] = useState('');
+  const [kdbxFile, setKdbxFile] = useState<File | null>(null);
+  const [kdbxPassphrase, setKdbxPassphrase] = useState('');
   const [includeNotes, setIncludeNotes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,8 +50,20 @@ export function HostImport({ onClose, onImported }: Props) {
   async function chooseFile(file: File | undefined) {
     if (!file) return;
     setTable(null);
+    setKdbxFile(null);
+    setKdbxPassphrase('');
     setResult(null);
     setError(null);
+    setFileName('');
+    if (/\.kdbx$/i.test(file.name)) {
+      if (file.size > MAX_KDBX_BYTES) {
+        setError('KDBX files must be 10 MB or smaller.');
+        return;
+      }
+      setKdbxFile(file);
+      setFileName(file.name);
+      return;
+    }
     setBusy(true);
     try {
       if (file.size > MAX_IMPORT_BYTES) throw new Error('Import file is larger than 2 MB.');
@@ -53,6 +77,28 @@ export function HostImport({ onClose, onImported }: Props) {
     } catch (err) {
       setError(err instanceof Error ? err.message : describeError(err));
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlockKdbx() {
+    if (!kdbxFile || !kdbxPassphrase) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const profiles = await kdbxPreview(await fileToBase64(kdbxFile), kdbxPassphrase);
+      const rows = profiles.map(({ title, url, username, password, notes }) => ({ title, uri: url, username, password, notes }));
+      const parsed = parseProfileTable(JSON.stringify(rows), 'kdbx-profiles.json');
+      const hosts = await allHosts();
+      setTable(parsed);
+      setMapping(guessMapping(parsed.headers));
+      setExisting(hosts);
+      setSelected(new Set(parsed.rows.map((_, index) => index)));
+      setKdbxFile(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : describeError(err));
+    } finally {
+      setKdbxPassphrase('');
       setBusy(false);
     }
   }
@@ -84,6 +130,8 @@ export function HostImport({ onClose, onImported }: Props) {
       setTable(null);
       setSelected(new Set());
       setFileName('');
+      setKdbxFile(null);
+      setKdbxPassphrase('');
       try {
         if (saved) await onImported();
       } catch (err) {
@@ -110,17 +158,36 @@ export function HostImport({ onClose, onImported }: Props) {
       }
     >
       <div className="form-section">
-        <p className="muted">Choose a plaintext CSV or JSON export. Bitwarden SSH logins, Passbolt CSV, and host lists using common column names are recognized. Other exports can use the Selai CSV template.</p>
+        <p className="muted">Choose a CSV or JSON export, or a password-protected KDBX file. Bitwarden SSH logins, Passbolt exports, and host lists using common column names are recognized. Other exports can use the Selai CSV template.</p>
         <p className="muted">Only SSH/SFTP addresses are taken from password-manager URI fields. Passwords are hidden here and saved through the OS keychain. The export file is not retained by Selai.</p>
         <a className="btn btn-sm" download="selai-ssh-profiles.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(TEMPLATE)}`}>Download CSV template</a>
         <label className="field">
           Profile export file
-          <input type="file" accept=".csv,.json,text/csv,application/json" disabled={busy} onChange={(event) => {
+          <input type="file" accept=".csv,.json,.kdbx,text/csv,application/json,application/octet-stream" disabled={busy} onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             event.currentTarget.value = '';
             void chooseFile(file);
           }} />
         </label>
+        {kdbxFile && (
+          <div className="kdbx-unlock">
+            <label className="field">
+              KDBX passphrase
+              <input
+                type="password"
+                aria-label="KDBX passphrase"
+                autoComplete="current-password"
+                value={kdbxPassphrase}
+                onChange={(event) => setKdbxPassphrase(event.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <button type="button" className="btn btn-sm" onClick={() => void unlockKdbx()} disabled={busy || !kdbxPassphrase}>
+              {busy ? 'Unlocking…' : 'Unlock KDBX'}
+            </button>
+            <p className="hint">The vault is decrypted locally. Only SSH/SFTP entries are shown for import.</p>
+          </div>
+        )}
         {error && <p role="alert" className="banner" data-tone="danger">{error}</p>}
         {result && <p role="status" className="banner" data-tone={result.failures.length ? 'warning' : 'success'}>
           Imported {result.saved}; skipped {result.skipped}; failed {result.failures.length}.

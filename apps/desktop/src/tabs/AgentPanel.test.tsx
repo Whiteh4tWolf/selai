@@ -1,10 +1,15 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ipc from '../ipc';
 import { AgentPanel } from './AgentPanel';
 import { PROVIDERS_CHANGED } from './ProvidersPanel';
 
 afterEach(() => vi.restoreAllMocks());
+
+beforeEach(() => {
+  vi.spyOn(ipc, 'chatSessionList').mockResolvedValue([]);
+  vi.spyOn(ipc, 'chatSessionSave').mockResolvedValue(undefined);
+});
 
 const verified: ipc.ProviderView = {
   id: 'p1',
@@ -70,13 +75,97 @@ async function sendRequest(textarea: HTMLElement, text: string) {
 }
 
 describe('AgentPanel', () => {
+  it('keeps an unsaved session in memory and allows retrying a failed write', async () => {
+    vi.mocked(ipc.chatSessionSave).mockRejectedValueOnce(new Error('disk full'));
+    render(<AgentPanel />);
+    await waitFor(() => expect(screen.getByLabelText('Session title')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Session title'), { target: { value: 'Recover deployment' } });
+    expect(await screen.findByText(/Session history could not be saved.*disk full/, {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.getByLabelText('Session title')).toHaveValue('Recover deployment');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(ipc.chatSessionSave).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(ipc.chatSessionSave).mock.calls[1]![0]).toEqual(vi.mocked(ipc.chatSessionSave).mock.calls[0]![0]);
+    await waitFor(() => expect(screen.queryByText(/Session history could not be saved/)).not.toBeInTheDocument());
+  });
+
+  it('saves a titled conversation and restores it with context after reopening', async () => {
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+    let emit: ((event: ipc.ChatEvent) => void) | undefined;
+    const chat = vi.spyOn(ipc, 'chatSend').mockImplementation(async (_p, _m, onEvent) => {
+      emit = onEvent;
+      return 'chat-task';
+    });
+    const view = render(<AgentPanel />);
+    const textarea = screen.getByLabelText('Request');
+    fireEvent.change(textarea, { target: { value: 'Explain SSH keepalive' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(chat).toHaveBeenCalled());
+    act(() => {
+      emit?.({ type: 'textDelta', text: 'Keepalive checks whether the connection is alive.' });
+      emit?.({ type: 'completed' });
+    });
+    fireEvent.change(screen.getByLabelText('Session title'), { target: { value: 'SSH troubleshooting' } });
+    await waitFor(() => expect(ipc.chatSessionSave).toHaveBeenCalled(), { timeout: 2000 });
+    const saved = vi.mocked(ipc.chatSessionSave).mock.calls.at(-1)![0];
+    expect(saved.title).toBe('SSH troubleshooting');
+    expect(JSON.parse(saved.transcript).turns[0].items).toContainEqual({ kind: 'text', text: 'Keepalive checks whether the connection is alive.' });
+    view.unmount();
+
+    const summary = { id: saved.id, title: saved.title, createdAtMs: 1, updatedAtMs: 2 };
+    vi.mocked(ipc.chatSessionList).mockResolvedValue([summary]);
+    vi.spyOn(ipc, 'chatSessionGet').mockResolvedValue({ ...summary, transcript: saved.transcript });
+    render(<AgentPanel />);
+    expect(await screen.findByText('Keepalive checks whether the connection is alive.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Session title')).toHaveValue('SSH troubleshooting');
+    fireEvent.change(screen.getByLabelText('Request'), { target: { value: 'What interval should I use?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(chat).toHaveBeenCalledTimes(2));
+    expect(chat.mock.calls[1]![1]).toEqual([
+      { role: 'user', content: 'Explain SSH keepalive' },
+      { role: 'assistant', content: 'Keepalive checks whether the connection is alive.' },
+      { role: 'user', content: 'What interval should I use?' },
+    ]);
+  });
+
+  it('keeps live replies in their original session when a new session is opened', async () => {
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+    const callbacks: Array<(event: ipc.ChatEvent) => void> = [];
+    const chat = vi.spyOn(ipc, 'chatSend').mockImplementation(async (_p, _m, onEvent) => {
+      callbacks.push(onEvent);
+      return `chat-${callbacks.length}`;
+    });
+    render(<AgentPanel />);
+    fireEvent.change(screen.getByLabelText('Request'), { target: { value: 'Explain systemd' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    fireEvent.change(screen.getByLabelText('Request'), { target: { value: 'Explain nginx' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(chat).toHaveBeenCalledTimes(2));
+    expect(chat.mock.calls[1]![1]).toEqual([{ role: 'user', content: 'Explain nginx' }]);
+    act(() => {
+      callbacks[0]!({ type: 'textDelta', text: 'systemd manages services.' });
+      callbacks[0]!({ type: 'completed' });
+      callbacks[1]!({ type: 'textDelta', text: 'nginx serves HTTP requests.' });
+      callbacks[1]!({ type: 'completed' });
+    });
+    expect(await screen.findByText('nginx serves HTTP requests.')).toBeInTheDocument();
+    expect(screen.queryByText('systemd manages services.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Session history' }));
+    fireEvent.click(screen.getByRole('button', { name: /Explain systemd/ }));
+    expect(await screen.findByText('systemd manages services.')).toBeInTheDocument();
+    expect(screen.queryByText('nginx serves HTTP requests.')).not.toBeInTheDocument();
+  });
+
   it('chooses the host with @ and starts the task on that host and provider', async () => {
     const agent = mockAgent();
     const textarea = await pickProductionWeb();
     await sendRequest(textarea, 'check disk usage');
 
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('h1', 'p1', '@production-web check disk usage', [], expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function)),
     );
     // The sent message stays in the thread with the mention highlighted.
     expect(await screen.findByText('@production-web', { selector: '.mention' })).toBeInTheDocument();
@@ -100,8 +189,31 @@ describe('AgentPanel', () => {
     fireEvent.change(textarea, { target: { value: 'restart @Production Web nginx' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('h7', 'p1', 'restart @Production Web nginx', [], expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('h7', 'p1', 'restart nginx', [], expect.any(Function)),
     );
+  });
+
+  it('runs one parallel task per mentioned server and shows the shared request once', async () => {
+    const agent = mockAgent();
+    const second = { ...host, id: 'h2', label: 'staging-db', hostname: '10.0.0.6' };
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+    vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [host, second], nextCursor: null });
+    render(<AgentPanel />);
+    const textarea = screen.getByLabelText('Request');
+
+    fireEvent.change(textarea, { target: { value: '@prod' } });
+    fireEvent.click(await screen.findByRole('button', { name: /production-web/ }));
+    fireEvent.change(textarea, { target: { value: '@production-web @stag' } });
+    fireEvent.click(await screen.findByRole('button', { name: /staging-db/ }));
+    fireEvent.change(textarea, { target: { value: '@production-web @staging-db check disk usage' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(agent.start).toHaveBeenCalledTimes(2));
+    expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function));
+    expect(agent.start).toHaveBeenCalledWith('h2', 'p1', 'check disk usage', [], expect.any(Function));
+    expect(screen.getAllByText('check disk usage', { selector: '.bubble' })).toHaveLength(1);
+    expect(screen.getByText('production-web', { selector: '.host-tag' })).toBeInTheDocument();
+    expect(screen.getByText('staging-db', { selector: '.host-tag' })).toBeInTheDocument();
   });
 
   it('deleting the mention text removes the target, and the message becomes plain chat', async () => {
@@ -223,6 +335,25 @@ describe('AgentPanel', () => {
     expect(await screen.findByText('Done.')).toBeInTheDocument();
   });
 
+  it('keeps progress visible after text starts and animates while a command runs', async () => {
+    const agent = mockAgent();
+    const textarea = await pickProductionWeb();
+    await sendRequest(textarea, 'install apache');
+    await waitFor(() => expect(agent.start).toHaveBeenCalled());
+
+    agent.play({ taskId: 't1', type: 'textDelta', text: 'Apache2 is missing. Installing it now.' });
+    expect(await screen.findByRole('status', { name: 'Working' })).toBeInTheDocument();
+
+    agent.play({ taskId: 't1', type: 'toolProposed', executionId: 'e1', tool: 'ssh.run_command', command: 'apt-get install apache2', hostLabel: 'production-web' });
+    expect(await screen.findByRole('status', { name: 'Running command' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Working' })).not.toBeInTheDocument();
+
+    agent.play({ taskId: 't1', type: 'toolFinished', executionId: 'e1', state: 'completed', exitCode: 0, errorCode: null });
+    expect(await screen.findByRole('status', { name: 'Working' })).toBeInTheDocument();
+    agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Working' })).not.toBeInTheDocument());
+  });
+
   it('shows the exact command and sends the operator decision for an approval', async () => {
     const agent = mockAgent();
     const decide = vi.spyOn(ipc, 'approvalDecide').mockResolvedValue(undefined);
@@ -285,7 +416,7 @@ describe('AgentPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Trust & connect' }));
     await waitFor(() => expect(trust).toHaveBeenCalledWith('h1', 'SHA256:abc', 'first'));
     await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
-    expect(start.mock.calls[1]?.slice(0, 3)).toEqual(['h1', 'p1', '@production-web uptime']);
+    expect(start.mock.calls[1]?.slice(0, 3)).toEqual(['h1', 'p1', 'uptime']);
   });
 
   it('shows a provider saved elsewhere without restarting the tab', async () => {
@@ -329,7 +460,7 @@ describe('AgentPanel', () => {
     fireEvent.change(textarea, { target: { value: '@This computer how much disk is free?' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('local', 'p1', '@This computer how much disk is free?', [], expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('local', 'p1', 'how much disk is free?', [], expect.any(Function)),
     );
   });
 
@@ -374,7 +505,7 @@ describe('AgentPanel', () => {
       fireEvent.click(await screen.findByRole('button', { name: /staging-db/ }));
       await send('@staging-db check the logs');
       await waitFor(() =>
-        expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', '@staging-db check the logs', expect.any(Array), expect.any(Function)),
+        expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', 'check the logs', expect.any(Array), expect.any(Function)),
       );
       agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
       await send('and the memory?');
