@@ -5,29 +5,38 @@ saves SSH hosts, mentions one with `@host`, and the agent runs diagnostics or
 approved commands on that host. The model never receives SSH credentials, and
 every AI command attempt is recorded per host.
 
-**Status: milestone M0 (foundation).** There is no SSH connection, credential
-storage or AI execution yet. What exists:
+**Status: milestone M1 (working SSH client), partially complete.** Working on
+Linux:
 
-- Tauri 2 desktop shell with Connections, Terminal and AI tabs (placeholders).
-- Local SQLite database with migrations, WAL mode, foreign keys, and immutable
-  identity and scope rules enforced by triggers.
+- Host profiles: create, edit, archive, filter. Labels are unique and
+  case-insensitive. Secrets are kept in the OS credential store, never in the
+  database.
+- Host keys: read the server key, trust it explicitly, pin it, and replace a
+  changed key only with a separate confirmed action. Connections to unpinned or
+  changed keys are refused before any credential is sent.
+- Terminal: interactive PTY sessions over SSH, with resize, several tabs, and
+  exit status. Sessions are bound to one host.
 - Startup reconciliation: work that was live at the last shutdown is marked
   `interrupted` and is never re-run.
-- Domain types: typed IDs, host labels, ports, state machines, error codes.
+
+Not yet built: AI providers (M2), the `@host` agent and command approval (M3),
+the per-host AI history UI (M4), and installers (M5). The AI tab is a
+placeholder.
 
 ## Build and test
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full command list.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full command list, including the
+SSH test setup that needs root on Linux.
 
 ```sh
-cargo test --workspace
+cargo test --workspace                 # Linux: run through scripts/ci/with-keyring.sh
 cd apps/desktop && pnpm install && pnpm test && pnpm tauri build --debug --no-bundle
 ```
 
 ## Documentation
 
 - [Architecture decision records](docs/adr/)
-- [Milestone status](docs/release/milestones.md)
+- [Milestone status and evidence](docs/release/milestones.md)
 - [Security policy](SECURITY.md)
 
 Planning documents (`AGENTS.md`, master plan, engineering spec, backlog) are the

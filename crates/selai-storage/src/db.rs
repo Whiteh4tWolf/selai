@@ -36,13 +36,21 @@ impl Database {
     }
 
     /// Raw connection for repositories in this crate. Not exposed outside it.
-    #[allow(dead_code)] // first used by the host repository (S-010)
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 
     pub(crate) fn conn_mut(&mut self) -> &mut Connection {
         &mut self.conn
+    }
+
+    /// Number of retired host keys for a host (history of rotations).
+    pub fn retired_key_count(&self, host: selai_domain::HostId) -> Result<i64, StorageError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM known_host_keys WHERE host_id = ?1 AND replaced_at_ms IS NOT NULL",
+            rusqlite::params![host.to_string()],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn journal_mode(&self) -> Result<String, StorageError> {

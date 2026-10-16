@@ -1,12 +1,11 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AiTab } from './tabs/AiTab';
 import { ConnectionsTab } from './tabs/ConnectionsTab';
-import { appInfo, describeError, storageStatus, type AppInfo } from './ipc';
+import { appInfo, describeError, storageStatus, type AppInfo, type HostView } from './ipc';
+import type { TerminalSessionTab } from './tabs/TerminalTab';
 
-// xterm.js is large; load it only when the Terminal tab is opened.
-const TerminalTab = lazy(() =>
-  import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalTab })),
-);
+// xterm.js is large; load it only when a terminal is first needed.
+const TerminalTab = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalTab })));
 
 type TabId = 'connections' | 'terminal' | 'ai';
 
@@ -16,10 +15,14 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'ai', label: 'AI' },
 ];
 
+let nextTabNumber = 0;
+
 export function App() {
   const [tab, setTab] = useState<TabId>('connections');
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [storage, setStorage] = useState('checking local database…');
+  const [terminals, setTerminals] = useState<TerminalSessionTab[]>([]);
+  const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -40,6 +43,22 @@ export function App() {
       active = false;
     };
   }, []);
+
+  function openTerminal(host: HostView) {
+    nextTabNumber += 1;
+    const key = `term-${nextTabNumber}`;
+    setTerminals((prev) => [...prev, { key, hostId: host.id, label: host.label }]);
+    setActiveTerminal(key);
+    setTab('terminal');
+  }
+
+  function closeTerminal(key: string) {
+    const next = terminals.filter((t) => t.key !== key);
+    setTerminals(next);
+    if (activeTerminal === key) {
+      setActiveTerminal(next.at(-1)?.key ?? null);
+    }
+  }
 
   return (
     <div className="app">
@@ -62,14 +81,26 @@ export function App() {
         </nav>
       </header>
 
-      <main role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-        {tab === 'connections' && <ConnectionsTab />}
-        {tab === 'terminal' && (
-          <Suspense fallback={<p>Loading terminal…</p>}>
-            <TerminalTab />
-          </Suspense>
-        )}
-        {tab === 'ai' && <AiTab />}
+      <main>
+        <div role="tabpanel" id="panel-connections" aria-labelledby="tab-connections" hidden={tab !== 'connections'}>
+          <ConnectionsTab onConnect={openTerminal} />
+        </div>
+        <div role="tabpanel" id="panel-terminal" aria-labelledby="tab-terminal" hidden={tab !== 'terminal'}>
+          {(tab === 'terminal' || terminals.length > 0) && (
+            <Suspense fallback={<p>Loading terminal…</p>}>
+              <TerminalTab
+                tabs={terminals}
+                activeKey={activeTerminal}
+                visible={tab === 'terminal'}
+                onSelect={setActiveTerminal}
+                onClose={closeTerminal}
+              />
+            </Suspense>
+          )}
+        </div>
+        <div role="tabpanel" id="panel-ai" aria-labelledby="tab-ai" hidden={tab !== 'ai'}>
+          <AiTab />
+        </div>
       </main>
 
       <footer className="app-footer">

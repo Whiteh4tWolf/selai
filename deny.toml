@@ -1,10 +1,18 @@
 # cargo-deny policy: advisories, licenses, bans and sources.
-# Run locally with: cargo deny check
+# Run locally with: cargo deny check advisories licenses bans sources
 
 [advisories]
 version = 2
 yanked = "deny"
 unmaintained = "workspace"
+# RUSTSEC-2023-0071 (Marvin): timing leak in RSA private-key operations, no
+# upstream fix. Selai refuses RSA private keys before authentication
+# (crates/selai-ssh/src/session.rs), so that operation is unreachable in v1. RSA
+# verification of server host keys uses public keys and is not affected.
+# Revisit when a fix exists; see docs/adr/0002-ssh-transport.md.
+ignore = [
+  { id = "RUSTSEC-2023-0071", reason = "RSA private-key operations are refused in v1" },
+]
 
 [licenses]
 version = 2
@@ -14,6 +22,7 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   "BSD-3-Clause",
   "CC0-1.0",
+  "ISC",
   "MIT",
   "MPL-2.0",
   "Unicode-3.0",
@@ -21,7 +30,8 @@ allow = [
 ]
 
 [bans]
-# Duplicate versions come from upstream crates (tauri, gtk bindings). Tracked, not blocking.
+# Duplicate versions come from upstream crates (tauri, gtk bindings, russh).
+# Tracked as warnings, not blocking.
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"

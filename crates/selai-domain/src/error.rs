@@ -33,6 +33,7 @@ pub enum ErrorCode {
     StorageMigrationFailed,
     // Extensions to the spec taxonomy.
     TaskInterrupted,
+    SshConnectFailed,
     StorageBusy,
     StorageConflict,
     StorageConstraint,
@@ -68,6 +69,7 @@ impl ErrorCode {
             Self::AuditWriteFailed => "AUDIT_WRITE_FAILED",
             Self::StorageMigrationFailed => "STORAGE_MIGRATION_FAILED",
             Self::TaskInterrupted => "TASK_INTERRUPTED",
+            Self::SshConnectFailed => "SSH_CONNECT_FAILED",
             Self::StorageBusy => "STORAGE_BUSY",
             Self::StorageConflict => "STORAGE_CONFLICT",
             Self::StorageConstraint => "STORAGE_CONSTRAINT",
@@ -119,6 +121,7 @@ mod tests {
             ErrorCode::AuditWriteFailed,
             ErrorCode::StorageMigrationFailed,
             ErrorCode::TaskInterrupted,
+            ErrorCode::SshConnectFailed,
             ErrorCode::StorageBusy,
             ErrorCode::StorageConflict,
             ErrorCode::StorageConstraint,

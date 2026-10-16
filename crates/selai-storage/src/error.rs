@@ -6,6 +6,10 @@ pub enum StorageError {
     Busy,
     #[error("constraint violated: {0}")]
     Constraint(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("not found: {0}")]
+    NotFound(String),
     #[error("storage I/O error: {0}")]
     Io(String),
     #[error("migration {version} failed: {message}")]
@@ -21,6 +25,8 @@ impl SelaiError for StorageError {
         match self {
             Self::Busy => ErrorCode::StorageBusy,
             Self::Constraint(_) => ErrorCode::StorageConstraint,
+            Self::Conflict(_) => ErrorCode::StorageConflict,
+            Self::NotFound(_) => ErrorCode::NotFound,
             Self::Io(_) | Self::Pragma(_) => ErrorCode::StorageIo,
             Self::Migration { .. } | Self::SchemaTooNew { .. } => ErrorCode::StorageMigrationFailed,
         }

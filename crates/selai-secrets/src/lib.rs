@@ -1,0 +1,94 @@
+//! Secret storage for Selai (ADR-0003).
+//!
+//! Secrets live only in the operating-system credential store. This crate has
+//! no plaintext fallback: if the store is locked or unavailable, every call
+//! fails with a [`SecretError`] that the UI can explain.
+
+mod keyring_store;
+mod memory;
+mod value;
+
+use selai_domain::{ErrorCode, HostId, ProviderId, SelaiError};
+
+pub use keyring_store::KeyringStore;
+pub use memory::MemoryStore;
+pub use value::SecretValue;
+
+/// Service name shared by every Selai entry in the OS store.
+pub const SERVICE: &str = "selai";
+
+/// Kinds of SSH secret. Fixed strings only: they become part of the store key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshSecretKind {
+    Password,
+    KeyPassphrase,
+}
+
+impl SshSecretKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Password => "password",
+            Self::KeyPassphrase => "key_passphrase",
+        }
+    }
+}
+
+/// Address of one secret in the store. Built only from validated IDs and fixed
+/// kind strings, never from user text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SecretKey {
+    account: String,
+}
+
+impl SecretKey {
+    pub fn ssh(host: HostId, kind: SshSecretKind) -> Self {
+        Self {
+            account: format!("ssh/{host}/{}", kind.as_str()),
+        }
+    }
+
+    pub fn provider_api_key(provider: ProviderId) -> Self {
+        Self {
+            account: format!("provider/{provider}/api_key"),
+        }
+    }
+
+    pub fn account(&self) -> &str {
+        &self.account
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SecretError {
+    /// The store exists but refuses access (locked keychain, denied prompt).
+    #[error("the system credential store is locked or access was denied")]
+    Locked,
+    /// The store is missing or failed (no Secret Service, backend error).
+    #[error("the system credential store is unavailable: {0}")]
+    Unavailable(String),
+    /// The store returned a value that is not usable as a secret.
+    #[error("stored secret is malformed")]
+    Malformed,
+}
+
+impl SelaiError for SecretError {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::Locked => ErrorCode::SecretStoreLocked,
+            Self::Unavailable(_) | Self::Malformed => ErrorCode::SecretStoreUnavailable,
+        }
+    }
+}
+
+/// Operations on the credential store. Synchronous because the OS APIs are;
+/// callers in async code run these on a blocking thread.
+pub trait SecretStore: Send + Sync {
+    /// Creates or replaces the value at `key`.
+    fn put(&self, key: &SecretKey, value: &SecretValue) -> Result<(), SecretError>;
+
+    /// Returns the value, or `None` if nothing is stored under `key`.
+    fn get(&self, key: &SecretKey) -> Result<Option<SecretValue>, SecretError>;
+
+    /// Removes the value. Deleting a missing entry succeeds.
+    fn delete(&self, key: &SecretKey) -> Result<(), SecretError>;
+}

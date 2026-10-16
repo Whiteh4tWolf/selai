@@ -88,6 +88,7 @@ typed_id!(ConversationId, "conversation");
 typed_id!(TaskId, "task");
 typed_id!(ExecutionId, "execution");
 typed_id!(ApprovalId, "approval");
+typed_id!(KnownKeyId, "known key");
 
 #[cfg(test)]
 mod tests {

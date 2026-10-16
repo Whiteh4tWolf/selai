@@ -4,14 +4,20 @@
 //! future gateway can reuse it.
 
 pub mod error;
+pub mod host;
 pub mod ids;
 pub mod label;
 pub mod page;
 pub mod state;
 
 pub use error::{ErrorCode, SelaiError};
+pub use host::{
+    AuthMethod, ConnectTimeout, GroupName, HostFieldError, HostSettings, Hostname, Keepalive,
+    KeyPath, Notes, TerminalType, Username,
+};
 pub use ids::{
-    ApprovalId, ConversationId, ExecutionId, HostGroupId, HostId, IdError, ProviderId, TaskId,
+    ApprovalId, ConversationId, ExecutionId, HostGroupId, HostId, IdError, KnownKeyId, ProviderId,
+    TaskId,
 };
 pub use label::{HostLabel, LabelError, Port, PortError};
 pub use page::{Page, PageRequest};

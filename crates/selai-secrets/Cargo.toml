@@ -1,0 +1,15 @@
+[package]
+name = "selai-secrets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keyring = "4.2"
+selai-domain = { version = "0.1.0", path = "../selai-domain" }
+thiserror = "2"
+zeroize = "1"
+
+[lints]
+workspace = true

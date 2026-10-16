@@ -1,0 +1,14 @@
+[package]
+name = "selai-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Test fixtures: a real OpenSSH server and key material. Not shipped."
+
+[dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

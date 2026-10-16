@@ -1,35 +1,56 @@
-import { useEffect, useRef } from 'react';
-import { FitAddon } from '@xterm/addon-fit';
-import { Terminal } from '@xterm/xterm';
-import '@xterm/xterm/css/xterm.css';
+import { TerminalPane } from './TerminalPane';
 
-export function TerminalTab() {
-  const containerRef = useRef<HTMLDivElement>(null);
+export interface TerminalSessionTab {
+  key: string;
+  hostId: string;
+  label: string;
+}
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    const term = new Terminal({ convertEol: true, cursorBlink: true });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(container);
-    fit.fit();
-    // No PTY backend exists yet (S-013). Make that visible instead of
-    // pretending a shell is attached.
-    term.writeln('Terminal backend not connected: SSH PTY arrives in S-013.');
-    term.writeln('No shell is running.');
+interface Props {
+  tabs: TerminalSessionTab[];
+  activeKey: string | null;
+  visible: boolean;
+  onSelect: (key: string) => void;
+  onClose: (key: string) => void;
+}
 
-    const observer =
-      typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => fit.fit());
-    observer?.observe(container);
-
-    return () => {
-      observer?.disconnect();
-      term.dispose();
-    };
-  }, []);
-
-  return <div className="terminal" ref={containerRef} aria-label="Terminal output" />;
+export function TerminalTab({ tabs, activeKey, visible, onSelect, onClose }: Props) {
+  return (
+    <section aria-label="Terminal" hidden={!visible}>
+      {tabs.length === 0 ? (
+        <p>No open terminals. Choose Connect on a host in Connections.</p>
+      ) : (
+        <div role="tablist" aria-label="Open terminals" className="session-tabs">
+          {tabs.map((tab) => (
+            <span key={tab.key} className="session-tab" data-active={tab.key === activeKey}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab.key === activeKey}
+                onClick={() => onSelect(tab.key)}
+              >
+                {tab.label}
+              </button>
+              <button
+                type="button"
+                aria-label={`Close ${tab.label}`}
+                onClick={() => onClose(tab.key)}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {/* Panes stay mounted while hidden so their sessions survive tab changes. */}
+      {tabs.map((tab) => (
+        <TerminalPane
+          key={tab.key}
+          hostId={tab.hostId}
+          label={tab.label}
+          hidden={!visible || tab.key !== activeKey}
+        />
+      ))}
+    </section>
+  );
 }

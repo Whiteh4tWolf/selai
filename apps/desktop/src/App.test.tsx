@@ -5,9 +5,18 @@ import * as ipc from './ipc';
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
+    cols = 80;
+    rows = 24;
     loadAddon() {}
     open() {}
+    write() {}
     writeln() {}
+    onData() {
+      return { dispose() {} };
+    }
+    onResize() {
+      return { dispose() {} };
+    }
     dispose() {}
   },
 }));
@@ -26,6 +35,7 @@ describe('App shell', () => {
       interruptedTasksAtStartup: 0,
       interruptedExecutionsAtStartup: 0,
     });
+    vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [], nextCursor: null });
   });
 
   afterEach(() => {
@@ -40,18 +50,15 @@ describe('App shell', () => {
     await waitFor(() => expect(screen.getByText(/schema v2, wal mode/)).toBeInTheDocument());
   });
 
-  it('switches tabs and states that AI is not available yet', () => {
+  it('switches to AI and says it is not available yet', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('tab', { name: 'AI' }));
     expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText(/AI agent is not available yet/)).toBeInTheDocument();
+    expect(screen.getByText(/AI agent is not available yet/)).toBeVisible();
   });
 
   it('reports a storage failure with its code instead of hiding it', async () => {
-    vi.spyOn(ipc, 'storageStatus').mockRejectedValue({
-      code: 'STORAGE_BUSY',
-      message: 'database is busy',
-    });
+    vi.spyOn(ipc, 'storageStatus').mockRejectedValue({ code: 'STORAGE_BUSY', message: 'database is busy' });
     render(<App />);
     await waitFor(() =>
       expect(screen.getByText('database unavailable: STORAGE_BUSY: database is busy')).toBeInTheDocument(),

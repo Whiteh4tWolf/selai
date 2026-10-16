@@ -39,3 +39,25 @@ Linux needs the Tauri system libraries listed in `.github/workflows/ci.yml`.
 
 Use the PR template. Describe what you ran and what you observed. Do not claim
 a feature works unless a test or manual check demonstrates it.
+
+## SSH and keyring tests (Linux)
+
+The SSH suites (`selai-ssh/tests/ssh_integration.rs`, `selai-desktop`'s
+`service_e2e.rs`) start a real OpenSSH server. They need root, `openssh-server`
+and `gnome-keyring`, and they panic instead of skipping when those are missing.
+Run them through the keyring harness, which also unlocks a private Secret
+Service:
+
+```sh
+sudo -E env "PATH=$PATH" scripts/ci/with-keyring.sh cargo test --workspace
+```
+
+They are compiled only on Linux. macOS and Windows CI run the other suites and
+the OS credential store test, but do not run SSH.
+
+To drive the desktop app against a test server by hand, start the fixture and
+keep it alive while you test:
+
+```sh
+sleep 900 | sudo -E target/debug/examples/serve   # build first: cargo build -p selai-testkit --example serve
+```
