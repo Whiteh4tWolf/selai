@@ -90,7 +90,7 @@ against a live endpoint.
 | S-030 Mention picker and host binding | done | Chip stores the host id and a label snapshot; the model never chooses the host (`selai-agent/src/tools.rs` has no host argument). Picker: arrow keys, Enter and click are tested (`AgentPanel.test.tsx`); Escape is not. Archived host refused (`agent_e2e.rs`). The host is bound by id, so a rename cannot retarget a running task by design, but no test covers a rename. | The picker accepts one host per request (multi-target refused). Free text with an `@name` that was not picked is sent as plain text and binds no host. |
 | S-031 Policy and approval | done | `selai-policy` (12): diagnostics map to fixed commands (`df -hP`, `uptime`, ...), free-form commands always need approval, out-of-scope host denied. Approval tickets are bound to task, host and command digest, and expire. Runtime tests (`selai-agent/tests/runtime.rs`, 14): tampered command, changed host and expired ticket all refuse. `agent_e2e.rs`: approve runs the exact command, deny never runs it, cancel while waiting never runs it. | There are no policy roles; there is one policy. The UI disables Approve once an approval expires only when the card re-renders; the database refuses the decision either way. |
 | S-032 Audit before execution | done | `selai-audit` (11): redaction and sha256 hash chain. `selai-storage/tests/agent.rs` (6): execution row and audit event written in one transaction before any SSH I/O. `agent_e2e.rs`: five diagnostics each recorded, chain verifies, history survives a restart. Model payloads checked for the SSH password and the provider key. | Blob encryption of full output is deferred to S-040. Only bounded, redacted previews are stored. |
-| S-033 Agent runtime and SSH bridge | done on Linux | `selai-ssh` exec (in `ssh_integration.rs`, 17 SSH tests in total), output capped per stream, cancellation. `agent_e2e.rs` (7) runs against real OpenSSH and a mock provider that must pass tool calling first. | No checkpoint rows in `agent_steps`. No automatic reconnect. No trust grants. Only Linux was run. |
+| S-033 Agent runtime and SSH bridge | done on Linux | `selai-ssh` exec (in `ssh_integration.rs`, 17 SSH tests in total), output capped per stream, cancellation. `agent_e2e.rs` (7) runs against real OpenSSH and a mock provider that must pass tool calling first. | Checkpoints now written (see M4). No automatic reconnect. No trust grants. Only Linux was run. |
 
 ### M3 milestone gate
 
@@ -125,6 +125,31 @@ during review, not by a failing test.
 - Frontend: typecheck, lint, 27 tests, `vite build`: pass.
 - `cargo deny check`: advisories, bans, licenses, sources ok.
 
-## M4 and M5
+## M4 — History, privacy and hardening (`v1.0.0-beta.1` candidate)
 
-Not started. See `SELAI_EXECUTION_BACKLOG.md`.
+| Task | Status | Evidence | Gaps |
+|---|---|---|---|
+| S-040 Per-host history UI and export | done (not run in a real window) | `apps/desktop/src/tabs/HistoryTab.test.tsx` (5); `apps/desktop/src-tauri/tests/history_e2e.rs` (6): filters, pagination, timeline, rename and archive keep history, export without the secret, purge, preferences. `selai-storage/tests/history.rs` (8). | Encrypted audit blobs deferred (S-040 spec). Export is capped at 1000 rows and says so. The `cancelled` filter is not covered end to end. |
+| S-041 Provider and host security regression | done, with limits | `docs/release/security-regression.md` maps each spec threat to a test. New: hostile output (`runtime.rs`, 3 tests), hostile diagnostic inputs (`selai-policy`, 3 tests), webview hardening (3 tests). | Redaction is pattern-based; limits are documented there. |
+| S-042 Persistence, recovery, budgets | partial | Startup reconciliation marks running work `interrupted`, expires stale approvals, and writes an audit event (`history.rs`). Output retention: a sweep at startup (default 30 days, configurable) and a manual purge; both audited, metadata kept. History indexes in migration 0003. Task budgets in `Limits`. Provider choice remembered. | No total size cap, only age. Process kill during a task was not tested against the app. |
+| S-043 Performance and cross-platform validation | partial | `apps/desktop/src-tauri/tests/perf_pty.rs` and `docs/release/performance.md`: five terminals, four streaming, echo latency and throughput on the sandbox VM. | Input responsiveness during an AI stream not measured. Keychain tested on Linux only. Memory measured on Linux only. |
+
+## M5 — RC / GA release (`v1.0.0` candidate)
+
+| Task | Status | Evidence | Gaps |
+|---|---|---|---|
+| S-050 Installer packaging and signing pipeline | partial | `.github/workflows/release.yml` builds Linux (deb, AppImage), Windows and macOS bundles. Checksums (`SHA256SUMS`), CycloneDX SBOMs (Rust and frontend), and build provenance on tags. `actionlint` and `shellcheck` clean. `docs/release/packaging.md`. SBOMs generated locally from a clean archive. | Workflow not run on GitHub. Windows and macOS installers not built or installed here. Not signed or notarised: signing runs only when secrets are set. `.ps1` scripts not executed. No auto-updater (by design). |
+| S-051 Acceptance matrix and security signoff | partial | `docs/release/acceptance-matrix.md`: every `T-*` case from the spec, with its status. | Live-provider checks skipped (no keys). Several cases partial or not implemented (T-AUDIT-002, T-SSH-005, T-AGENT-006 process kill, T-AUDIT-003 UI backpressure). Maintainer security signoff not done. |
+| S-052 Tag and publish v1.0.0 | not done | — | Waiting for the operator's confirmation. Tagging and publishing are outward-facing. |
+
+### Test evidence (last run)
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`: clean.
+- `scripts/ci/with-keyring.sh cargo test --workspace --locked`: exit 0, 39 test binaries passed. New in M4: `history_e2e` 6, storage `history` 8, storage upgrade test 1, runtime 19 (3 security, 2 checkpoint), policy 15, desktop unit 5, `webview_hardening` 3, `perf_pty` ignored (run separately).
+- Frontend: typecheck, lint, 32 tests, `vite build`: pass.
+- `cargo deny check advisories licenses bans sources`: pass.
+- `actionlint` on `.github/workflows/release.yml` and `ci.yml`: pass.
+
+## M6 — Not planned
+
+Nothing beyond M5 is started. The master plan lists v1.1 and later work (SFTP, tunnels, multi-host AI, and so on).

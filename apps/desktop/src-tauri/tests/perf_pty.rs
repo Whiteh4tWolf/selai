@@ -1,5 +1,10 @@
 //! Measurement harness for five active terminals (S-043). Ignored by default: it
-//! takes seconds and prints numbers, it asserts only that every stream finished.
+//! takes seconds and prints numbers. It asserts only that every stream finished.
+//!
+//! Setup: four terminals stream output at once; a fifth stays idle and is the
+//! probe. The probe types a marker every 100 ms and times its echo. The echo
+//! travels the same path as output (SSH channel, service, event channel), so the
+//! number shows how responsive one terminal is while the others are busy.
 //!
 //! Run on Linux as root with the sshd fixture:
 //!   cargo test -p selai-desktop --test perf_pty -- --ignored --nocapture
@@ -24,8 +29,10 @@ use selai_secrets::MemoryStore;
 use selai_testkit::{material, Sshd, USER};
 use tokio::sync::mpsc;
 
-const SESSIONS: usize = 5;
-const LINES_PER_SESSION: usize = 1_000_000;
+/// Five terminals in total: four streaming, one probe.
+const TERMINALS: usize = 5;
+const PROBE: usize = 0;
+const LINES_PER_STREAM: usize = 1_000_000;
 const LIMIT: Duration = Duration::from_secs(120);
 
 fn password_host(label: &str, port: u16) -> HostInput {
@@ -49,7 +56,7 @@ fn password_host(label: &str, port: u16) -> HostInput {
 }
 
 /// Resident set size in KiB from /proc, or None where /proc is absent.
-fn rss_kib(field: &str) -> Option<u64> {
+fn proc_status_kib(field: &str) -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status
         .lines()
@@ -60,75 +67,77 @@ fn rss_kib(field: &str) -> Option<u64> {
         .ok()
 }
 
+fn percentile(sorted: &[Duration], p: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let idx = ((sorted.len() as f64 - 1.0) * p).round() as usize;
+    Some(sorted[idx].as_secs_f64() * 1000.0)
+}
+
 #[tokio::test]
 #[ignore = "measurement harness; run with --ignored --nocapture"]
 async fn five_terminals_streaming_keep_input_responsive() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let services = Services::open(
-        &dir.path().join("selai.sqlite3"),
-        Arc::new(MemoryStore::new()),
-    )
-    .expect("open");
+    let services = Services::open(&dir.path().join("selai.sqlite3"), Arc::new(MemoryStore::new()))
+        .expect("open");
     let sshd = Sshd::start();
     let view = services
         .host_save(password_host("perf-host", sshd.port))
         .expect("save");
-    let probe = services.host_probe(&view.id).await.expect("probe");
+    let probe_host = services.host_probe(&view.id).await.expect("probe");
     services
-        .host_trust(
-            &view.id,
-            &probe.observed.fingerprint_sha256,
-            TrustMode::First,
-        )
+        .host_trust(&view.id, &probe_host.observed.fingerprint_sha256, TrustMode::First)
         .expect("trust");
 
-    // Every session reports to one channel, tagged with its index.
     let (tx, mut rx) = mpsc::unbounded_channel::<(usize, TerminalEvent)>();
     let mut sessions = Vec::new();
-    for i in 0..SESSIONS {
+    for i in 0..TERMINALS {
         let tx = tx.clone();
         let sink: EventSink = Arc::new(move |event| {
             let _ = tx.send((i, event));
         });
-        let id = services
-            .terminal_connect(&view.id, 120, 40, sink)
-            .await
-            .expect("connect");
-        sessions.push(id);
+        sessions.push(
+            services
+                .terminal_connect(&view.id, 120, 40, sink)
+                .await
+                .expect("connect"),
+        );
     }
     drop(tx);
 
-    let rss_before = rss_kib("VmRSS:");
-    let mut bytes = [0usize; SESSIONS];
-    let mut done = [false; SESSIONS];
-    let mut pings: Vec<Duration> = Vec::new();
+    let rss_before = proc_status_kib("VmRSS:");
+    let mut bytes = [0usize; TERMINALS];
+    let mut done = [false; TERMINALS];
+    let mut tails: Vec<String> = vec![String::new(); TERMINALS];
+    let mut samples: Vec<Duration> = Vec::new();
     let mut ping_sent_at: Option<Instant> = None;
     let mut ping_count = 0usize;
-    // Last ~256 bytes of each session's output, to search for the markers.
-    let mut tails: Vec<String> = vec![String::new(); SESSIONS];
 
     let started = Instant::now();
     for (i, id) in sessions.iter().enumerate() {
+        if i == PROBE {
+            continue;
+        }
         // printf builds the marker, so the echoed input never contains the full
         // marker and only the program output can match it.
-        let cmd =
-            format!("seq 1 {LINES_PER_SESSION} | sed 's/^/s{i}-/'; printf 'PERF-%s\\n' DONE-{i}\n");
+        let cmd = format!(
+            "seq 1 {LINES_PER_STREAM} | sed 's/^/s{i}-/'; printf 'PERF-%s\\n' DONE-{i}\n"
+        );
         services.terminal_input(id, cmd).await.expect("input");
     }
 
     let deadline = tokio::time::Instant::now() + LIMIT;
-    // While session 0 streams, type a marker every 250 ms and time its echo. The
-    // echo travels the same path as output: SSH channel, IPC, and back.
-    let mut tick = tokio::time::interval(Duration::from_millis(250));
-    while !done.iter().all(|d| *d) {
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    while !done.iter().enumerate().all(|(i, d)| i == PROBE || *d) {
         tokio::select! {
-            _ = tick.tick(), if ping_sent_at.is_none() && !done[0] => {
+            _ = tick.tick(), if ping_sent_at.is_none() => {
                 ping_count += 1;
                 ping_sent_at = Some(Instant::now());
+                // The line discipline echoes typed text at once. Ctrl-U (0x15)
+                // erases the line afterwards, so nothing runs.
                 services
-                    // The line discipline echoes typed text at once. Ctrl-U (0x15) then erases the
-                    // line, so nothing runs.
-                    .terminal_input(&sessions[0], format!("PING-{ping_count:03}\u{15}"))
+                    .terminal_input(&sessions[PROBE], format!("PING-{ping_count:04}\u{15}"))
                     .await
                     .expect("ping");
             }
@@ -145,58 +154,49 @@ async fn five_terminals_streaming_keep_input_responsive() {
                     }
                     tails[i] = tails[i][cut..].to_owned();
                 }
-                if tails[i].contains(&format!("PERF-DONE-{i}")) {
+                if i != PROBE && tails[i].contains(&format!("PERF-DONE-{i}")) {
                     done[i] = true;
                 }
-                if i == 0 {
+                if i == PROBE {
                     if let Some(sent) = ping_sent_at {
-                        if tails[0].contains(&format!("PING-{ping_count:03}")) {
-                            pings.push(sent.elapsed());
+                        if tails[PROBE].contains(&format!("PING-{ping_count:04}")) {
+                            samples.push(sent.elapsed());
                             ping_sent_at = None;
                         }
                     }
                 }
             }
             () = tokio::time::sleep_until(deadline) => {
-                panic!("timed out; finished sessions: {done:?}");
+                panic!("timed out; finished streams: {done:?}");
             }
         }
     }
     let elapsed = started.elapsed();
     let total: usize = bytes.iter().sum();
-    let rss_after = rss_kib("VmRSS:");
-    let peak = rss_kib("VmHWM:");
+    let rss_after = proc_status_kib("VmRSS:");
+    let peak = proc_status_kib("VmHWM:");
 
-    pings.sort();
-    let pct = |p: f64| -> Option<f64> {
-        if pings.is_empty() {
-            return None;
-        }
-        let idx = ((pings.len() as f64 - 1.0) * p).round() as usize;
-        Some(pings[idx].as_secs_f64() * 1000.0)
-    };
-
-    println!("sessions={SESSIONS} lines_per_session={LINES_PER_SESSION}");
-    println!(
-        "total_bytes={total} wall_seconds={:.2}",
-        elapsed.as_secs_f64()
-    );
+    samples.sort();
+    println!("terminals={TERMINALS} streaming={} probe=1 lines_per_stream={LINES_PER_STREAM}", TERMINALS - 1);
+    println!("stream_bytes={total} wall_seconds={:.2}", elapsed.as_secs_f64());
     println!(
         "throughput_mib_per_s={:.2}",
         total as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0)
     );
-    println!("per_session_bytes={bytes:?}");
     println!(
-        "echo_samples={} p50_ms={:?} p95_ms={:?} max_ms={:?}",
-        pings.len(),
-        pct(0.5),
-        pct(0.95),
-        pct(1.0)
+        "echo_samples={} echo_p50_ms={:.1?} echo_p95_ms={:.1?} echo_max_ms={:.1?}",
+        samples.len(),
+        percentile(&samples, 0.5),
+        percentile(&samples, 0.95),
+        percentile(&samples, 1.0)
     );
     println!("rss_before_kib={rss_before:?} rss_after_kib={rss_after:?} peak_kib={peak:?}");
 
     for id in &sessions {
         let _ = services.terminal_disconnect(id).await;
     }
-    assert!(done.iter().all(|d| *d), "every stream must finish");
+    assert!(
+        done.iter().enumerate().all(|(i, d)| i == PROBE || *d),
+        "every stream must finish"
+    );
 }

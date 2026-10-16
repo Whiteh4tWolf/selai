@@ -39,3 +39,8 @@ are handled as design feedback.
   running as the logged-in user.
 - Arbitrary shell commands are not classified as safe. Approval is the control.
 - Output sent to a cloud model may contain sensitive remote data.
+- Output redaction is pattern-based. It misses secrets under neutral key names
+  and can redact harmless text. Exports say so. See
+  `docs/release/security-regression.md` for the list.
+- Installers are unsigned until signing secrets are configured. A release built
+  without them says so in `docs/release/packaging.md`.

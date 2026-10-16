@@ -5,10 +5,10 @@ saves SSH hosts, mentions one with `@host`, and the agent runs diagnostics or
 approved commands on that host. The model never receives SSH credentials, and
 every AI command attempt is recorded per host.
 
-**Status: M1 (working SSH client) and M3 (scoped AI agent) done on Linux; M2 (AI
-providers) tested against mock servers, not yet verified against a live
-provider. M3's React panel is tested with mocked IPC, not yet run in a real
-window.** Working on Linux:
+**Status: M0 to M5 are built. The v1.0.0 tag is not yet published (S-052 waits for
+the operator). Linux is the only platform tested end to end. Windows and macOS
+installers are built by the release workflow but not run here, and no live AI
+provider has been verified.** Working on Linux:
 
 - Host profiles: create, edit, archive, filter. Labels are unique and
   case-insensitive. Secrets are kept in the OS credential store, never in the
@@ -25,11 +25,11 @@ window.** Working on Linux:
   `interrupted` and is never re-run.
 
 Provider profiles can be configured and tested for tool calling (M2). The AI tab
-has an `@host` request box that runs one task on the chosen host. Diagnostics
-run without approval; free-form commands wait for an approval, and the model
-cannot choose the host (M3). Each command is recorded in that host's history,
-and the audit chain can be verified. Not yet built: a richer per-host AI history
-view (M4) and installers (M5).
+has an `@host` request box that runs one task on the chosen host. Diagnostics run
+without approval; free-form commands wait for an approval, and the model cannot
+choose the host (M3). Every attempt is recorded in that host's history, and the
+audit chain can be verified. The AI history tab (M4) shows filtered history,
+task timelines, a redacted JSON export, and output purge with a retention window.
 
 ## Build and test
 
@@ -39,6 +39,7 @@ SSH test setup that needs root on Linux.
 ```sh
 cargo test --workspace                 # Linux: run through scripts/ci/with-keyring.sh
 cd apps/desktop && pnpm install && pnpm test && pnpm tauri build --debug --no-bundle
+cargo test -p selai-desktop --test perf_pty -- --ignored --nocapture   # measurements, Linux
 ```
 
 ## Documentation

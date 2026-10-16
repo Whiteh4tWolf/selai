@@ -62,6 +62,14 @@ keep it alive while you test:
 sleep 900 | sudo -E target/debug/examples/serve   # build first: cargo build -p selai-testkit --example serve
 ```
 
+## Performance measurements (Linux, sshd fixture)
+
+```sh
+cargo test -p selai-desktop --test perf_pty --locked -- --ignored --nocapture
+```
+
+Record numbers with the machine they came from in `docs/release/performance.md`.
+
 ## Live provider tests (not run in CI)
 
 `crates/selai-llm/tests/live.rs` calls real provider APIs with keys you supply.
