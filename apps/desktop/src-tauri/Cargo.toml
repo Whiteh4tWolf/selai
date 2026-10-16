@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+portable-pty = "0.9.0"
 selai-agent = { version = "0.1.0", path = "../../../crates/selai-agent" }
 selai-audit = { version = "0.1.0", path = "../../../crates/selai-audit" }
 selai-domain = { version = "0.1.0", path = "../../../crates/selai-domain" }
@@ -26,7 +27,7 @@ selai-storage = { version = "0.1.0", path = "../../../crates/selai-storage" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2", features = [] }
-tokio = { version = "1.53.3", features = ["rt", "sync", "time", "macros", "io-util"] }
+tokio = { version = "1.53.3", features = ["rt", "sync", "time", "macros", "io-util", "process"] }
 tokio-util = "0.7"
 
 [lints]

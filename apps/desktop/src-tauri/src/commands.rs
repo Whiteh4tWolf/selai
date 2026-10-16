@@ -49,6 +49,11 @@ pub fn host_list(
 }
 
 #[tauri::command]
+pub fn local_host(state: State<'_, AppState>) -> Result<HostView, CommandError> {
+    services(&state)?.local_host()
+}
+
+#[tauri::command]
 pub fn host_get(state: State<'_, AppState>, id: String) -> Result<HostView, CommandError> {
     services(&state)?.host_get(&id)
 }

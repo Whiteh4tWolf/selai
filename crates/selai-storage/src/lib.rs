@@ -20,7 +20,7 @@ pub use agent::{
 pub use db::Database;
 pub use error::StorageError;
 pub use history::{HistoryFilter, HostUsageSummary, PurgeScope};
-pub use hosts::{GroupRecord, HostRecord, PinOutcome, PinnedKey};
+pub use hosts::{GroupRecord, HostRecord, PinOutcome, PinnedKey, LOCAL_HOST_ID};
 pub use migrate::{Migration, MIGRATIONS};
 pub use providers::ProviderRecord;
 pub use recovery::ReconcileReport;

@@ -25,6 +25,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 4,
         sql: include_str!("../migrations/0004_task_usage.sql"),
     },
+    Migration {
+        version: 5,
+        sql: include_str!("../migrations/0005_local_host.sql"),
+    },
 ];
 
 /// Applies every migration newer than the database's recorded version.

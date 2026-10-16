@@ -28,7 +28,13 @@ pub struct HostRecord {
     pub updated_at_ms: i64,
     pub last_connected_at_ms: Option<i64>,
     pub archived_at_ms: Option<i64>,
+    /// The built-in "This computer" target. It has no credentials, no host keys,
+    /// and cannot be edited or archived.
+    pub is_local: bool,
 }
+
+/// Fixed id of the built-in local target (migration 0005).
+pub const LOCAL_HOST_ID: &str = "0c0c0c0c-0000-4000-8000-000000000000";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupRecord {
@@ -58,7 +64,7 @@ pub struct PinnedKey {
 
 const HOST_COLUMNS: &str = "id, label, hostname, port, username, auth_method, private_key_path,
     group_id, connect_timeout_seconds, keepalive_seconds, terminal_type, notes,
-    credential_configured, created_at_ms, updated_at_ms, last_connected_at_ms, archived_at_ms";
+    credential_configured, created_at_ms, updated_at_ms, last_connected_at_ms, archived_at_ms, kind";
 
 fn row_to_host(row: &Row<'_>) -> rusqlite::Result<HostRecord> {
     let id: String = row.get(0)?;
@@ -88,6 +94,7 @@ fn row_to_host(row: &Row<'_>) -> rusqlite::Result<HostRecord> {
         updated_at_ms: row.get(14)?,
         last_connected_at_ms: row.get(15)?,
         archived_at_ms: row.get(16)?,
+        is_local: row.get::<_, String>(17)? == "local",
     })
 }
 
@@ -155,7 +162,7 @@ impl Database {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let current: Option<(i64, Option<i64>)> = tx
             .query_row(
-                "SELECT updated_at_ms, archived_at_ms FROM hosts WHERE id = ?1",
+                "SELECT updated_at_ms, archived_at_ms FROM hosts WHERE id = ?1 AND kind = 'ssh'",
                 params![id.to_string()],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -201,13 +208,30 @@ impl Database {
     pub fn archive_host(&mut self, id: HostId, now_ms: i64) -> Result<(), StorageError> {
         let changed = self.conn().execute(
             "UPDATE hosts SET archived_at_ms = ?2, updated_at_ms = ?2
-              WHERE id = ?1 AND archived_at_ms IS NULL",
+              WHERE id = ?1 AND archived_at_ms IS NULL AND kind = 'ssh'",
             params![id.to_string(), now_ms],
         )?;
-        if changed == 0 && self.get_host(id)?.is_none() {
-            return Err(StorageError::NotFound(format!("host {id}")));
+        if changed == 0 {
+            match self.get_host(id)? {
+                None => return Err(StorageError::NotFound(format!("host {id}"))),
+                Some(h) if h.is_local => {
+                    return Err(StorageError::Conflict(
+                        "the local computer cannot be archived".to_owned(),
+                    ))
+                }
+                Some(_) => {}
+            }
         }
         Ok(())
+    }
+
+    /// The built-in local target.
+    pub fn local_host(&self) -> Result<HostRecord, StorageError> {
+        let id: HostId = LOCAL_HOST_ID
+            .parse()
+            .map_err(|_| StorageError::Constraint("invalid local host id".to_owned()))?;
+        self.get_host(id)?
+            .ok_or_else(|| StorageError::NotFound("the local computer entry".to_owned()))
     }
 
     pub fn get_host(&self, id: HostId) -> Result<Option<HostRecord>, StorageError> {
@@ -245,6 +269,7 @@ impl Database {
         let sql = format!(
             "SELECT {HOST_COLUMNS} FROM hosts
               WHERE (?1 = 1 OR archived_at_ms IS NULL)
+                AND kind = 'ssh'
                 AND lower(label) LIKE ?2 ESCAPE '\\'
                 AND (lower(label), id) > (?3, ?4)
               ORDER BY lower(label), id

@@ -45,7 +45,7 @@ struct CachedProbe {
     at: Instant,
 }
 
-enum TerminalInput {
+pub(crate) enum TerminalInput {
     Data(Vec<u8>),
     Resize { cols: u32, rows: u32 },
     Close,
@@ -180,6 +180,12 @@ impl Services {
                     .get_host(id)
                     .map_err(storage_error)?
                     .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "host not found"))?;
+                if record.is_local {
+                    return Err(CommandError::new(
+                        ErrorCode::InvalidInput,
+                        "this computer cannot be edited",
+                    ));
+                }
                 Some(record)
             }
             None => None,
@@ -301,6 +307,7 @@ impl Services {
     /// and remembers it for a short time so `host_trust` can confirm it.
     pub async fn host_probe(&self, host_id: &str) -> Result<ProbeView, CommandError> {
         let id = parse_id::<HostId>(host_id, "host")?;
+        self.refuse_local(id)?;
         let (host, pins) = self.active_host_and_pins(id)?;
         let endpoint = Endpoint::new(host.hostname.clone(), host.port);
         let observed = probe_host_key(
@@ -420,6 +427,9 @@ impl Services {
         let cols = bounded_dim(cols)?;
         let rows = bounded_dim(rows)?;
         let (host, pins) = self.active_host_and_pins(id)?;
+        if host.is_local {
+            return self.open_local_terminal(id, cols, rows, sink);
+        }
         let auth = self.load_auth(id, &host)?;
 
         let options = ConnectOptions {
@@ -465,6 +475,53 @@ impl Services {
             Arc::clone(&self.terminals),
         ));
         Ok(session_id)
+    }
+
+    /// A shell on this computer, in the same session map as SSH terminals.
+    fn open_local_terminal(
+        &self,
+        id: HostId,
+        cols: u32,
+        rows: u32,
+        sink: EventSink,
+    ) -> Result<String, CommandError> {
+        let session_id = HostId::new().to_string();
+        let (tx, rx) = mpsc::channel(64);
+        self.terminals.lock().map_err(|_| poisoned())?.insert(
+            session_id.clone(),
+            TerminalHandle {
+                host_id: id,
+                input: tx,
+            },
+        );
+        let terminals = Arc::clone(&self.terminals);
+        let ended = session_id.clone();
+        let started = crate::local_terminal::spawn_local_shell(
+            cols,
+            rows,
+            rx,
+            sink,
+            Box::new(move || {
+                if let Ok(mut map) = terminals.lock() {
+                    map.remove(&ended);
+                }
+            }),
+        );
+        if let Err(e) = started {
+            if let Ok(mut map) = self.terminals.lock() {
+                map.remove(&session_id);
+            }
+            return Err(e);
+        }
+        let _ = self.lock_db()?.mark_connected(id, now_ms());
+        Ok(session_id)
+    }
+
+    /// The built-in "This computer" entry.
+    pub fn local_host(&self) -> Result<HostView, CommandError> {
+        Ok(HostView::from(
+            self.lock_db()?.local_host().map_err(storage_error)?,
+        ))
     }
 
     pub async fn terminal_input(&self, session_id: &str, data: String) -> Result<(), CommandError> {
@@ -513,6 +570,22 @@ impl Services {
     }
 
     // ---- helpers -----------------------------------------------------------
+
+    /// Host-key and credential operations do not apply to this computer.
+    fn refuse_local(&self, id: HostId) -> Result<(), CommandError> {
+        let local = self
+            .lock_db()?
+            .get_host(id)
+            .map_err(storage_error)?
+            .is_some_and(|h| h.is_local);
+        if local {
+            return Err(CommandError::new(
+                ErrorCode::InvalidInput,
+                "this computer has no SSH host key or saved credentials",
+            ));
+        }
+        Ok(())
+    }
 
     fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, Database>, CommandError> {
         self.db.lock().map_err(|_| poisoned())

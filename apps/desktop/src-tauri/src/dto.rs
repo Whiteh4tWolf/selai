@@ -72,6 +72,8 @@ pub struct HostView {
     pub updated_at_ms: i64,
     pub last_connected_at_ms: Option<i64>,
     pub archived: bool,
+    /// `ssh`, or `local` for the built-in "This computer" entry.
+    pub kind: &'static str,
 }
 
 impl From<HostRecord> for HostView {
@@ -93,6 +95,7 @@ impl From<HostRecord> for HostView {
             updated_at_ms: h.updated_at_ms,
             last_connected_at_ms: h.last_connected_at_ms,
             archived: h.archived_at_ms.is_some(),
+            kind: if h.is_local { "local" } else { "ssh" },
         }
     }
 }
@@ -247,6 +250,7 @@ mod tests {
             updated_at_ms: 1,
             last_connected_at_ms: None,
             archived: false,
+            kind: "ssh",
         };
         let json = serde_json::to_value(&view).expect("json");
         for key in [

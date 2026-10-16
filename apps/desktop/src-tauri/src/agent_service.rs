@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::CommandError,
+    local_exec::LocalExecutor,
     provider_service::{settings_from_record, tool_calling_view},
     service::Services,
 };
@@ -436,6 +437,36 @@ impl Services {
             .get(&SecretKey::provider_api_key(provider))
             .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
 
+        let task = TaskId::new();
+        let spec = TaskSpec {
+            task,
+            host,
+            host_label: host_record.label.clone(),
+            provider: Some(provider),
+            settings,
+            api_key,
+            prompt: prompt.to_owned(),
+            limits: Limits::default(),
+        };
+        let sink: EventSink = Arc::new(move |event| on_event(wire_event(task, event)));
+        let store = DbStore::new(Arc::clone(&self.db));
+        let llm = Arc::clone(&self.llm);
+        let registry = Arc::clone(&self.agent);
+
+        if host_record.is_local {
+            // This computer: no SSH session, no host key. Same policy, approvals
+            // and audit as any host.
+            let token = self.agent.register_task(task);
+            tokio::spawn(async move {
+                let waiter = RegistryWaiter {
+                    registry: Arc::clone(&registry),
+                };
+                run_task(spec, &store, &llm, &LocalExecutor, &waiter, sink, token).await;
+                registry.finish_task(task);
+            });
+            return Ok(task.to_string());
+        }
+
         let auth = self.load_auth(host, &host_record)?;
         let session = connect(ConnectOptions {
             endpoint: Endpoint::new(host_record.hostname.clone(), host_record.port),
@@ -455,23 +486,8 @@ impl Services {
             crate::service::ssh_error(&e)
         })?;
 
-        let task = TaskId::new();
         let token = self.agent.register_task(task);
-        let store = DbStore::new(Arc::clone(&self.db));
-        let llm = Arc::clone(&self.llm);
-        let registry = Arc::clone(&self.agent);
         let session = Arc::new(session);
-        let sink: EventSink = Arc::new(move |event| on_event(wire_event(task, event)));
-        let spec = TaskSpec {
-            task,
-            host,
-            host_label: host_record.label.clone(),
-            provider: Some(provider),
-            settings,
-            api_key,
-            prompt: prompt.to_owned(),
-            limits: Limits::default(),
-        };
         tokio::spawn(async move {
             let executor = SessionExecutor {
                 session: Arc::clone(&session),
@@ -498,8 +514,6 @@ impl Services {
         Ok(self.agent.cancel_task(task))
     }
 
-    /// Records the operator's decision in the database first, then wakes the task.
-    /// An expired or already-decided ticket is refused by the database.
     /// Records the operator's decision. For a root command the operator may give
     /// a sudo password; it is checked and held in memory before the decision is
     /// recorded, and the task takes it only after the database confirmed the

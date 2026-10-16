@@ -6,6 +6,8 @@ pub mod chat_service;
 pub mod commands;
 pub mod dto;
 pub mod history_service;
+pub mod local_exec;
+mod local_terminal;
 pub mod provider_service;
 pub mod service;
 
@@ -75,6 +77,7 @@ pub fn run() {
             commands::approval_decide,
             commands::sudo_options,
             commands::host_forget_sudo_password,
+            commands::local_host,
             commands::history_list,
             commands::audit_verify,
             commands::history_query,

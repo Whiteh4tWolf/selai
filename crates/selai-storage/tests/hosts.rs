@@ -375,3 +375,45 @@ fn labels_with_spaces_keep_their_case_and_still_conflict_ignoring_case() {
         .unwrap_err();
     assert!(matches!(err, StorageError::Conflict(_)), "{err:?}");
 }
+
+#[test]
+fn the_local_computer_is_built_in_unlisted_and_read_only() {
+    let mut db = Database::open_in_memory().expect("db");
+    let local = db.local_host().expect("local host");
+    assert!(local.is_local);
+    assert_eq!(local.label, "This computer");
+    assert_eq!(local.id.to_string(), selai_storage::LOCAL_HOST_ID);
+
+    let listed = db
+        .list_hosts(true, None, &PageRequest::first(50))
+        .expect("list");
+    assert!(
+        listed.items.is_empty(),
+        "SSH host listings never include it"
+    );
+
+    let edit = db.update_host(
+        local.id,
+        &settings("renamed", AuthMethod::Password),
+        local.updated_at_ms,
+        1,
+    );
+    assert!(matches!(edit, Err(StorageError::NotFound(_))));
+    assert!(matches!(
+        db.archive_host(local.id, 1),
+        Err(StorageError::Conflict(_))
+    ));
+    assert!(!db
+        .local_host()
+        .expect("still there")
+        .archived_at_ms
+        .is_some());
+
+    // Its label is taken, like any active host's.
+    let clash = db.create_host(
+        HostId::new(),
+        &settings("this computer", AuthMethod::Password),
+        1,
+    );
+    assert!(matches!(clash, Err(StorageError::Conflict(_))));
+}
