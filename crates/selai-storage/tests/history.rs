@@ -39,6 +39,7 @@ fn task_on(db: &mut Database, host: HostId) -> TaskId {
             provider: None,
             model_id: "model-x".into(),
             limits_json: "{}".into(),
+            prompt_preview: Some("check disk usage".into()),
         },
         T0,
     )
@@ -397,5 +398,91 @@ fn startup_expires_stale_approvals_and_is_audited() {
         audit_events(&db, "startup_reconciled"),
         1,
         "a clean start writes nothing"
+    );
+}
+
+#[test]
+fn token_usage_is_summed_per_task_and_unknown_counts_stay_unknown() {
+    let mut db = Database::open_in_memory().expect("db");
+    let host = HostId::new();
+    host_row(&mut db, host, "Production Web");
+    let task = task_on(&mut db, host);
+
+    let fresh = db.get_agent_task(task).expect("get").expect("task");
+    assert_eq!(fresh.prompt_preview.as_deref(), Some("check disk usage"));
+    assert_eq!(
+        (fresh.input_tokens, fresh.output_tokens, fresh.model_turns),
+        (None, None, 0)
+    );
+
+    db.record_task_usage(task, Some(1200), Some(80))
+        .expect("turn 1");
+    db.record_task_usage(task, Some(1500), None)
+        .expect("turn 2");
+    db.record_task_usage(task, None, None).expect("turn 3");
+    finished_exec(&mut db, task, host, ExecStatus::Completed, T0 + 1, "ok");
+    finished_exec(&mut db, task, host, ExecStatus::Failed, T0 + 2, "bad");
+
+    let after = db.get_agent_task(task).expect("get").expect("task");
+    assert_eq!(after.input_tokens, Some(2700));
+    assert_eq!(after.output_tokens, Some(80));
+    assert_eq!(after.model_turns, 3);
+    assert_eq!(after.executions, 2);
+
+    let listed = db
+        .host_tasks(
+            host,
+            &PageRequest {
+                cursor: None,
+                limit: 10,
+            },
+        )
+        .expect("tasks");
+    assert_eq!(listed.items, vec![after]);
+
+    // A second task whose provider never reports usage.
+    let quiet = task_on(&mut db, host);
+    db.record_task_usage(quiet, None, None).expect("quiet turn");
+
+    let summary = db.host_usage_summary(host).expect("summary");
+    assert_eq!(summary.tasks, 2);
+    assert_eq!(summary.executions, 2);
+    assert_eq!(summary.failed_executions, 1);
+    assert_eq!(summary.input_tokens, Some(2700));
+    assert_eq!(summary.output_tokens, Some(80));
+    assert_eq!(summary.last_activity_ms, Some(T0));
+
+    let empty = HostId::new();
+    host_row(&mut db, empty, "Idle Box");
+    let none = db.host_usage_summary(empty).expect("empty summary");
+    assert_eq!((none.tasks, none.input_tokens), (0, None));
+
+    assert!(db
+        .record_task_usage(TaskId::new(), Some(1), Some(1))
+        .is_err());
+}
+
+#[test]
+fn a_long_request_preview_is_cut_to_the_limit() {
+    let mut db = Database::open_in_memory().expect("db");
+    let host = HostId::new();
+    host_row(&mut db, host, "web");
+    let id = TaskId::new();
+    db.create_agent_task(
+        &NewTask {
+            id,
+            host,
+            provider: None,
+            model_id: "m".into(),
+            limits_json: "{}".into(),
+            prompt_preview: Some("é".repeat(900)),
+        },
+        T0,
+    )
+    .expect("task");
+    let stored = db.get_agent_task(id).expect("get").expect("task");
+    assert_eq!(
+        stored.prompt_preview.map(|p| p.chars().count()),
+        Some(selai_storage::PROMPT_PREVIEW_MAX)
     );
 }

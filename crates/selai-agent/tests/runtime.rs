@@ -67,6 +67,11 @@ impl Respond for ScriptedChat {
                 format!("data: {chunk}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
             }
         };
+        // Every turn reports usage the way OpenAI-compatible servers do with
+        // `stream_options.include_usage`: a final chunk with no choices.
+        let usage =
+            json!({"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 10}});
+        let payload = payload.replace("data: [DONE]", &format!("data: {usage}\n\ndata: [DONE]"));
         ResponseTemplate::new(200).set_body_raw(payload, "text/event-stream")
     }
 }
@@ -271,6 +276,14 @@ impl AgentStore for Store {
             return Err(StorageError::Io("checkpoint disk unavailable".into()));
         }
         self.inner.checkpoint(task, seq, kind, state, meta, now)
+    }
+    fn record_usage(
+        &self,
+        task: TaskId,
+        input: Option<u64>,
+        output: Option<u64>,
+    ) -> Result<(), StorageError> {
+        self.inner.record_usage(task, input, output)
     }
 }
 
@@ -859,6 +872,7 @@ fn the_real_store_refuses_a_task_for_a_host_that_does_not_exist() {
     let store = DbStore::new(Arc::clone(&db));
     let result = store.create_task(
         &selai_storage::NewTask {
+            prompt_preview: None,
             id: TaskId::new(),
             host: HostId::new(),
             provider: None,
@@ -1128,4 +1142,65 @@ async fn a_denied_command_is_reported_as_finished_with_its_reason() {
         vec![("denied".to_owned(), Some("POLICY_DENIED".to_owned()))]
     );
     assert!(exec.calls().is_empty());
+}
+
+#[tokio::test]
+async fn token_usage_is_summed_per_task_and_the_request_is_stored_redacted() {
+    let w = world();
+    let (server, _) = model(vec![
+        Turn::Tool("ssh_run_diagnostic", json!({"operation": "uptime"})),
+        Turn::Text("it is up"),
+    ])
+    .await;
+    let exec = FakeExec {
+        stdout: "up 3 days",
+        ..Default::default()
+    };
+    let op = FakeOperator {
+        db: Arc::clone(&w.db),
+        mode: Operator::ApproveInDb,
+        asked: Mutex::new(0),
+    };
+    let (sink, events) = sink();
+    let mut task_spec = spec(&w, &server.uri(), Limits::default());
+    task_spec.prompt = "check uptime, the db password=hunter2 is fine".to_owned();
+    let task = task_spec.task;
+    let outcome = run_task(
+        task_spec,
+        &store(&w, false),
+        &client(),
+        &exec,
+        &op,
+        sink,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(outcome.state, TaskState::Completed);
+
+    let record =
+        w.db.lock()
+            .expect("lock")
+            .get_agent_task(task)
+            .expect("get")
+            .expect("task");
+    assert_eq!(record.model_turns, 2);
+    assert_eq!(record.input_tokens, Some(200));
+    assert_eq!(record.output_tokens, Some(20));
+    let preview = record.prompt_preview.expect("preview");
+    assert!(preview.starts_with("check uptime"), "{preview}");
+    assert!(!preview.contains("hunter2"), "{preview}");
+
+    let usage: Vec<(Option<u64>, Option<u64>)> = events
+        .lock()
+        .expect("lock")
+        .iter()
+        .filter_map(|e| match e {
+            TaskEvent::Usage {
+                input_tokens,
+                output_tokens,
+            } => Some((*input_tokens, *output_tokens)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usage, vec![(Some(100), Some(10)), (Some(200), Some(20))]);
 }

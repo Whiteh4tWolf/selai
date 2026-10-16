@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use selai_desktop_lib::{
-    dto::{ProviderInput, ProviderTestView},
+    chat_service::{ChatEventView, ChatMessageInput},
+    dto::{ProviderInput, ProviderModelsInput, ProviderTestView},
     service::Services,
 };
 use selai_domain::ErrorCode;
@@ -14,7 +15,7 @@ use selai_llm::{ClientOptions, LlmClient};
 use selai_secrets::{MemoryStore, SecretError};
 use serde_json::{json, Value};
 use wiremock::{
-    matchers::{method, path},
+    matchers::{header, method, path},
     Mock, MockServer, Request, Respond, ResponseTemplate,
 };
 
@@ -383,4 +384,141 @@ async fn plain_http_to_another_host_needs_the_explicit_opt_in() {
         .items
         .iter()
         .any(|p| p.id == view.id && p.allow_insecure_http));
+}
+
+#[tokio::test]
+async fn check_api_key_lists_models_with_the_typed_key_or_the_saved_one() {
+    let h = harness();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(header("authorization", format!("Bearer {KEY}").as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [{"id": "qwen-tools"}, {"id": "llama-3"}]
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let base = format!("{}/v1", server.uri());
+
+    // Before saving: the key typed in the form.
+    let draft = ProviderModelsInput {
+        id: None,
+        protocol: "openai_chat".into(),
+        base_url: base.clone(),
+        allow_insecure_http: None,
+        api_key: Some(KEY.into()),
+    };
+    let models = h.services.provider_models(draft).await.expect("models");
+    assert_eq!(models.models, vec!["llama-3", "qwen-tools"]);
+
+    // After saving, with the key field left blank: the saved key.
+    let saved = h
+        .services
+        .provider_save(input(&base, "qwen-tools", Some(KEY)))
+        .expect("save");
+    let again = ProviderModelsInput {
+        id: Some(saved.id.clone()),
+        protocol: "openai_chat".into(),
+        base_url: base.clone(),
+        allow_insecure_http: None,
+        api_key: None,
+    };
+    assert_eq!(
+        h.services
+            .provider_models(again)
+            .await
+            .expect("models")
+            .models
+            .len(),
+        2
+    );
+
+    // A wrong key is a clear error, and the typed key is not in it.
+    let wrong = ProviderModelsInput {
+        id: None,
+        protocol: "openai_chat".into(),
+        base_url: base,
+        allow_insecure_http: None,
+        api_key: Some("wrong-key".into()),
+    };
+    let err = h.services.provider_models(wrong).await.expect_err("401");
+    assert!(!err.message.contains("wrong-key"));
+}
+
+#[tokio::test]
+async fn plain_chat_streams_a_reply_without_tools() {
+    let h = harness();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(move |req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).expect("json");
+            assert!(
+                body.get("tools").is_none(),
+                "plain chat must not offer tools"
+            );
+            let roles: Vec<&str> = body["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .map(|m| m["role"].as_str().unwrap_or(""))
+                .collect();
+            assert_eq!(roles, vec!["system", "user", "assistant", "user"]);
+            ResponseTemplate::new(200).set_body_raw(
+                sse(&[
+                    json!({"choices":[{"delta":{"content":"Use `ss -tlnp`."}}]}),
+                    json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
+                    json!({"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":7}}),
+                ]),
+                "text/event-stream",
+            )
+        })
+        .mount(&server)
+        .await;
+    let saved = h
+        .services
+        .provider_save(input(&format!("{}/v1", server.uri()), "m", None))
+        .expect("save");
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink: Arc<dyn Fn(ChatEventView) + Send + Sync> = Arc::new(move |e| {
+        let _ = tx.send(e);
+    });
+    let msg = |role: &str, content: &str| ChatMessageInput {
+        role: role.into(),
+        content: content.into(),
+    };
+    h.services
+        .chat_send(
+            &saved.id,
+            &[
+                msg("user", "how do I list ports?"),
+                msg("assistant", "Which OS?"),
+                msg("user", "Ubuntu"),
+            ],
+            sink,
+        )
+        .await
+        .expect("send");
+
+    let mut text = String::new();
+    let mut usage = None;
+    loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("in time")
+            .expect("event");
+        match event {
+            ChatEventView::TextDelta { text: t } => text.push_str(&t),
+            ChatEventView::Usage {
+                input_tokens,
+                output_tokens,
+            } => usage = Some((input_tokens, output_tokens)),
+            ChatEventView::Completed => break,
+            ChatEventView::Failed { code, message } => panic!("{code}: {message}"),
+        }
+    }
+    assert_eq!(text, "Use `ss -tlnp`.");
+    assert_eq!(usage, Some((Some(42), Some(7))));
 }

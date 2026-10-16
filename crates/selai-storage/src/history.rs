@@ -2,13 +2,14 @@
 //! (S-040, S-042). Every retention action writes an audit event in the same
 //! transaction, so deleted output always leaves a trace.
 
-use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
-use selai_domain::{ExecStatus, HostId, Page, PageRequest, TaskId, TaskState};
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension};
+use selai_domain::{ExecStatus, HostId, Page, PageRequest, TaskId};
 use serde_json::{json, Value};
 
 use crate::{
     agent::{
-        append_audit, now_tx, row_to_execution, ExecutionRecord, TaskRecord, EXECUTION_COLUMNS,
+        append_audit, now_tx, row_to_execution, row_to_task, ExecutionRecord, TaskRecord,
+        EXECUTION_COLUMNS, TASK_COLUMNS,
     },
     Database, StorageError,
 };
@@ -19,6 +20,18 @@ pub struct HistoryFilter {
     pub states: Vec<ExecStatus>,
     pub since_ms: Option<i64>,
     pub until_ms: Option<i64>,
+}
+
+/// Totals for one host's AI activity, over all time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostUsageSummary {
+    pub tasks: u32,
+    pub executions: u32,
+    pub failed_executions: u32,
+    /// Sums of the reported counts. `None` when no task reported any.
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub last_activity_ms: Option<i64>,
 }
 
 /// What a retention action removes. Metadata is never removed.
@@ -102,6 +115,35 @@ impl Database {
         Ok(Page { items, next_cursor })
     }
 
+    /// Task, command and token totals for one host.
+    pub fn host_usage_summary(&self, host: HostId) -> Result<HostUsageSummary, StorageError> {
+        let id = host.to_string();
+        let (tasks, input, output, last): (i64, Option<i64>, Option<i64>, Option<i64>) =
+            self.conn().query_row(
+                "SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), MAX(created_at_ms)
+                   FROM agent_tasks WHERE target_host_id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+        let (executions, failed): (i64, i64) = self.conn().query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(CASE WHEN state IN ('failed', 'timed_out', 'interrupted') THEN 1 ELSE 0 END), 0)
+               FROM command_executions WHERE host_id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let count = |v: i64| u32::try_from(v).unwrap_or(u32::MAX);
+        let tokens = |v: Option<i64>| v.and_then(|n| u64::try_from(n).ok());
+        Ok(HostUsageSummary {
+            tasks: count(tasks),
+            executions: count(executions),
+            failed_executions: count(failed),
+            input_tokens: tokens(input),
+            output_tokens: tokens(output),
+            last_activity_ms: last,
+        })
+    }
+
     /// The executions of one task in the order they were proposed.
     pub fn task_timeline(&self, task: TaskId) -> Result<Vec<ExecutionRecord>, StorageError> {
         let mut stmt = self.conn().prepare(&format!(
@@ -122,12 +164,11 @@ impl Database {
     ) -> Result<Page<TaskRecord>, StorageError> {
         let (after_ms, after_id) = cursor_parts(page.cursor.as_deref())?;
         let limit = i64::from(page.effective_limit());
-        let mut stmt = self.conn().prepare(
-            "SELECT id, target_host_id, state, model_id_snapshot, error_code, created_at_ms, finished_at_ms
-               FROM agent_tasks
-              WHERE target_host_id = ?1 AND (created_at_ms < ?2 OR (created_at_ms = ?2 AND id < ?3))
-              ORDER BY created_at_ms DESC, id DESC LIMIT ?4",
-        )?;
+        let mut stmt = self.conn().prepare(&format!(
+            "SELECT {TASK_COLUMNS} FROM agent_tasks t
+              WHERE t.target_host_id = ?1 AND (t.created_at_ms < ?2 OR (t.created_at_ms = ?2 AND t.id < ?3))
+              ORDER BY t.created_at_ms DESC, t.id DESC LIMIT ?4"
+        ))?;
         let items = stmt
             .query_map(
                 params![host.to_string(), after_ms, after_id, limit],
@@ -219,36 +260,6 @@ impl Database {
         )?;
         Ok(())
     }
-}
-
-fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
-    let state: String = row.get(2)?;
-    let state = TaskState::parse(&state).ok_or_else(|| {
-        rusqlite::Error::FromSqlConversionFailure(
-            2,
-            rusqlite::types::Type::Text,
-            "unknown task state".into(),
-        )
-    })?;
-    let id: String = row.get(0)?;
-    let host: String = row.get(1)?;
-    Ok(TaskRecord {
-        id: id.parse().map_err(|_| conversion(0))?,
-        host: host.parse().map_err(|_| conversion(1))?,
-        state,
-        model_id: row.get(3)?,
-        error_code: row.get(4)?,
-        created_at_ms: row.get(5)?,
-        finished_at_ms: row.get(6)?,
-    })
-}
-
-fn conversion(column: usize) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        rusqlite::types::Type::Text,
-        "invalid id".into(),
-    )
 }
 
 impl Database {

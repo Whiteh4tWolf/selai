@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use reqwest::{redirect::Policy, StatusCode};
-use selai_domain::{ErrorCode, ProviderProtocol, ProviderSettings};
+use selai_domain::{BaseUrl, ErrorCode, ProviderProtocol, ProviderSettings};
 use selai_secrets::SecretValue;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -187,6 +187,82 @@ impl LlmClient {
         })
     }
 
+    /// Lists the model IDs the endpoint offers (`GET {base}/models`, or
+    /// `{base}/v1/models` for Anthropic). Doubles as the API key check: a 401 or
+    /// 403 becomes `PROVIDER_UNAUTHORIZED`. One attempt, no retries, and the
+    /// body is capped so a misbehaving server cannot exhaust memory.
+    pub async fn list_models(
+        &self,
+        protocol: ProviderProtocol,
+        base_url: &BaseUrl,
+        api_key: Option<&SecretValue>,
+        timeout: Duration,
+    ) -> Result<Vec<String>, LlmError> {
+        let key = api_key.and_then(|k| std::str::from_utf8(k.expose_for_transport()).ok());
+        if api_key.is_some() && key.is_none() {
+            return Err(LlmError::new(
+                ErrorCode::ProviderUnauthorized,
+                "the API key is not valid text",
+            ));
+        }
+        if key.is_none() && !base_url.is_loopback() {
+            return Err(LlmError::new(
+                ErrorCode::ProviderUnauthorized,
+                "enter an API key first; it is needed for a provider that is not on this machine",
+            ));
+        }
+        let base = base_url.as_str();
+        let url = match protocol {
+            ProviderProtocol::AnthropicMessages => format!("{base}/v1/models?limit=1000"),
+            _ => format!("{base}/models"),
+        };
+        let mut request = self
+            .http
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "application/json");
+        if let Some(k) = key {
+            request = match protocol {
+                ProviderProtocol::AnthropicMessages => request
+                    .header("x-api-key", k)
+                    .header("anthropic-version", ANTHROPIC_VERSION),
+                _ => request.bearer_auth(k),
+            };
+        }
+        let response = match tokio::time::timeout(timeout, request.send()).await {
+            Err(_) => {
+                return Err(LlmError::new(
+                    ErrorCode::ProviderTimeout,
+                    "the provider did not answer in time",
+                ))
+            }
+            Ok(Err(e)) if e.is_timeout() => {
+                return Err(LlmError::new(
+                    ErrorCode::ProviderTimeout,
+                    "the provider did not answer in time",
+                ))
+            }
+            Ok(Err(_)) => {
+                return Err(LlmError::protocol(
+                    "could not reach the provider; check the base URL and network",
+                ))
+            }
+            Ok(Ok(r)) => r,
+        };
+        let status = response.status();
+        let body = read_capped(response, MODELS_BODY_LIMIT, timeout).await?;
+        if !status.is_success() {
+            if status.as_u16() == 404 {
+                return Err(LlmError::protocol(
+                    "this endpoint does not list models (HTTP 404); type the model ID instead",
+                ));
+            }
+            return Err(status_error(status, &String::from_utf8_lossy(&body), key));
+        }
+        let value: Value = serde_json::from_slice(&body)
+            .map_err(|_| LlmError::protocol("the model list is not valid JSON"))?;
+        Ok(model_ids(&value))
+    }
+
     async fn send_with_retry(
         &self,
         s: &ProviderSettings,
@@ -263,6 +339,61 @@ impl LlmClient {
             () = tokio::time::sleep(wait) => Ok(()),
         }
     }
+}
+
+const MODELS_BODY_LIMIT: usize = 4 * 1024 * 1024;
+const MODELS_MAX: usize = 1000;
+
+async fn read_capped(
+    response: reqwest::Response,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, LlmError> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    loop {
+        let next = tokio::time::timeout(timeout, stream.next())
+            .await
+            .map_err(|_| {
+                LlmError::new(
+                    ErrorCode::ProviderTimeout,
+                    "the provider stopped sending data",
+                )
+            })?;
+        let Some(chunk) = next else { break };
+        let chunk = chunk.map_err(|_| LlmError::protocol("the provider reply was interrupted"))?;
+        if body.len() + chunk.len() > limit {
+            return Err(LlmError::protocol("the model list is too large"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Model IDs from an OpenAI-style (`data[].id`), Anthropic (`data[].id`) or
+/// Ollama-native (`models[].name`) list. Sorted, without duplicates or blanks.
+pub(crate) fn model_ids(value: &Value) -> Vec<String> {
+    let from = |list: &Value, field: &str| -> Vec<String> {
+        list.as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|m| m[field].as_str().or_else(|| m.as_str()))
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty() && id.len() <= 256)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut ids = from(&value["data"], "id");
+    if ids.is_empty() {
+        ids = from(&value["models"], "name");
+    }
+    ids.sort();
+    ids.dedup();
+    ids.truncate(MODELS_MAX);
+    ids
 }
 
 fn is_retryable(status: StatusCode) -> bool {

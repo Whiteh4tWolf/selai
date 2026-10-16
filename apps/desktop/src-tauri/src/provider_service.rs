@@ -15,10 +15,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     dto::{
-        CommandError, ProviderInput, ProviderTestView, ProviderView, TemplateView, ToolCallingView,
+        CommandError, ModelsView, ProviderInput, ProviderModelsInput, ProviderTestView,
+        ProviderView, TemplateView, ToolCallingView,
     },
     service::Services,
 };
+
+const MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -287,5 +290,40 @@ impl Services {
                 "test kind must be connectivity or tool_calling",
             )),
         }
+    }
+
+    /// Checks an endpoint and key by listing its models. Works on a draft that
+    /// is not saved yet. The key typed in the form is used once and dropped;
+    /// with no key typed, the key saved for `id` is used.
+    pub async fn provider_models(
+        &self,
+        input: ProviderModelsInput,
+    ) -> Result<ModelsView, CommandError> {
+        let protocol = ProviderProtocol::parse(&input.protocol).ok_or_else(|| {
+            CommandError::new(ErrorCode::InvalidInput, "unknown provider protocol")
+        })?;
+        let base_url =
+            BaseUrl::parse_with(&input.base_url, input.allow_insecure_http.unwrap_or(false))
+                .map_err(invalid)?;
+        let key = match input.api_key.as_deref().filter(|k| !k.is_empty()) {
+            Some(k) => Some(SecretValue::new(k)),
+            None => match input.id.as_deref() {
+                Some(id) => self
+                    .secrets
+                    .get(&SecretKey::provider_api_key(parse_provider_id(id)?))
+                    .map_err(|e| CommandError::new(e.code(), e.to_string()))?,
+                None => None,
+            },
+        };
+        let started = std::time::Instant::now();
+        let models = self
+            .llm
+            .list_models(protocol, &base_url, key.as_ref(), MODELS_TIMEOUT)
+            .await
+            .map_err(|e| CommandError::new(e.code, e.message))?;
+        Ok(ModelsView {
+            models,
+            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        })
     }
 }

@@ -9,7 +9,7 @@ use std::{
 
 use selai_audit::redact;
 use selai_domain::{ErrorCode, ExecStatus, HostId, Page, PageRequest, ProviderId, TaskId};
-use selai_storage::{HistoryFilter, PurgeScope};
+use selai_storage::{HistoryFilter, PurgeScope, TaskRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -74,6 +74,42 @@ pub struct TaskView {
     pub error_code: Option<String>,
     pub created_at_ms: i64,
     pub finished_at_ms: Option<i64>,
+    /// The operator's request, redacted before it was stored.
+    pub prompt_preview: Option<String>,
+    /// `None` when the provider never reported the count.
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub model_turns: u32,
+    pub executions: u32,
+}
+
+/// Totals for one host's AI activity.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostUsageView {
+    pub tasks: u32,
+    pub executions: u32,
+    pub failed_executions: u32,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub last_activity_ms: Option<i64>,
+}
+
+fn task_view(t: TaskRecord) -> TaskView {
+    TaskView {
+        id: t.id.to_string(),
+        host_id: t.host.to_string(),
+        state: task_state_text(t.state),
+        model_id: t.model_id,
+        error_code: t.error_code,
+        created_at_ms: t.created_at_ms,
+        finished_at_ms: t.finished_at_ms,
+        prompt_preview: t.prompt_preview,
+        input_tokens: t.input_tokens,
+        output_tokens: t.output_tokens,
+        model_turns: t.model_turns,
+        executions: t.executions,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -183,20 +219,22 @@ impl Services {
             .host_tasks(host, &PageRequest { cursor, limit: 50 })
             .map_err(|e| storage(&e))?;
         Ok(Page {
-            items: page
-                .items
-                .into_iter()
-                .map(|t| TaskView {
-                    id: t.id.to_string(),
-                    host_id: t.host.to_string(),
-                    state: task_state_text(t.state),
-                    model_id: t.model_id,
-                    error_code: t.error_code,
-                    created_at_ms: t.created_at_ms,
-                    finished_at_ms: t.finished_at_ms,
-                })
-                .collect(),
+            items: page.items.into_iter().map(task_view).collect(),
             next_cursor: page.next_cursor,
+        })
+    }
+
+    pub fn history_summary(&self, host_id: &str) -> Result<HostUsageView, CommandError> {
+        let host = parse_host(host_id)?;
+        let db = self.lock_db_pub()?;
+        let s = db.host_usage_summary(host).map_err(|e| storage(&e))?;
+        Ok(HostUsageView {
+            tasks: s.tasks,
+            executions: s.executions,
+            failed_executions: s.failed_executions,
+            input_tokens: s.input_tokens,
+            output_tokens: s.output_tokens,
+            last_activity_ms: s.last_activity_ms,
         })
     }
 

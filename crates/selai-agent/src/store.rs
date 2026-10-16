@@ -52,6 +52,13 @@ pub trait AgentStore: Send + Sync {
         metadata: &Value,
         now_ms: i64,
     ) -> Result<(), StorageError>;
+    /// Adds one model turn's token counts to the task.
+    fn record_usage(
+        &self,
+        task: TaskId,
+        input: Option<u64>,
+        output: Option<u64>,
+    ) -> Result<(), StorageError>;
 }
 
 /// `AgentStore` over the local SQLite database. Locks are held only for one call.
@@ -140,5 +147,14 @@ impl AgentStore for DbStore {
     ) -> Result<(), StorageError> {
         self.lock()?
             .record_step(task, sequence_no, kind, state, metadata, now_ms)
+    }
+
+    fn record_usage(
+        &self,
+        task: TaskId,
+        input: Option<u64>,
+        output: Option<u64>,
+    ) -> Result<(), StorageError> {
+        self.lock()?.record_task_usage(task, input, output)
     }
 }

@@ -2,6 +2,7 @@
 //! Authorization lives in `service` and the Rust crates, never in the webview.
 
 pub mod agent_service;
+pub mod chat_service;
 pub mod commands;
 pub mod dto;
 pub mod history_service;
@@ -66,14 +67,17 @@ pub fn run() {
             commands::provider_list,
             commands::provider_save,
             commands::provider_delete,
+            commands::provider_models,
             commands::provider_test,
             commands::agent_start,
             commands::agent_cancel,
+            commands::chat_send,
             commands::approval_decide,
             commands::history_list,
             commands::audit_verify,
             commands::history_query,
             commands::history_tasks,
+            commands::history_summary,
             commands::task_timeline,
             commands::history_export,
             commands::history_purge_output,

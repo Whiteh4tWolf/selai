@@ -33,6 +33,7 @@ fn new_task(host: HostId) -> NewTask {
         provider: None,
         model_id: "model-x".into(),
         limits_json: "{}".into(),
+        prompt_preview: None,
     }
 }
 

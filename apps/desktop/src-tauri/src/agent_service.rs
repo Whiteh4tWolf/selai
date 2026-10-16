@@ -48,7 +48,7 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
-    fn register_task(&self, task: TaskId) -> CancellationToken {
+    pub(crate) fn register_task(&self, task: TaskId) -> CancellationToken {
         let token = CancellationToken::new();
         if let Ok(mut map) = self.tokens.lock() {
             map.insert(task, token.clone());
@@ -56,7 +56,7 @@ impl AgentRegistry {
         token
     }
 
-    fn finish_task(&self, task: TaskId) {
+    pub(crate) fn finish_task(&self, task: TaskId) {
         if let Ok(mut map) = self.tokens.lock() {
             map.remove(&task);
         }
@@ -180,6 +180,10 @@ pub enum TaskEventView {
         exit_code: Option<i64>,
         error_code: Option<String>,
     },
+    Usage {
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+    },
     Completed {
         text: String,
     },
@@ -271,6 +275,13 @@ fn event_view(event: TaskEvent) -> TaskEventView {
             state,
             exit_code,
             error_code,
+        },
+        TaskEvent::Usage {
+            input_tokens,
+            output_tokens,
+        } => TaskEventView::Usage {
+            input_tokens,
+            output_tokens,
         },
         TaskEvent::Completed { text } => TaskEventView::Completed { text },
         TaskEvent::Failed { code, message } => TaskEventView::Failed { code, message },

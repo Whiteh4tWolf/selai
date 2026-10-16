@@ -67,6 +67,12 @@ pub enum TaskEvent {
         exit_code: Option<i64>,
         error_code: Option<String>,
     },
+    /// Running token totals for the task after a model turn. `None` when the
+    /// provider has not reported that count.
+    Usage {
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+    },
     Completed {
         text: String,
     },

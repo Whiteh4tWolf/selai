@@ -322,6 +322,26 @@ pub struct TemplateView {
 
 /// Outcome of one provider test. Provider failures are reported here with a
 /// code, not thrown, so the UI can explain them.
+/// A draft endpoint for the "Check API key" step, before the profile is saved.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelsInput {
+    /// When set and `api_key` is empty, the key saved for this provider is used.
+    pub id: Option<String>,
+    pub protocol: String,
+    pub base_url: String,
+    pub allow_insecure_http: Option<bool>,
+    /// Write-only. Used for this request and dropped; it is not stored here.
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsView {
+    pub models: Vec<String>,
+    pub latency_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderTestView {

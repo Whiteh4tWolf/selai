@@ -15,11 +15,11 @@ mod tests;
 
 pub use agent::{
     ApprovalDecision, ApprovalRecord, ExecutionOutcome, ExecutionRecord, NewApproval, NewExecution,
-    NewTask, TaskRecord,
+    NewTask, TaskRecord, PROMPT_PREVIEW_MAX,
 };
 pub use db::Database;
 pub use error::StorageError;
-pub use history::{HistoryFilter, PurgeScope};
+pub use history::{HistoryFilter, HostUsageSummary, PurgeScope};
 pub use hosts::{GroupRecord, HostRecord, PinOutcome, PinnedKey};
 pub use migrate::{Migration, MIGRATIONS};
 pub use providers::ProviderRecord;

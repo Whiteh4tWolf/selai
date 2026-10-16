@@ -8,13 +8,15 @@ use tauri::{ipc::Channel, State};
 
 use crate::{
     agent_service::{AgentEventView, AuditVerifyView, ExecutionView},
+    chat_service::{ChatEventView, ChatMessageInput},
     dto::{
-        AppInfo, CommandError, GroupView, HostInput, HostView, ProbeView, ProviderInput,
-        ProviderTestView, ProviderView, StorageStatus, TemplateView, TerminalEvent, TrustMode,
-        TrustView,
+        AppInfo, CommandError, GroupView, HostInput, HostView, ModelsView, ProbeView,
+        ProviderInput, ProviderModelsInput, ProviderTestView, ProviderView, StorageStatus,
+        TemplateView, TerminalEvent, TrustMode, TrustView,
     },
     history_service::{
-        AiPreferences, AiPreferencesInput, ExportResult, HistoryFilterInput, PurgeResult, TaskView,
+        AiPreferences, AiPreferencesInput, ExportResult, HistoryFilterInput, HostUsageView,
+        PurgeResult, TaskView,
     },
     service::{EventSink, Services},
     AppState,
@@ -156,6 +158,14 @@ pub fn provider_save(
 }
 
 #[tauri::command]
+pub async fn provider_models(
+    state: State<'_, AppState>,
+    input: ProviderModelsInput,
+) -> Result<ModelsView, CommandError> {
+    services(&state)?.provider_models(input).await
+}
+
+#[tauri::command]
 pub fn provider_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
     services(&state)?.provider_delete(&id)
 }
@@ -175,6 +185,21 @@ pub async fn agent_start(
     });
     services(&state)?
         .agent_start(&host_id, &provider_id, &prompt, sink)
+        .await
+}
+
+#[tauri::command]
+pub async fn chat_send(
+    state: State<'_, AppState>,
+    provider_id: String,
+    messages: Vec<ChatMessageInput>,
+    on_event: Channel<ChatEventView>,
+) -> Result<String, CommandError> {
+    let sink: Arc<dyn Fn(ChatEventView) + Send + Sync> = Arc::new(move |event| {
+        let _ = on_event.send(event);
+    });
+    services(&state)?
+        .chat_send(&provider_id, &messages, sink)
         .await
 }
 
@@ -232,6 +257,14 @@ pub fn history_tasks(
     cursor: Option<String>,
 ) -> Result<Page<TaskView>, CommandError> {
     services(&state)?.history_tasks(&host_id, cursor)
+}
+
+#[tauri::command]
+pub fn history_summary(
+    state: State<'_, AppState>,
+    host_id: String,
+) -> Result<HostUsageView, CommandError> {
+    services(&state)?.history_summary(&host_id)
 }
 
 #[tauri::command]

@@ -8,7 +8,7 @@ use selai_domain::{
     ApprovalId, ErrorCode, ExecStatus, ExecutionId, HostId, ProviderId, ProviderSettings, TaskId,
     TaskState,
 };
-use selai_llm::{AgentEvent as ModelEvent, LlmClient, LlmError, Message, TurnRequest};
+use selai_llm::{AgentEvent as ModelEvent, LlmClient, LlmError, Message, TurnRequest, Usage};
 use selai_policy::{
     evaluate, parse_model_call, Decision, TaskScope, ToolRequest, APPROVAL_TTL_MS, POLICY_VERSION,
 };
@@ -16,6 +16,7 @@ use selai_secrets::SecretValue;
 use selai_ssh::{ExecEnd, ExecOutput, SshError};
 use selai_storage::{
     ApprovalDecision, ExecutionOutcome, NewApproval, NewExecution, NewTask, StorageError,
+    PROMPT_PREVIEW_MAX,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -150,6 +151,7 @@ where
                 "max_command_secs": spec.limits.max_command.as_secs(),
             })
             .to_string(),
+            prompt_preview: Some(prompt_preview(&spec.prompt)),
         },
         now_ms(),
     );
@@ -182,6 +184,7 @@ where
     let tools = tool_definitions();
     let mut steps: u32 = 0;
     let mut seq: u32 = 0;
+    let mut totals = Usage::default();
 
     loop {
         if cancel.is_cancelled() {
@@ -224,6 +227,17 @@ where
             Ok(o) => o,
             Err(e) => return model_failure(&ctx, &e),
         };
+        // Token usage is informational: a failed write is not a reason to stop
+        // the task, unlike the audit and checkpoint writes.
+        let _ = store.record_usage(spec.task, outcome.usage.input, outcome.usage.output);
+        totals.input = add_tokens(totals.input, outcome.usage.input);
+        totals.output = add_tokens(totals.output, outcome.usage.output);
+        if outcome.usage != Usage::default() {
+            sink(TaskEvent::Usage {
+                input_tokens: totals.input,
+                output_tokens: totals.output,
+            });
+        }
         let state = if outcome.tool_calls.is_empty() {
             "completed"
         } else {
@@ -294,6 +308,23 @@ where
                 Err(Stop::Fatal { code, message }) => return fail(&ctx, &code, &message),
             }
         }
+    }
+}
+
+/// The stored form of the operator's request: redacted, then cut to the limit.
+fn prompt_preview(prompt: &str) -> String {
+    redact(prompt.trim(), &[])
+        .text
+        .chars()
+        .take(PROMPT_PREVIEW_MAX)
+        .collect()
+}
+
+fn add_tokens(total: Option<u64>, turn: Option<u64>) -> Option<u64> {
+    match (total, turn) {
+        (t, None) => t,
+        (None, Some(n)) => Some(n),
+        (Some(t), Some(n)) => Some(t.saturating_add(n)),
     }
 }
 

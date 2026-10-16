@@ -79,6 +79,8 @@ pub struct NewTask {
     pub provider: Option<ProviderId>,
     pub model_id: String,
     pub limits_json: String,
+    /// The operator's request, already redacted. Cut to 500 characters on write.
+    pub prompt_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +92,42 @@ pub struct TaskRecord {
     pub error_code: Option<String>,
     pub created_at_ms: i64,
     pub finished_at_ms: Option<i64>,
+    pub prompt_preview: Option<String>,
+    /// Summed over model turns. `None` when the provider never reported it.
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub model_turns: u32,
+    /// Command executions recorded for this task.
+    pub executions: u32,
+}
+
+/// Longest stored request preview, in characters.
+pub const PROMPT_PREVIEW_MAX: usize = 500;
+
+pub(crate) const TASK_COLUMNS: &str = "t.id, t.target_host_id, t.state, t.model_id_snapshot, t.error_code,
+    t.created_at_ms, t.finished_at_ms, t.prompt_preview, t.input_tokens, t.output_tokens, t.model_turns,
+    (SELECT COUNT(*) FROM command_executions c WHERE c.task_id = t.id)";
+
+pub(crate) fn row_to_task(r: &Row<'_>) -> rusqlite::Result<TaskRecord> {
+    let id: String = r.get(0)?;
+    let host: String = r.get(1)?;
+    let state: String = r.get(2)?;
+    let input: Option<i64> = r.get(8)?;
+    let output: Option<i64> = r.get(9)?;
+    Ok(TaskRecord {
+        id: id.parse().map_err(|_| corrupt("task id"))?,
+        host: host.parse().map_err(|_| corrupt("host id"))?,
+        state: TaskState::parse(&state).ok_or_else(|| corrupt("task state"))?,
+        model_id: r.get(3)?,
+        error_code: r.get(4)?,
+        created_at_ms: r.get(5)?,
+        finished_at_ms: r.get(6)?,
+        prompt_preview: r.get(7)?,
+        input_tokens: input.and_then(|v| u64::try_from(v).ok()),
+        output_tokens: output.and_then(|v| u64::try_from(v).ok()),
+        model_turns: u32::try_from(r.get::<_, i64>(10)?).unwrap_or(u32::MAX),
+        executions: u32::try_from(r.get::<_, i64>(11)?).unwrap_or(u32::MAX),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,8 +241,8 @@ impl Database {
         let tx = now_tx(self.conn_mut())?;
         tx.execute(
             "INSERT INTO agent_tasks (id, target_host_id, provider_profile_id, model_id_snapshot,
-                state, limits_json, created_at_ms)
-             VALUES (?1, ?2, ?3, ?4, 'created', ?5, ?6)",
+                state, limits_json, created_at_ms, prompt_preview)
+             VALUES (?1, ?2, ?3, ?4, 'created', ?5, ?6, ?7)",
             params![
                 task.id.to_string(),
                 task.host.to_string(),
@@ -212,6 +250,9 @@ impl Database {
                 task.model_id,
                 task.limits_json,
                 now_ms,
+                task.prompt_preview
+                    .as_deref()
+                    .map(|p| p.chars().take(PROMPT_PREVIEW_MAX).collect::<String>()),
             ],
         )?;
         append_audit(
@@ -272,25 +313,34 @@ impl Database {
         Ok(self
             .conn()
             .query_row(
-                "SELECT id, target_host_id, state, model_id_snapshot, error_code, created_at_ms, finished_at_ms
-                   FROM agent_tasks WHERE id = ?1",
+                &format!("SELECT {TASK_COLUMNS} FROM agent_tasks t WHERE t.id = ?1"),
                 params![id.to_string()],
-                |r| {
-                    let id: String = r.get(0)?;
-                    let host: String = r.get(1)?;
-                    let state: String = r.get(2)?;
-                    Ok(TaskRecord {
-                        id: id.parse().map_err(|_| corrupt("task id"))?,
-                        host: host.parse().map_err(|_| corrupt("host id"))?,
-                        state: TaskState::parse(&state).ok_or_else(|| corrupt("task state"))?,
-                        model_id: r.get(3)?,
-                        error_code: r.get(4)?,
-                        created_at_ms: r.get(5)?,
-                        finished_at_ms: r.get(6)?,
-                    })
-                },
+                row_to_task,
             )
             .optional()?)
+    }
+
+    /// Adds one model turn's token counts to the task. A count the provider did
+    /// not report leaves the stored total as it is (it stays `NULL` if no turn
+    /// ever reported it).
+    pub fn record_task_usage(
+        &mut self,
+        id: TaskId,
+        input: Option<u64>,
+        output: Option<u64>,
+    ) -> Result<(), StorageError> {
+        let to_sql = |v: Option<u64>| v.map(|n| i64::try_from(n).unwrap_or(i64::MAX));
+        let changed = self.conn().execute(
+            "UPDATE agent_tasks SET model_turns = model_turns + 1,
+                input_tokens = CASE WHEN ?2 IS NULL THEN input_tokens ELSE COALESCE(input_tokens, 0) + ?2 END,
+                output_tokens = CASE WHEN ?3 IS NULL THEN output_tokens ELSE COALESCE(output_tokens, 0) + ?3 END
+              WHERE id = ?1",
+            params![id.to_string(), to_sql(input), to_sql(output)],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::NotFound(format!("task {id}")));
+        }
+        Ok(())
     }
 
     /// Writes an execution row in state `proposed` and its audit event in one
