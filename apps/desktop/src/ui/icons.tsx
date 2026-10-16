@@ -102,3 +102,9 @@ export const LockIcon = make(
   </>,
 );
 export const ChevronIcon = make(<path d="m9 6 6 6-6 6" />);
+export const PinIcon = make(
+  <>
+    <path d="M12 17v5" />
+    <path d="M5 9.5 7 5h10l2 4.5-3 3v4H8v-4z" />
+  </>,
+);

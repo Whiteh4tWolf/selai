@@ -2414,9 +2414,10 @@ option {
   padding: 0 2rem 0 0.7rem;
 }
 
-.target-chip[data-pinned='true'] {
-  background: var(--surface-3);
-  color: var(--fg);
+.icon-only {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
 }
 
 .target-chip small {

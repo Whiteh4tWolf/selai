@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { describeError, hostArchive, hostList, localHost, type HostView } from '../ipc';
+import { describeError, HOSTS_CHANGED, hostArchive, hostList, localHost, type HostView } from '../ipc';
 import { HostAvatar } from '../ui/HostAvatar';
 import { ArchiveIcon, EditIcon, KeyIcon, LockIcon, PlusIcon, SearchIcon, ServerIcon, TerminalIcon } from '../ui/icons';
 import { HostForm } from './HostForm';
@@ -67,6 +67,7 @@ export function ConnectionsTab({ onConnect, editRequest }: Props) {
     }
     try {
       await hostArchive(host.id);
+      window.dispatchEvent(new Event(HOSTS_CHANGED));
       await refresh(query);
     } catch (err) {
       setError(describeError(err));
@@ -195,6 +196,7 @@ export function ConnectionsTab({ onConnect, editRequest }: Props) {
           onCancel={() => setEditing(null)}
           onSaved={async (saved, connect) => {
             setEditing(null);
+            window.dispatchEvent(new Event(HOSTS_CHANGED));
             await refresh(query);
             if (connect) onConnect(saved);
           }}

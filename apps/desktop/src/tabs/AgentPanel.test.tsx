@@ -177,7 +177,7 @@ describe('AgentPanel', () => {
     expect(await screen.findByText('ss -tlnp')).toBeInTheDocument();
     expect(screen.getByText('root').tagName).toBe('STRONG');
     expect(screen.getByText('bash')).toBeInTheDocument();
-    expect(screen.getByText('1.2k in · 34 out')).toBeInTheDocument();
+    expect(screen.queryByText(/in · 34 out/)).not.toBeInTheDocument();
     expect(screen.queryByText(/```/)).not.toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: 'and on macOS?' } });
@@ -317,8 +317,13 @@ describe('AgentPanel', () => {
   describe('pinned server', () => {
     const staging = { ...host, id: 'h2', label: 'staging-db', hostname: '10.0.0.6' };
 
-    it('messages without a mention run on the pinned server, and a mention is for one message', async () => {
+    it('a pinned server stands in for a mention: plain messages stay plain, and the pin button or @ selects a server', async () => {
       const agent = mockAgent();
+      let chatEvent: ((e: ipc.ChatEvent) => void) | undefined;
+      const chat = vi.spyOn(ipc, 'chatSend').mockImplementation(async (_p, _m, onEvent) => {
+        chatEvent = onEvent;
+        return 'c1';
+      });
       vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
       vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [host, staging], nextCursor: null });
       vi.spyOn(ipc, 'preferencesGet').mockResolvedValue({
@@ -329,15 +334,29 @@ describe('AgentPanel', () => {
       render(<AgentPanel />);
       const textarea = screen.getByLabelText('Request');
       await waitFor(() => expect(screen.getByLabelText('Pinned server')).toHaveValue('h1'));
-      expect(screen.getByText('pinned')).toBeInTheDocument();
+      // The pin is shown as an icon button, never as the word.
+      expect(screen.queryByText(/pinned/i)).not.toBeInTheDocument();
 
-      fireEvent.change(textarea, { target: { value: 'check disk usage' } });
+      // Without a mention, a message is plain chat even though a server is pinned.
+      fireEvent.change(textarea, { target: { value: 'what does df -h show?' } });
       await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
       fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-      await waitFor(() => expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function)));
+      await waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
+      expect(agent.start).not.toHaveBeenCalled();
+      act(() => chatEvent?.({ type: 'completed' }));
+
+      // The pin button writes the pinned server's mention, and that message runs there.
+      fireEvent.click(screen.getByRole('button', { name: 'Send to production-web' }));
+      expect(textarea).toHaveValue('@production-web ');
+      fireEvent.change(textarea, { target: { value: '@production-web check disk usage' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+      await waitFor(() =>
+        expect(agent.start).toHaveBeenLastCalledWith('h1', 'p1', '@production-web check disk usage', expect.any(Array), expect.any(Function)),
+      );
       agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
 
-      // A mention sends one message to another server.
+      // Another mention goes to that server for that message only.
       fireEvent.change(textarea, { target: { value: '@stag' } });
       fireEvent.click(await screen.findByRole('button', { name: /staging-db/ }));
       fireEvent.change(textarea, { target: { value: '@staging-db check the logs' } });
@@ -345,14 +364,14 @@ describe('AgentPanel', () => {
       await waitFor(() =>
         expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', '@staging-db check the logs', expect.any(Array), expect.any(Function)),
       );
+      agent.play({ taskId: 't2', type: 'state', state: 'completed', errorCode: null });
 
-      // The next message goes back to the pinned server.
-      await waitFor(() => expect(textarea).toHaveValue(''));
-      agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
-      fireEvent.change(textarea, { target: { value: 'and the web node?' } });
+      // The next plain message is plain again: the pin did not turn chat into tool calling.
+      fireEvent.change(textarea, { target: { value: 'thanks, and the memory?' } });
       await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
       fireEvent.keyDown(textarea, { key: 'Enter' });
-      await waitFor(() => expect(agent.start).toHaveBeenLastCalledWith('h1', 'p1', 'and the web node?', expect.any(Array), expect.any(Function)));
+      await waitFor(() => expect(chat).toHaveBeenCalledTimes(2));
+      expect(agent.start).toHaveBeenCalledTimes(2);
     });
 
     it('choosing a server in the header pins it and remembers it; "no server" unpins', async () => {
@@ -365,11 +384,11 @@ describe('AgentPanel', () => {
 
       fireEvent.change(picker, { target: { value: 'h1' } });
       expect(save).toHaveBeenLastCalledWith({ pinnedHostId: 'h1' });
-      expect(screen.getByText('pinned')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Send to production-web' })).toBeInTheDocument();
 
       fireEvent.change(picker, { target: { value: '' } });
       expect(save).toHaveBeenLastCalledWith({ pinnedHostId: '' });
-      expect(screen.queryByText('pinned')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Send to production-web' })).not.toBeInTheDocument();
     });
   });
 

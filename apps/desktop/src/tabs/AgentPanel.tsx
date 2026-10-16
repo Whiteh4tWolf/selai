@@ -6,6 +6,7 @@ import {
   auditVerify,
   chatSend,
   describeError,
+  HOSTS_CHANGED,
   hostKeyProblem,
   sudoOptions,
   hostList,
@@ -19,7 +20,6 @@ import {
   type HostView,
   type ProviderView,
 } from '../ipc';
-import { formatCompact, formatCount } from '../ui/format';
 import { HostAvatar } from '../ui/HostAvatar';
 import { HostKeyDialog } from '../ui/HostKeyDialog';
 import { Markdown } from '../ui/Markdown';
@@ -28,6 +28,7 @@ import {
   AtIcon,
   CheckIcon,
   CloseIcon,
+  PinIcon,
   PlusIcon,
   SendIcon,
   ShieldIcon,
@@ -66,13 +67,11 @@ interface Turn {
   running: boolean;
   notice: string | null;
   error: string | null;
-  inputTokens: number | null;
-  outputTokens: number | null;
 }
 
 const SUGGESTIONS = [
-  { title: 'Check disk usage', detail: 'needs a pinned server', text: 'check disk usage and the largest directories' },
-  { title: 'Is nginx healthy?', detail: 'needs a pinned server', text: 'is nginx healthy? check the service and recent errors' },
+  { title: 'Check disk usage', detail: 'needs a server (@ or pin)', text: 'check disk usage and the largest directories' },
+  { title: 'Is nginx healthy?', detail: 'needs a server (@ or pin)', text: 'is nginx healthy? check the service and recent errors' },
   { title: 'Explain a config', detail: 'plain discussion, nothing runs', text: 'Explain what this nginx config does:\n' },
   { title: 'Plan a change', detail: 'plain discussion, nothing runs', text: 'Help me plan a zero-downtime PostgreSQL major upgrade.' },
 ];
@@ -87,9 +86,9 @@ interface Props {
 export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [providerId, setProviderId] = useState('');
-  /** A one-message target from an `@` mention. */
+  /** The server for the message being written: set by an `@` mention or the pin button. */
   const [host, setHost] = useState<HostView | null>(null);
-  /** The server this chat is pinned to; messages without a mention run there. */
+  /** The pinned server. It only stands in for a mention: the pin button writes `@label`. */
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [targets, setTargets] = useState<HostView[]>([]);
   const [draftMention, setDraftMention] = useState<string | null>(null);
@@ -142,14 +141,18 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
 
   useEffect(() => {
     let active = true;
-    targetSearch('')
-      .then((list) => active && setTargets(list))
-      .catch(() => undefined);
+    const loadTargets = () =>
+      targetSearch('')
+        .then((list) => active && setTargets(list))
+        .catch(() => undefined);
+    loadTargets();
+    window.addEventListener(HOSTS_CHANGED, loadTargets);
     preferencesGet()
       .then((prefs) => active && setPinnedId(prefs.pinnedHostId || null))
       .catch(() => undefined);
     return () => {
       active = false;
+      window.removeEventListener(HOSTS_CHANGED, loadTargets);
     };
   }, []);
 
@@ -189,6 +192,17 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
       return;
     }
     setMention(m[2] ?? '');
+  }
+
+  /** The pin button: writes the pinned server's mention, exactly as the picker would. */
+  function mentionPinned() {
+    if (!pinnedTarget) return;
+    const text = `@${pinnedTarget.label}`;
+    setHost(pinnedTarget);
+    setDraftMention(text);
+    setPrompt((p) => (p.trim() ? `${p.replace(/\s*$/, '')} ${text} ` : `${text} `));
+    setMention(null);
+    textareaRef.current?.focus();
   }
 
   function pickHost(h: HostView) {
@@ -255,7 +269,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
   // The server for this message: a mention, else the pinned server, else none
   // (plain discussion, which any provider can answer). A server needs tool calling.
   const pinnedTarget = targets.find((t) => t.id === pinnedId) ?? null;
-  const target = host ?? pinnedTarget;
+  // Only a mention (typed, picked, or from the pin button) selects a server for a message.
+  const target = host;
   const canSend = !running && provider !== undefined && (target === null || verified) && prompt.trim().length > 0;
 
   function pinServer(id: string) {
@@ -268,7 +283,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
     setTurns((prev) => prev.map((t) => (t.id === id ? change(t) : t)));
 
   async function startTurn(turn: Turn, target: HostView) {
-    updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [], inputTokens: null, outputTokens: null }));
+    updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [] }));
     try {
       // The new message has no reply yet, so it is not part of its own history.
       const id = await agentStart(target.id, providerId, turn.prompt, conversation(), (event) => {
@@ -276,7 +291,6 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
           ...t,
           items: applyEvent(t.items, event),
           running: t.running && !isTerminal(event),
-          ...(event.type === 'usage' ? { inputTokens: event.inputTokens, outputTokens: event.outputTokens } : {}),
         }));
       });
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
@@ -314,7 +328,6 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
           ...t,
           items: applyEvent(t.items, asTask),
           running: t.running && !isTerminal(asTask),
-          ...(event.type === 'usage' ? { inputTokens: event.inputTokens, outputTokens: event.outputTokens } : {}),
         }));
       });
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
@@ -337,8 +350,6 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
       running: true,
       notice: null,
       error: null,
-      inputTokens: null,
-      outputTokens: null,
     };
     const history = conversation();
     const server = target;
@@ -397,7 +408,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
         <select
           aria-label="Pinned server"
           className="server-select"
-          title="Messages without an @ mention run on this server. Plain chat when none is pinned."
+          title="Server for the pin button. Messages run on a server only when mentioned with @."
           value={pinnedTarget?.id ?? ''}
           onChange={(e) => pinServer(e.target.value)}
         >
@@ -456,9 +467,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             </span>
             <h2>How can I help?</h2>
             <p>
-              Ask anything to discuss it. Pin a server in the header to work on it: messages then run
-              there, read-only checks run on their own, and any other command waits for your approval.
-              Mention a host with <kbd>@</kbd> to use a server for one message only.
+              Ask anything to discuss it. To work on a server, mention it with <kbd>@</kbd>, or use the
+              pin button for the server chosen in the header. Read-only checks run on their own; any other
+              command waits for your approval.
             </p>
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
@@ -494,14 +505,6 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                       {turn.hostLabel && (
                         <span className="host-tag" title="Commands in this reply ran on this host">
                           <TerminalIcon size={11} /> {turn.hostLabel}
-                        </span>
-                      )}
-                      {(turn.inputTokens !== null || turn.outputTokens !== null) && (
-                        <span
-                          className="token-chip"
-                          title={`${formatCount(turn.inputTokens)} input · ${formatCount(turn.outputTokens)} output tokens`}
-                        >
-                          {formatCompact(turn.inputTokens)} in · {formatCompact(turn.outputTokens)} out
                         </span>
                       )}
                     </div>
@@ -593,7 +596,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             onChange={(e) => onPromptChange(e.target.value)}
             onKeyDown={onPromptKeyDown}
             rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
-            placeholder={target ? `What should I do on ${target.label}?` : 'Message Selai… (pin a server to work on it)'}
+            placeholder={target ? `What should I do on ${target.label}?` : 'Message Selai…'}
           />
           <div className="composer-bar">
             {host ? (
@@ -605,13 +608,18 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                   <CloseIcon size={11} />
                 </button>
               </span>
-            ) : pinnedTarget ? (
-              <span className="target-chip" data-pinned="true" title="Pinned in the header">
-                <TerminalIcon size={13} />
-                {pinnedTarget.label}
-                <small>pinned</small>
-              </span>
             ) : null}
+            {pinnedTarget && !host && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm icon-only"
+                aria-label={`Send to ${pinnedTarget.label}`}
+                title={`Send to ${pinnedTarget.label}`}
+                onClick={mentionPinned}
+              >
+                <PinIcon size={14} />
+              </button>
+            )}
             <button type="button" className="btn btn-ghost btn-sm" onClick={insertAt}>
               <AtIcon size={14} /> {host ? 'Mention another' : 'Mention host'}
             </button>
@@ -636,8 +644,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
         </div>
         <p className="composer-note">
           {target
-            ? `Runs on ${target.label}${host ? ' for this message' : ' (pinned)'}. Commands other than read-only checks wait for your approval.`
-            : 'Plain chat: nothing runs on any server.'}
+            ? `Runs on ${target.label} for this message. Commands other than read-only checks wait for your approval.`
+            : 'Plain chat: nothing runs on any server. Mention a server with @ to work on it.'}
         </p>
       </div>
 

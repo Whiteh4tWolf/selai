@@ -124,6 +124,9 @@ export async function localHost(): Promise<HostView> {
   return invoke<HostView>('local_host');
 }
 
+/** Sent on the window after a host is saved or archived, so other views reload. */
+export const HOSTS_CHANGED = 'selai:hosts-changed';
+
 export function hostSave(input: HostInput): Promise<HostView> {
   return invoke<HostView>('host_save', { input });
 }
