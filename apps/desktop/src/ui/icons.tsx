@@ -58,6 +58,8 @@ export const SearchIcon = make(
   </>,
 );
 export const CloseIcon = make(<path d="M6 6l12 12M18 6 6 18" />);
+export const MinimizeIcon = make(<path d="M5 17h14" />);
+export const MaximizeIcon = make(<rect x="5" y="5" width="14" height="14" rx="1" />);
 export const KeyIcon = make(
   <>
     <circle cx="8" cy="15" r="4" />

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="493" height="312" viewBox="0 0 493 312">
+  <rect width="493" height="312" fill="#16181a"/>
+  <path d="M0 0h493v312H0z" fill="none" stroke="#2b2e30"/>
+  <image href="../../public/selai-mark.svg" x="190" y="50" width="113" height="113"/>
+  <text x="246.5" y="211" text-anchor="middle" fill="#f0f2ef" font-family="Arial, sans-serif" font-size="28" font-weight="600">Selai</text>
+  <text x="246.5" y="239" text-anchor="middle" fill="#a0a7a2" font-family="Arial, sans-serif" font-size="15">SSH workspace</text>
+</svg>

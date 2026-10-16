@@ -23,13 +23,13 @@ never included in requests to an AI provider.
 | --- | --- |
 | **SSH hosts** | Add, edit, filter, and archive profiles; use password or local private key authentication; save a host and connect in one flow. Labels can contain spaces. |
 | **Host verification** | Inspect and explicitly trust a fingerprint on first connection. A changed host key blocks connection until you confirm its replacement. |
-| **Terminal** | Open interactive SSH terminals in tabs, resize them, see connection and exit status, reconnect, and edit a host after a failed login. Open a terminal for **This computer** too. |
-| **AI chat** | Discuss a question without a server, or bind a task to one SSH host or This computer. Mention a host with `@` for one message, follow the focused terminal, or pin a server in the chat. |
+| **Terminal** | Open interactive SSH terminals in tabs, resize them, adjust the terminal font with Ctrl+Plus or Ctrl+Minus, see connection and exit status, reconnect, and edit a host after a failed login. Open a terminal for **This computer** too. |
+| **AI chat** | Discuss a question without a server, or bind a task to one SSH host or This computer. Mention a host with `@` for one message, follow the focused terminal, or pin a server in the chat. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
 | **Command control** | Fixed diagnostic commands may run without a prompt. Every free-form command needs approval for the exact command and host. Denied, expired, and interrupted work is not replayed automatically. |
 | **Providers** | Configure OpenAI Responses, OpenAI Chat Completions and compatible endpoints, or Anthropic Messages. Check an API key, choose or enter a model ID, and test a real tool-call round trip. |
 | **History** | Review tasks and individual command attempts by host, their status and provider token counts. Filter the timeline, export redacted JSON, purge saved output previews, and verify the local audit chain. |
 | **Profile import** | Review and map CSV or plaintext JSON SSH profiles, select valid rows, and import them without replacing existing hosts. Use a shared CSV template for exports from other tools. |
-| **Workbench** | Use the host explorer, terminal and History/Providers tabs, and the assistant side by side. Choose dark, light, or system theme. |
+| **Workbench** | Use the host explorer, terminal and History/Providers tabs, and the assistant side by side. Toggle the right-hand Assistant panel from the header and drag its divider to give it more room. The window controls are integrated into the workbench header. Choose dark, light, or system theme. |
 
 ### SSH hosts and terminals
 
@@ -44,6 +44,10 @@ Each terminal tab stays bound to its host. The host explorer also includes
 and exit status, and offer a reconnect action. If login fails, you can open the
 host editor from the error flow.
 
+With a terminal focused, press **Ctrl+Plus** or **Ctrl+Minus** to change its font
+size. The setting applies to all terminal tabs and is remembered when Selai
+restarts.
+
 ### Assistant and approvals
 
 The assistant has two useful modes:
@@ -55,6 +59,12 @@ The assistant has two useful modes:
    the `@` picker for a specific host, or use the server associated with the
    focused terminal. You can pin a server while switching tabs. The model
    cannot switch the task to a different host.
+
+Assistant replies support GitHub Flavored Markdown, including headings, lists,
+tables, task lists, links, and fenced code blocks. A fenced `mermaid` block is
+rendered as a diagram; if its syntax is invalid, Selai shows the source instead.
+Links appear as text with their destination for copying. Remote images and raw
+HTML from model replies are not loaded or executed in the app.
 
 For example, select a configured provider, type `@`, choose **Production Web**
 from the picker, and ask it to `check disk usage`. Selai can run its fixed disk

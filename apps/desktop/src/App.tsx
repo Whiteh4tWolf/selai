@@ -1,11 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AgentPanel } from './tabs/AgentPanel';
 import { HistoryTab } from './tabs/HistoryTab';
 import { HostsSidebar } from './tabs/HostsSidebar';
 import { ProvidersPanel } from './tabs/ProvidersPanel';
 import { appInfo, describeError, localHost, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
-import { ClockIcon, CloseIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon } from './ui/icons';
+import { ClockIcon, CloseIcon, MaximizeIcon, MinimizeIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon } from './ui/icons';
 import { SelaiLogo } from './ui/SelaiLogo';
 
 // xterm.js is large; load it only when a terminal is first needed.
@@ -22,6 +24,9 @@ let nextTabNumber = 0;
 type Theme = 'dark' | 'light' | 'system';
 const THEMES: Theme[] = ['dark', 'light', 'system'];
 const THEME_KEY = 'selai.theme';
+const TERMINAL_FONT_KEY = 'selai.terminal.fontSize';
+const MIN_TERMINAL_FONT = 9;
+const MAX_TERMINAL_FONT = 24;
 
 /** Display preferences are per device, so browser storage is enough. */
 function stored(key: string): string | null {
@@ -43,6 +48,11 @@ function store(key: string, value: string) {
 function storedTheme(): Theme {
   const value = stored(THEME_KEY);
   return THEMES.includes(value as Theme) ? (value as Theme) : 'dark';
+}
+
+function storedTerminalFontSize(): number {
+  const saved = Number(stored(TERMINAL_FONT_KEY));
+  return Number.isFinite(saved) && saved >= MIN_TERMINAL_FONT && saved <= MAX_TERMINAL_FONT ? saved : 13.5;
 }
 
 /** A panel width the operator drags, remembered across starts. */
@@ -134,13 +144,22 @@ export function App() {
   const [editRequest, setEditRequest] = useState<{ hostId: string; n: number } | null>(null);
   const [chatRequest, setChatRequest] = useState<{ host: HostView; n: number } | null>(null);
   const [theme, setTheme] = useState<Theme>(storedTheme);
+  const [terminalFontSize, setTerminalFontSize] = useState(storedTerminalFontSize);
   const [sidebarOpen, setSidebarOpen] = useState(() => stored('selai.sidebar') !== 'closed');
   const [chatOpen, setChatOpen] = useState(() => {
     const saved = stored('selai.chat');
     return saved === null ? window.innerWidth > 1100 : saved !== 'closed';
   });
   const side = usePanelWidth('selai.sidebar.width', 264, 220, 420);
-  const chat = usePanelWidth('selai.chat.width', 380, 300, 640);
+  const chat = usePanelWidth('selai.chat.width', 380, 300, 1200);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const update = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  const maxChatWidth = Math.max(300, viewportWidth - 68 - (viewportWidth > 1100 && sidebarOpen ? side.width : 0) - (viewportWidth > 1100 ? 260 : 0));
+  const chatWidth = Math.min(chat.width, maxChatWidth);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -151,6 +170,10 @@ export function App() {
 
   useEffect(() => store('selai.sidebar', sidebarOpen ? 'open' : 'closed'), [sidebarOpen]);
   useEffect(() => store('selai.chat', chatOpen ? 'open' : 'closed'), [chatOpen]);
+  useEffect(() => store(TERMINAL_FONT_KEY, String(terminalFontSize)), [terminalFontSize]);
+  const changeTerminalFontSize = useCallback((step: number) => {
+    setTerminalFontSize((size) => Math.min(MAX_TERMINAL_FONT, Math.max(MIN_TERMINAL_FONT, size + step)));
+  }, []);
 
   // Panel shortcuts, caught before the terminal sees them. Plain Ctrl+B and Ctrl+L
   // belong to the shell, so these use Shift.
@@ -286,33 +309,45 @@ export function App() {
       title={shortcut ? `${label} (${shortcut})` : label}
       onClick={onClick}
     >
-      {icon}
+      <span className="activity-icon">{icon}</span>
       <span className="activity-label">{label}</span>
     </button>
   );
 
   return (
     <div className="workbench">
-      <header className="workspace-head">
-        <div className="workspace-brand" role="img" aria-label="Selai">
+      <header className="workspace-head" data-tauri-drag-region>
+        <div className="workspace-brand" role="img" aria-label="Selai" data-tauri-drag-region>
           <SelaiLogo size={28} />
         </div>
-        <span className="workspace-divider" aria-hidden="true" />
-        <span className="workspace-title">Workspace</span>
-        <span className="workspace-location">/ {locationTitle}</span>
-        <span className="grow" />
+        <span className="workspace-divider" aria-hidden="true" data-tauri-drag-region />
+        <span className="workspace-title" data-tauri-drag-region>Workspace</span>
+        <span className="workspace-location" data-tauri-drag-region>/ {locationTitle}</span>
+        <span className="grow" data-tauri-drag-region />
         <span className="workspace-session-count">
           <span className="dot" data-status={connectedSessions > 0 ? 'ok' : undefined} />
           {connectedSessions} connected
         </span>
+        <button
+          type="button"
+          className="assistant-toggle"
+          aria-label="AI Assistant"
+          aria-pressed={chatOpen}
+          aria-expanded={chatOpen}
+          aria-controls="assistant-panel"
+          title="Toggle AI Assistant (Ctrl+Shift+L)"
+          onClick={() => setChatOpen((open) => !open)}
+        >
+          <SelaiLogo size={19} />
+          <span>AI Assistant</span>
+        </button>
+        <WindowControls />
       </header>
       <div className="workbench-main">
         <nav className="activitybar" aria-label="Main">
           {activity('Hosts', <ServerIcon size={20} />, sidebarOpen, () => setSidebarOpen((o) => !o), 'Ctrl+Shift+E')}
           {activity('History', <ClockIcon size={20} />, active?.kind === 'history', () => openPage('history'))}
           {activity('Providers', <PlugIcon size={20} />, active?.kind === 'providers', () => openPage('providers'))}
-          <span className="grow" />
-          {activity('Assistant', <SelaiLogo size={26} />, chatOpen, () => setChatOpen((o) => !o), 'Ctrl+Shift+L')}
         </nav>
 
         <aside className="sidebar" hidden={!sidebarOpen} style={{ width: side.width }}>
@@ -373,6 +408,8 @@ export function App() {
                   onClose={closeTab}
                   onStatus={onStatus}
                   onEditHost={editHost}
+                  fontSize={terminalFontSize}
+                  onFontSizeChange={changeTerminalFontSize}
                 />
               </Suspense>
             )}
@@ -389,8 +426,8 @@ export function App() {
           </div>
         </main>
 
-        {chatOpen && <Resizer label="Resize chat" direction={-1} {...chat} />}
-        <aside className="chatbar" hidden={!chatOpen} style={{ width: chat.width }}>
+        {chatOpen && <Resizer label="Resize chat" direction={-1} width={chatWidth} setWidth={(value) => chat.setWidth(Math.min(value, maxChatWidth))} commit={chat.commit} />}
+        <aside id="assistant-panel" className="chatbar" hidden={!chatOpen} style={{ width: chatWidth }}>
           <AgentPanel
             activeHost={focusedTerminal?.host ?? null}
             contextRequest={chatRequest}
@@ -428,6 +465,18 @@ export function App() {
         </button>
         <span className="status-item">{info ? `Selai ${info.version}` : ''}</span>
       </footer>
+    </div>
+  );
+}
+
+function WindowControls() {
+  if (!isTauri()) return null;
+  const appWindow = getCurrentWindow();
+  return (
+    <div className="window-controls" aria-label="Window controls">
+      <button type="button" aria-label="Minimize window" title="Minimize" onClick={() => void appWindow.minimize()}><MinimizeIcon size={15} /></button>
+      <button type="button" aria-label="Maximize or restore window" title="Maximize or restore" onClick={() => void appWindow.toggleMaximize()}><MaximizeIcon size={14} /></button>
+      <button type="button" aria-label="Close window" title="Close" onClick={() => void appWindow.close()}><CloseIcon size={15} /></button>
     </div>
   );
 }

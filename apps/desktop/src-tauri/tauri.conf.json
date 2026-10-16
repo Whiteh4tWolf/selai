@@ -14,6 +14,7 @@
       {
         "label": "main",
         "title": "Selai",
+        "decorations": false,
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -34,10 +35,22 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "dmg": {
+        "background": "installer-art/dmg-background.png"
+      }
+    },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
-        "uninstallerIcon": "icons/icon.ico"
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "installer-art/nsis-header.bmp",
+        "sidebarImage": "installer-art/nsis-sidebar.bmp",
+        "uninstallerHeaderImage": "installer-art/nsis-header.bmp"
+      },
+      "wix": {
+        "bannerPath": "installer-art/wix-banner.bmp",
+        "dialogImagePath": "installer-art/wix-dialog.bmp"
       }
     }
   }

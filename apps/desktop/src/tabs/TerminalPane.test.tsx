@@ -4,15 +4,17 @@ import * as ipc from '../ipc';
 import { TerminalPane } from './TerminalPane';
 
 const written: unknown[] = [];
-const terminals: { options: { cursorBlink: boolean }; focus: ReturnType<typeof vi.fn> }[] = [];
+const terminals: { options: { cursorBlink: boolean; fontSize: number }; focus: ReturnType<typeof vi.fn> }[] = [];
+const fits: ReturnType<typeof vi.fn>[] = [];
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
-    options = { cursorBlink: true };
+    options = { cursorBlink: true, fontSize: 13.5 };
     cols = 80;
     rows = 24;
-    constructor(options: { cursorBlink: boolean }) {
+    constructor(options: { cursorBlink: boolean; fontSize: number }) {
       this.options.cursorBlink = options.cursorBlink;
+      this.options.fontSize = options.fontSize;
       terminals.push(this);
     }
     loadAddon() {}
@@ -35,7 +37,8 @@ vi.mock('@xterm/xterm', () => ({
 }));
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class {
-    fit() {}
+    fit = vi.fn();
+    constructor() { fits.push(this.fit); }
   },
 }));
 
@@ -50,10 +53,30 @@ const host = {
 beforeEach(() => {
   written.length = 0;
   terminals.length = 0;
+  fits.length = 0;
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe('TerminalPane', () => {
+  it('uses Ctrl+Plus and Ctrl+Minus in the terminal and refits when the font size changes', () => {
+    vi.spyOn(ipc, 'terminalConnect').mockResolvedValue('session-font');
+    const onFontSizeChange = vi.fn();
+    const { rerender } = render(<TerminalPane host={host} hidden={false} fontSize={13.5} onFontSizeChange={onFontSizeChange} />);
+    const terminal = screen.getByLabelText('Terminal Production Web');
+    expect(terminals[0]?.options.fontSize).toBe(13.5);
+
+    expect(fireEvent.keyDown(terminal, { key: '+', ctrlKey: true })).toBe(false);
+    fireEvent.keyDown(terminal, { key: '=', ctrlKey: true });
+    fireEvent.keyDown(terminal, { key: '-', ctrlKey: true });
+    fireEvent.keyDown(terminal, { key: '+', altKey: true });
+    expect(onFontSizeChange.mock.calls).toEqual([[1], [1], [-1]]);
+
+    const fitCount = fits[0]?.mock.calls.length ?? 0;
+    rerender(<TerminalPane host={host} hidden={false} fontSize={14.5} onFontSizeChange={onFontSizeChange} />);
+    expect(terminals[0]?.options.fontSize).toBe(14.5);
+    expect(fits[0]).toHaveBeenCalledTimes(fitCount + 1);
+  });
+
   it('writes decoded output bytes to the terminal and reports the session status', async () => {
     let deliver: (event: ipc.TerminalEvent) => void = () => {};
     vi.spyOn(ipc, 'terminalConnect').mockImplementation((_host, _c, _r, onEvent) => {

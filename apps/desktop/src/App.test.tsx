@@ -3,6 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import * as ipc from './ipc';
 
+const windowApi = vi.hoisted(() => ({
+  isTauri: vi.fn(() => false),
+  getCurrentWindow: vi.fn(),
+}));
+vi.mock('@tauri-apps/api/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@tauri-apps/api/core')>(),
+  isTauri: windowApi.isTauri,
+}));
+vi.mock('@tauri-apps/api/window', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@tauri-apps/api/window')>(),
+  getCurrentWindow: windowApi.getCurrentWindow,
+}));
+
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options = { cursorBlink: true };
@@ -30,6 +43,8 @@ vi.mock('@xterm/addon-fit', () => ({
 
 describe('App shell', () => {
   beforeEach(() => {
+    windowApi.isTauri.mockReturnValue(false);
+    windowApi.getCurrentWindow.mockReset();
     window.localStorage.clear();
     vi.stubGlobal('innerWidth', 1200);
     vi.spyOn(ipc, 'appInfo').mockResolvedValue({ name: 'Selai', version: '0.1.0' });
@@ -52,7 +67,7 @@ describe('App shell', () => {
   it('is a desktop workbench: host explorer on the left, chat on the right, welcome in the middle', async () => {
     render(<App />);
     expect(screen.getByRole('button', { name: 'Hosts' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Assistant' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'AI Assistant' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('region', { name: 'Hosts' })).toBeVisible();
     expect(screen.getByLabelText('Request')).toBeVisible();
     expect(screen.getByText('Open a terminal on this computer')).toBeInTheDocument();
@@ -61,11 +76,17 @@ describe('App shell', () => {
 
   it('toggles the side panels from the activity bar and the keyboard', () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Assistant' }));
-    expect(screen.getByRole('button', { name: 'Assistant' })).toHaveAttribute('aria-pressed', 'false');
+    const header = document.querySelector('.workspace-head');
+    const activitybar = screen.getByRole('navigation', { name: 'Main' });
+    expect(header).toContainElement(screen.getByRole('button', { name: 'AI Assistant' }));
+    expect(within(activitybar).queryByRole('button', { name: 'AI Assistant' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'AI Assistant' }));
+    expect(screen.getByRole('button', { name: 'AI Assistant' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'AI Assistant' })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByLabelText('Request')).not.toBeVisible();
     fireEvent.keyDown(window, { key: 'L', ctrlKey: true, shiftKey: true });
     expect(screen.getByLabelText('Request')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'AI Assistant' })).toHaveAttribute('aria-expanded', 'true');
 
     fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true });
     expect(screen.getByRole('button', { name: 'Hosts' })).toHaveAttribute('aria-pressed', 'false');
@@ -84,7 +105,7 @@ describe('App shell', () => {
     vi.stubGlobal('innerWidth', 800);
     render(<App />);
     expect(screen.getByLabelText('Request')).not.toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Assistant' }));
+    fireEvent.click(screen.getByRole('button', { name: 'AI Assistant' }));
     expect(screen.getByLabelText('Request')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Open Providers' }));
     expect(await screen.findByRole('tab', { name: 'Providers' })).toHaveAttribute('aria-selected', 'true');
@@ -96,6 +117,32 @@ describe('App shell', () => {
     window.localStorage.setItem('selai.chat', 'open');
     render(<App />);
     expect(screen.getByLabelText('Request')).toBeVisible();
+  });
+
+  it('allows the assistant to grow while preserving space for the editor', () => {
+    vi.stubGlobal('innerWidth', 1200);
+    window.localStorage.setItem('selai.chat.width', '900');
+    render(<App />);
+    const panel = document.querySelector<HTMLElement>('.chatbar');
+    expect(panel?.style.width).toBe('608px');
+    fireEvent.click(screen.getByRole('button', { name: 'Hosts' }));
+    expect(panel?.style.width).toBe('872px');
+  });
+
+  it('puts native window controls and a drag region in the app header', () => {
+    const minimize = vi.fn().mockResolvedValue(undefined);
+    const toggleMaximize = vi.fn().mockResolvedValue(undefined);
+    const close = vi.fn().mockResolvedValue(undefined);
+    windowApi.isTauri.mockReturnValue(true);
+    windowApi.getCurrentWindow.mockReturnValue({ minimize, toggleMaximize, close });
+    render(<App />);
+    expect(document.querySelector('.workspace-head')).toHaveAttribute('data-tauri-drag-region');
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize window' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize or restore window' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close window' }));
+    expect(minimize).toHaveBeenCalledTimes(1);
+    expect(toggleMaximize).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('reports a storage failure with its code instead of hiding it', async () => {

@@ -15,10 +15,12 @@ interface Props {
   onClose: (key: string) => void;
   onStatus: (key: string, status: SessionStatus) => void;
   onEditHost: (hostId: string) => void;
+  fontSize: number;
+  onFontSizeChange: (step: number) => void;
 }
 
 /** The open terminals. Panes stay mounted while hidden so their sessions survive tab changes. */
-export function TerminalStack({ tabs, activeKey, visible, onClose, onStatus, onEditHost }: Props) {
+export function TerminalStack({ tabs, activeKey, visible, onClose, onStatus, onEditHost, fontSize, onFontSizeChange }: Props) {
   return (
     <div className="term-stack" hidden={!visible}>
       {tabs.map((tab) => (
@@ -29,6 +31,8 @@ export function TerminalStack({ tabs, activeKey, visible, onClose, onStatus, onE
           onStatus={(status) => onStatus(tab.key, status)}
           onClose={() => onClose(tab.key)}
           onEditHost={() => onEditHost(tab.host.id)}
+          fontSize={fontSize}
+          onFontSizeChange={onFontSizeChange}
         />
       ))}
     </div>

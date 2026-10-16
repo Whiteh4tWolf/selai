@@ -25,6 +25,8 @@ interface Props {
   onStatus?: (status: SessionStatus) => void;
   onClose?: () => void;
   onEditHost?: () => void;
+  fontSize?: number;
+  onFontSizeChange?: (step: number) => void;
 }
 
 const THEME = {
@@ -66,10 +68,11 @@ const FAILURE_TITLES: Record<string, string> = {
  * stops at an unknown or changed server key asks for approval here and then
  * connects again; nothing is sent to the server before the key is trusted.
  */
-export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Props) {
+export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, fontSize = 13.5, onFontSizeChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const initialFontSize = useRef(fontSize);
   const sessionRef = useRef<string | null>(null);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
@@ -93,7 +96,7 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
       cursorBlink: !hidden,
       scrollback: 5000,
       fontFamily: "'JetBrains Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace",
-      fontSize: 13.5,
+      fontSize: initialFontSize.current,
       lineHeight: 1.25,
       letterSpacing: 0,
       theme: THEME,
@@ -131,6 +134,14 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
       fitRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (term && term.options.fontSize !== fontSize) {
+      term.options.fontSize = fontSize;
+      if (!hiddenRef.current) fitRef.current?.fit();
+    }
+  }, [fontSize]);
 
   // One connection per attempt. Retry and "Trust & connect" start a new attempt.
   useEffect(() => {
@@ -247,7 +258,20 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
           </button>
         )}
       </div>
-      <div className="terminal" ref={containerRef} aria-label={`Terminal ${host.label}`} />
+      <div
+        className="terminal"
+        ref={containerRef}
+        aria-label={`Terminal ${host.label}`}
+        onKeyDownCapture={(event) => {
+          if (hidden || !onFontSizeChange || !event.ctrlKey || event.metaKey || event.altKey) return;
+          const increase = event.key === '+' || event.key === '=' || event.code === 'NumpadAdd';
+          const decrease = event.key === '-' || event.key === '_' || event.code === 'NumpadSubtract';
+          if (!increase && !decrease) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onFontSizeChange(increase ? 1 : -1);
+        }}
+      />
 
       {status === 'connecting' && (
         <div className="term-overlay">

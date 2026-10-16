@@ -18,9 +18,15 @@ Windows will show SmartScreen warnings and macOS Gatekeeper will block the app.
 
 Bundle targets:
 
-- `apps/desktop/src-tauri/tauri.conf.json` sets `bundle.active` to `true`. The
-  icons Windows and macOS need (`icon.ico`, `icon.icns`) are generated from
-  `icon.png` with `pnpm tauri icon`.
+- `apps/desktop/src-tauri/tauri.conf.json` sets `bundle.active` to `true`. All
+  application icon sizes (`icon.ico`, `icon.icns`, and PNG variants) are
+  generated from `apps/desktop/public/selai-mark.svg` with
+  `pnpm tauri icon public/selai-mark.svg --output src-tauri/icons` from
+  `apps/desktop`.
+- Windows NSIS and MSI installers use the matching artwork in
+  `apps/desktop/src-tauri/installer-art/`; the macOS DMG uses its branded
+  background from that directory. The SVG files there are the artwork sources;
+  their configured BMP and PNG outputs are included in the release bundles.
 - `bundle.targets` is `"all"`. On Linux the workflow limits the build to
   `deb appimage` (`--bundles`), so `rpm` is not built. Windows and macOS use
   the default targets for their platform.
