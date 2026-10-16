@@ -42,27 +42,28 @@ export function AgentPanel() {
 
   useEffect(() => {
     let active = true;
-    const reload = () => {
-      providerList()
-        .then((page) => active && setProviders(page.items))
-        .catch(() => undefined);
-    };
-    window.addEventListener(PROVIDERS_CHANGED, reload);
-    // The remembered provider wins when it is still verified; otherwise the first
+    // Loads the provider list and picks one when the current choice is missing or no
+    // longer verified: the remembered provider if still verified, else the first
     // verified one. A missing preference is not an error.
-    Promise.all([providerList(), Promise.resolve().then(preferencesGet).catch(() => null)])
-      .then(([page, prefs]) => {
-        if (!active) return;
-        setProviders(page.items);
-        const usable = (id: string | null | undefined) =>
-          page.items.find((p) => p.id === id && p.toolCalling.status === 'verified')?.id;
-        const firstVerified = page.items.find((p) => p.toolCalling.status === 'verified')?.id;
-        setProviderId((current) => current || usable(prefs?.lastProviderId) || firstVerified || '');
-      })
-      .catch((err: unknown) => active && setError(describeError(err)));
+    const load = () =>
+      Promise.all([providerList(), Promise.resolve().then(preferencesGet).catch(() => null)])
+        .then(([page, prefs]) => {
+          if (!active) return;
+          setProviders(page.items);
+          const isVerified = (id: string | null | undefined) =>
+            page.items.some((p) => p.id === id && p.toolCalling.status === 'verified');
+          setProviderId((current) => {
+            if (isVerified(current)) return current;
+            if (isVerified(prefs?.lastProviderId)) return prefs?.lastProviderId ?? '';
+            return page.items.find((p) => p.toolCalling.status === 'verified')?.id ?? '';
+          });
+        })
+        .catch((err: unknown) => active && setError(describeError(err)));
+    window.addEventListener(PROVIDERS_CHANGED, load);
+    void load();
     return () => {
       active = false;
-      window.removeEventListener(PROVIDERS_CHANGED, reload);
+      window.removeEventListener(PROVIDERS_CHANGED, load);
     };
   }, []);
 
@@ -252,6 +253,11 @@ export function AgentPanel() {
           Provider
           <select value={providerId} onChange={(e) => chooseProvider(e.target.value)} disabled={running}>
             {providers.length === 0 && <option value="">No providers configured</option>}
+            {providers.length > 0 && providerId === '' && (
+              <option value="" disabled>
+                Choose a provider
+              </option>
+            )}
             {providers.map((p) => (
               <option key={p.id} value={p.id} disabled={p.toolCalling.status !== 'verified'}>
                 {p.name} ({p.toolCalling.status === 'verified' ? 'tool calling verified' : 'not verified'})

@@ -160,6 +160,9 @@ describe('AgentPanel', () => {
 
     expect(await screen.findByRole('option', { name: /local-vllm/ })).toBeInTheDocument();
     expect(list).toHaveBeenCalledTimes(2);
+    // The shown choice must be the selected one, so Send can be enabled.
+    expect(screen.getByLabelText(/Provider/)).toHaveValue('p1');
+    expect(screen.queryByText(/Run the tool calling test/)).not.toBeInTheDocument();
   });
 
   it('verifies the audit chain on demand', async () => {
