@@ -280,7 +280,7 @@ export function App() {
     <div className="workbench">
       <header className="workspace-head">
         <div className="workspace-brand">
-          <span className="brand-mark" aria-hidden="true">s.</span>
+          <img className="brand-mark" src="/selai-mark.svg" alt="" />
           <span>selai</span>
         </div>
         <span className="workspace-divider" aria-hidden="true" />

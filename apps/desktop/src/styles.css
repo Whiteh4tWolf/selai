@@ -201,18 +201,9 @@ body.resizing * {
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
   width: 24px;
   height: 24px;
-
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.08em;
-  padding-right: 2px;
+  flex: none;
 }
 
 .activity-btn {
