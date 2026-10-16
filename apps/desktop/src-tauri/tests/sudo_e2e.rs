@@ -40,7 +40,7 @@ async fn start_root_task(
 ) -> (String, Option<&'static str>, Events) {
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(host, provider, "what is my uid as root?", on_event)
+        .agent_start(host, provider, "what is my uid as root?", &[], on_event)
         .await
         .expect("start");
     let waiting = until(&mut rx, |e| {

@@ -44,7 +44,7 @@ const host: ipc.HostView = {
 /** Captures the event callback so a test can play the task's events. */
 function mockAgent() {
   let emit: ((event: ipc.AgentEvent) => void) | undefined;
-  const start = vi.spyOn(ipc, 'agentStart').mockImplementation(async (_h, _p, _r, onEvent) => {
+  const start = vi.spyOn(ipc, 'agentStart').mockImplementation(async (_h, _p, _r, _history, onEvent) => {
     emit = onEvent;
     return 't1';
   });
@@ -76,7 +76,7 @@ describe('AgentPanel', () => {
     await sendRequest(textarea, 'check disk usage');
 
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('h1', 'p1', '@production-web check disk usage', expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('h1', 'p1', '@production-web check disk usage', [], expect.any(Function)),
     );
     // The sent message stays in the thread with the mention highlighted.
     expect(await screen.findByText('@production-web', { selector: '.mention' })).toBeInTheDocument();
@@ -99,7 +99,7 @@ describe('AgentPanel', () => {
     fireEvent.change(textarea, { target: { value: 'restart @Production Web nginx' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('h7', 'p1', 'restart @Production Web nginx', expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('h7', 'p1', 'restart @Production Web nginx', [], expect.any(Function)),
     );
   });
 
@@ -149,7 +149,7 @@ describe('AgentPanel', () => {
     fireEvent.change(textarea, { target: { value: '@prod' } });
     fireEvent.click(await screen.findByRole('button', { name: /production-web/ }));
     fireEvent.change(textarea, { target: { value: '@production-web check disk usage' } });
-    expect(await screen.findByText(/Working on a host needs a provider whose tool calling test passed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Working on a server needs a provider whose tool calling test passed/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Open Providers' }));
     expect(openProviders).toHaveBeenCalled();
@@ -310,8 +310,67 @@ describe('AgentPanel', () => {
     fireEvent.change(textarea, { target: { value: '@This computer how much disk is free?' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('local', 'p1', '@This computer how much disk is free?', expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('local', 'p1', '@This computer how much disk is free?', [], expect.any(Function)),
     );
+  });
+
+  describe('pinned server', () => {
+    const staging = { ...host, id: 'h2', label: 'staging-db', hostname: '10.0.0.6' };
+
+    it('messages without a mention run on the pinned server, and a mention is for one message', async () => {
+      const agent = mockAgent();
+      vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+      vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [host, staging], nextCursor: null });
+      vi.spyOn(ipc, 'preferencesGet').mockResolvedValue({
+        lastProviderId: null,
+        outputRetentionDays: 30,
+        pinnedHostId: 'h1',
+      });
+      render(<AgentPanel />);
+      const textarea = screen.getByLabelText('Request');
+      await waitFor(() => expect(screen.getByLabelText('Pinned server')).toHaveValue('h1'));
+      expect(screen.getByText('pinned')).toBeInTheDocument();
+
+      fireEvent.change(textarea, { target: { value: 'check disk usage' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function)));
+      agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
+
+      // A mention sends one message to another server.
+      fireEvent.change(textarea, { target: { value: '@stag' } });
+      fireEvent.click(await screen.findByRole('button', { name: /staging-db/ }));
+      fireEvent.change(textarea, { target: { value: '@staging-db check the logs' } });
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+      await waitFor(() =>
+        expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', '@staging-db check the logs', expect.any(Array), expect.any(Function)),
+      );
+
+      // The next message goes back to the pinned server.
+      await waitFor(() => expect(textarea).toHaveValue(''));
+      agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
+      fireEvent.change(textarea, { target: { value: 'and the web node?' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+      await waitFor(() => expect(agent.start).toHaveBeenLastCalledWith('h1', 'p1', 'and the web node?', expect.any(Array), expect.any(Function)));
+    });
+
+    it('choosing a server in the header pins it and remembers it; "no server" unpins', async () => {
+      vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+      vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [host], nextCursor: null });
+      const save = vi.spyOn(ipc, 'preferencesSet').mockResolvedValue({} as ipc.AiPreferences);
+      render(<AgentPanel />);
+      const picker = await screen.findByLabelText('Pinned server');
+      await screen.findByRole('option', { name: 'production-web' });
+
+      fireEvent.change(picker, { target: { value: 'h1' } });
+      expect(save).toHaveBeenLastCalledWith({ pinnedHostId: 'h1' });
+      expect(screen.getByText('pinned')).toBeInTheDocument();
+
+      fireEvent.change(picker, { target: { value: '' } });
+      expect(save).toHaveBeenLastCalledWith({ pinnedHostId: '' });
+      expect(screen.queryByText('pinned')).not.toBeInTheDocument();
+    });
   });
 
   describe('root commands', () => {

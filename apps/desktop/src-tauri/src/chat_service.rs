@@ -86,6 +86,34 @@ fn bounded(messages: &[ChatMessageInput]) -> Result<Vec<Message>, CommandError> 
     Ok(kept)
 }
 
+/// Earlier messages of a chat for a host task: the same limits as plain chat,
+/// newest kept. Only `user` and `assistant` text; the current request is not
+/// included here.
+pub(crate) fn prior_messages(history: &[ChatMessageInput]) -> Result<Vec<Message>, CommandError> {
+    let invalid = |m: &str| CommandError::new(ErrorCode::InvalidInput, m);
+    let mut kept = Vec::new();
+    let mut total = 0usize;
+    for m in history.iter().rev().take(MAX_MESSAGES) {
+        if m.content.len() > MAX_MESSAGE_BYTES {
+            return Err(invalid("a message is longer than 32000 bytes"));
+        }
+        total += m.content.len();
+        if total > MAX_TOTAL_BYTES {
+            break;
+        }
+        kept.push(match m.role.as_str() {
+            "user" => Message::User(m.content.clone()),
+            "assistant" => Message::Assistant {
+                text: m.content.clone(),
+                tool_calls: Vec::new(),
+            },
+            _ => return Err(invalid("a message role must be user or assistant")),
+        });
+    }
+    kept.reverse();
+    Ok(kept)
+}
+
 impl Services {
     /// Streams one reply. Returns an id that `agent_cancel` accepts.
     pub async fn chat_send(

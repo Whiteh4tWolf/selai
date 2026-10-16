@@ -71,8 +71,8 @@ interface Turn {
 }
 
 const SUGGESTIONS = [
-  { title: 'Check disk usage', detail: 'mention a host, then send', text: 'check disk usage and the largest directories' },
-  { title: 'Is nginx healthy?', detail: 'mention a host, then send', text: 'is nginx healthy? check the service and recent errors' },
+  { title: 'Check disk usage', detail: 'needs a pinned server', text: 'check disk usage and the largest directories' },
+  { title: 'Is nginx healthy?', detail: 'needs a pinned server', text: 'is nginx healthy? check the service and recent errors' },
   { title: 'Explain a config', detail: 'plain discussion, nothing runs', text: 'Explain what this nginx config does:\n' },
   { title: 'Plan a change', detail: 'plain discussion, nothing runs', text: 'Help me plan a zero-downtime PostgreSQL major upgrade.' },
 ];
@@ -87,7 +87,11 @@ interface Props {
 export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [providerId, setProviderId] = useState('');
+  /** A one-message target from an `@` mention. */
   const [host, setHost] = useState<HostView | null>(null);
+  /** The server this chat is pinned to; messages without a mention run there. */
+  const [pinnedId, setPinnedId] = useState<string | null>(null);
+  const [targets, setTargets] = useState<HostView[]>([]);
   const [draftMention, setDraftMention] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
   const [mention, setMention] = useState<string | null>(null);
@@ -133,6 +137,19 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
     return () => {
       active = false;
       window.removeEventListener(PROVIDERS_CHANGED, load);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    targetSearch('')
+      .then((list) => active && setTargets(list))
+      .catch(() => undefined);
+    preferencesGet()
+      .then((prefs) => active && setPinnedId(prefs.pinnedHostId || null))
+      .catch(() => undefined);
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -235,9 +252,17 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
 
   const provider = providers.find((p) => p.id === providerId);
   const verified = provider?.toolCalling.status === 'verified';
-  // A mention runs a task on that host and needs tool calling; without one it is
-  // plain discussion, which any provider can answer.
-  const canSend = !running && provider !== undefined && (host === null || verified) && prompt.trim().length > 0;
+  // The server for this message: a mention, else the pinned server, else none
+  // (plain discussion, which any provider can answer). A server needs tool calling.
+  const pinnedTarget = targets.find((t) => t.id === pinnedId) ?? null;
+  const target = host ?? pinnedTarget;
+  const canSend = !running && provider !== undefined && (target === null || verified) && prompt.trim().length > 0;
+
+  function pinServer(id: string) {
+    setPinnedId(id || null);
+    // Remembered across restarts. A failed save keeps the choice for this session.
+    preferencesSet({ pinnedHostId: id }).catch(() => undefined);
+  }
 
   const updateTurn = (id: number, change: (t: Turn) => Turn) =>
     setTurns((prev) => prev.map((t) => (t.id === id ? change(t) : t)));
@@ -245,7 +270,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
   async function startTurn(turn: Turn, target: HostView) {
     updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [], inputTokens: null, outputTokens: null }));
     try {
-      const id = await agentStart(target.id, providerId, turn.prompt, (event) => {
+      // The new message has no reply yet, so it is not part of its own history.
+      const id = await agentStart(target.id, providerId, turn.prompt, conversation(), (event) => {
         updateTurn(turn.id, (t) => ({
           ...t,
           items: applyEvent(t.items, event),
@@ -302,9 +328,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
     nextTurnId += 1;
     const turn: Turn = {
       id: nextTurnId,
-      hostId: host?.id ?? null,
-      hostLabel: host?.label ?? null,
-      mentionText: draftMention,
+      hostId: target?.id ?? null,
+      hostLabel: target?.label ?? null,
+      mentionText: host ? draftMention : null,
       prompt: prompt.trim(),
       items: [],
       taskId: null,
@@ -315,16 +341,15 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
       outputTokens: null,
     };
     const history = conversation();
-    const target = host;
+    const server = target;
     setTurns((prev) => [...prev, turn]);
     setPrompt('');
-    // The target belongs to this message only; the next one is plain chat unless
-    // it mentions a host again.
+    // A mention applies to this message only. The pinned server stays.
     setDraftMention(null);
     setHost(null);
     setMention(null);
     setError(null);
-    if (target) await startTurn(turn, target);
+    if (server) await startTurn(turn, server);
     else await startChat(turn, history);
   }
 
@@ -369,6 +394,20 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
         <SparkIcon size={18} style={{ color: 'var(--accent)' }} />
         <h1>AI Agent</h1>
         <span className="grow" />
+        <select
+          aria-label="Pinned server"
+          className="server-select"
+          title="Messages without an @ mention run on this server. Plain chat when none is pinned."
+          value={pinnedTarget?.id ?? ''}
+          onChange={(e) => pinServer(e.target.value)}
+        >
+          <option value="">Plain chat · no server</option>
+          {targets.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.kind === 'local' ? 'This computer' : t.label}
+            </option>
+          ))}
+        </select>
         <select
           aria-label="Provider"
           value={providerId}
@@ -417,8 +456,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             </span>
             <h2>How can I help?</h2>
             <p>
-              Ask anything to discuss it. Mention a host with <kbd>@</kbd> to work on that server:
-              read-only checks run on their own, any other command waits for your approval.
+              Ask anything to discuss it. Pin a server in the header to work on it: messages then run
+              there, read-only checks run on their own, and any other command waits for your approval.
+              Mention a host with <kbd>@</kbd> to use a server for one message only.
             </p>
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
@@ -498,13 +538,13 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             {error}
           </p>
         )}
-        {(providers.length === 0 || (host !== null && !verified)) && (
+        {(providers.length === 0 || (target !== null && !verified)) && (
           <div className="banner" data-tone="warning" style={{ maxWidth: 820, margin: '0 auto 0.6rem' }}>
             <AlertIcon />
             <span className="grow">
               {providers.length === 0
                 ? 'Add an AI provider first.'
-                : 'Working on a host needs a provider whose tool calling test passed. Run Test on the Providers page, or remove the mention to just chat.'}
+                : 'Working on a server needs a provider whose tool calling test passed. Run Test on the Providers page, or unpin the server to just chat.'}
             </span>
             {onOpenProviders && (
               <button type="button" className="btn btn-sm" onClick={onOpenProviders}>
@@ -553,22 +593,28 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             onChange={(e) => onPromptChange(e.target.value)}
             onKeyDown={onPromptKeyDown}
             rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
-            placeholder={host ? `What should I do on ${host.label}?` : 'Message Selai… (type @ to work on a host)'}
+            placeholder={target ? `What should I do on ${target.label}?` : 'Message Selai… (pin a server to work on it)'}
           />
           <div className="composer-bar">
             {host ? (
               <span className="target-chip" title={`${host.username}@${host.hostname}`}>
                 <TerminalIcon size={13} />
                 {host.label}
+                <small>this message</small>
                 <button type="button" aria-label={`Remove ${host.label}`} onClick={clearTarget}>
                   <CloseIcon size={11} />
                 </button>
               </span>
-            ) : (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={insertAt}>
-                <AtIcon size={14} /> Mention host
-              </button>
-            )}
+            ) : pinnedTarget ? (
+              <span className="target-chip" data-pinned="true" title="Pinned in the header">
+                <TerminalIcon size={13} />
+                {pinnedTarget.label}
+                <small>pinned</small>
+              </span>
+            ) : null}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={insertAt}>
+              <AtIcon size={14} /> {host ? 'Mention another' : 'Mention host'}
+            </button>
             <span className="grow" />
             {running ? (
               <button type="button" className="btn btn-danger send-btn" aria-label="Stop" title="Stop" onClick={stop} disabled={!runningTask}>
@@ -589,9 +635,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
           </div>
         </div>
         <p className="composer-note">
-          {host
-            ? `This message runs as a task on ${host.label}. Other commands wait for your approval.`
-            : 'Plain chat: nothing runs on any server. Mention a host with @ to work on it.'}
+          {target
+            ? `Runs on ${target.label}${host ? ' for this message' : ' (pinned)'}. Commands other than read-only checks wait for your approval.`
+            : 'Plain chat: nothing runs on any server.'}
         </p>
       </div>
 
@@ -798,43 +844,48 @@ function SudoPassword({ approvalId, onChange }: { approvalId: string; onChange: 
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
 
+  // The answer is handed to the card in the same update as each change, not from
+  // an effect, so Approve always sees the current choice.
+  function answer(next: 'typed' | 'saved' | 'login', typed = password, keep = remember) {
+    setSource(next);
+    onChange(next === 'typed' ? (typed ? { source: 'typed', password: typed, remember: keep } : null) : { source: next });
+  }
+
   useEffect(() => {
     let active = true;
     sudoOptions(approvalId)
       .then((o) => {
         if (!active) return;
         setOptions(o);
-        setSource(o.savedPassword ? 'saved' : o.loginPassword ? 'login' : 'typed');
+        const first = o.savedPassword ? 'saved' : o.loginPassword ? 'login' : 'typed';
+        setSource(first);
+        onChange(first === 'typed' ? null : { source: first });
       })
       .catch(() => active && setOptions({ hostLabel: '', savedPassword: false, loginPassword: false }));
     return () => {
       active = false;
     };
+    // The choice is made once per approval; onChange is stable enough for that.
   }, [approvalId]);
-
-  useEffect(() => {
-    if (source === 'typed') onChange(password ? { source, password, remember } : null);
-    else onChange({ source });
-  }, [source, password, remember]);
 
   return (
     <fieldset className="sudo-box">
       <legend>sudo asks for a password on this host</legend>
       {options?.savedPassword && (
         <label className="check">
-          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'saved'} onChange={() => setSource('saved')} />
+          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'saved'} onChange={() => answer('saved')} />
           <span>Use the saved sudo password</span>
         </label>
       )}
       {options?.loginPassword && (
         <label className="check">
-          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'login'} onChange={() => setSource('login')} />
+          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'login'} onChange={() => answer('login')} />
           <span>Use my SSH login password</span>
         </label>
       )}
       {(options?.savedPassword || options?.loginPassword) && (
         <label className="check">
-          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'typed'} onChange={() => setSource('typed')} />
+          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'typed'} onChange={() => answer('typed')} />
           <span>Type a password</span>
         </label>
       )}
@@ -846,10 +897,20 @@ function SudoPassword({ approvalId, onChange }: { approvalId: string; onChange: 
             aria-label="Sudo password"
             placeholder="Sudo password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              answer('typed', e.target.value, remember);
+            }}
           />
           <label className="check">
-            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => {
+                setRemember(e.target.checked);
+                answer('typed', password, e.target.checked);
+              }}
+            />
             <span>Remember for this host (saved in the OS keychain)</span>
           </label>
         </>

@@ -17,7 +17,7 @@ async fn command_task(h: &Harness, host: &str, provider: &str, approve: bool) ->
     let (on_event, mut rx) = sink();
     let task = h
         .services
-        .agent_start(host, provider, "run the command", on_event)
+        .agent_start(host, provider, "run the command", &[], on_event)
         .await
         .expect("start");
     let waiting = until(&mut rx, |e| {
@@ -201,7 +201,7 @@ async fn purge_clears_output_and_keeps_the_command_record() {
     let (host, provider) = ready(&h, &sshd, &mock).await;
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(&host, &provider, "check disk usage", on_event)
+        .agent_start(&host, &provider, "check disk usage", &[], on_event)
         .await
         .expect("start");
     until(&mut rx, is_terminal).await;
@@ -237,7 +237,7 @@ async fn history_survives_rename_and_archive_and_exports_as_archived() {
     let (host, provider) = ready(&h, &sshd, &mock).await;
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(&host, &provider, "how long up", on_event)
+        .agent_start(&host, &provider, "how long up", &[], on_event)
         .await
         .expect("start");
     until(&mut rx, is_terminal).await;
@@ -294,6 +294,7 @@ async fn preferences_persist_and_refuse_bad_values() {
         .preferences_set(selai_desktop_lib::history_service::AiPreferencesInput {
             last_provider_id: None,
             output_retention_days: Some(0),
+            pinned_host_id: None,
         })
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidInput);
@@ -303,6 +304,7 @@ async fn preferences_persist_and_refuse_bad_values() {
         .preferences_set(selai_desktop_lib::history_service::AiPreferencesInput {
             last_provider_id: Some("00000000-0000-4000-8000-0000000000aa".into()),
             output_retention_days: None,
+            pinned_host_id: None,
         })
         .unwrap_err();
     assert_eq!(unknown.code, ErrorCode::NotFound);
@@ -311,6 +313,7 @@ async fn preferences_persist_and_refuse_bad_values() {
         .preferences_set(selai_desktop_lib::history_service::AiPreferencesInput {
             last_provider_id: Some(provider.clone()),
             output_retention_days: Some(14),
+            pinned_host_id: None,
         })
         .expect("set");
 

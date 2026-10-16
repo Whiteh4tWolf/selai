@@ -427,6 +427,7 @@ fn spec(w: &World, base: &str, limits: Limits) -> TaskSpec {
         provider: None,
         settings: settings(base),
         api_key: None,
+        history: Vec::new(),
         prompt: "check the host".to_owned(),
         limits,
     }

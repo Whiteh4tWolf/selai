@@ -2405,3 +2405,22 @@ option {
   background: linear-gradient(135deg, #2a3350, #3b4a7a);
   color: #cfd8ff;
 }
+
+.server-select {
+  width: auto;
+  min-width: 170px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 2rem 0 0.7rem;
+}
+
+.target-chip[data-pinned='true'] {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.target-chip small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--faint);
+}

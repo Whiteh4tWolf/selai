@@ -71,6 +71,9 @@ pub struct TaskSpec {
     pub provider: Option<ProviderId>,
     pub settings: ProviderSettings,
     pub api_key: Option<SecretValue>,
+    /// Earlier messages of the same chat, as text only. They are context, not
+    /// instructions about this host; tool output is never part of them.
+    pub history: Vec<Message>,
     pub prompt: String,
     pub limits: Limits,
 }
@@ -181,10 +184,10 @@ where
         emit_state(&ctx, next, None);
     }
 
-    let mut messages = vec![
-        Message::System(SYSTEM_PROMPT.to_owned()),
-        Message::User(spec.prompt.clone()),
-    ];
+    let mut messages = Vec::with_capacity(spec.history.len() + 2);
+    messages.push(Message::System(SYSTEM_PROMPT.to_owned()));
+    messages.extend(spec.history.iter().cloned());
+    messages.push(Message::User(spec.prompt.clone()));
     let tools = tool_definitions();
     let mut steps: u32 = 0;
     let mut seq: u32 = 0;

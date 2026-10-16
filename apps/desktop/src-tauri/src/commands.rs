@@ -183,6 +183,7 @@ pub async fn agent_start(
     host_id: String,
     provider_id: String,
     prompt: String,
+    history: Option<Vec<ChatMessageInput>>,
     on_event: Channel<AgentEventView>,
 ) -> Result<String, CommandError> {
     let sink: Arc<dyn Fn(AgentEventView) + Send + Sync> = Arc::new(move |event| {
@@ -191,7 +192,13 @@ pub async fn agent_start(
         let _ = on_event.send(event);
     });
     services(&state)?
-        .agent_start(&host_id, &provider_id, &prompt, sink)
+        .agent_start(
+            &host_id,
+            &provider_id,
+            &prompt,
+            &history.unwrap_or_default(),
+            sink,
+        )
         .await
 }
 

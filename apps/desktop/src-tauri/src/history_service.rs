@@ -26,6 +26,7 @@ const MAX_RETENTION_DAYS: u32 = 3650;
 pub const EXPORT_ROW_LIMIT: usize = 1000;
 const RETENTION_KEY: &str = "ai.output_retention_days";
 const LAST_PROVIDER_KEY: &str = "ai.last_provider_id";
+const PINNED_HOST_KEY: &str = "ai.pinned_host_id";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -129,6 +130,8 @@ pub struct ExportResult {
 pub struct AiPreferences {
     pub last_provider_id: Option<String>,
     pub output_retention_days: u32,
+    /// The server the chat is pinned to. Messages without an `@` mention run there.
+    pub pinned_host_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +139,8 @@ pub struct AiPreferences {
 pub struct AiPreferencesInput {
     pub last_provider_id: Option<String>,
     pub output_retention_days: Option<u32>,
+    /// `""` unpins the chat; a host id pins it to that host.
+    pub pinned_host_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -384,9 +389,15 @@ impl Services {
             .map_err(|e| storage(&e))?
             .and_then(|v| v.as_str().map(str::to_owned));
         let days = retention_from(db.get_setting(RETENTION_KEY).map_err(|e| storage(&e))?);
+        let pinned = db
+            .get_setting(PINNED_HOST_KEY)
+            .map_err(|e| storage(&e))?
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|id| !id.is_empty());
         Ok(AiPreferences {
             last_provider_id: last,
             output_retention_days: days,
+            pinned_host_id: pinned,
         })
     }
 
@@ -411,6 +422,28 @@ impl Services {
             }
             db.set_setting(LAST_PROVIDER_KEY, &json!(id), now)
                 .map_err(|e| storage(&e))?;
+        }
+        if let Some(pin) = &input.pinned_host_id {
+            if pin.is_empty() {
+                db.set_setting(PINNED_HOST_KEY, &json!(""), now)
+                    .map_err(|e| storage(&e))?;
+            } else {
+                let host: HostId = pin
+                    .parse()
+                    .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid host id"))?;
+                let record = db
+                    .get_host(host)
+                    .map_err(|e| storage(&e))?
+                    .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "host not found"))?;
+                if record.archived_at_ms.is_some() {
+                    return Err(CommandError::new(
+                        ErrorCode::InvalidInput,
+                        "an archived host cannot be pinned",
+                    ));
+                }
+                db.set_setting(PINNED_HOST_KEY, &json!(pin), now)
+                    .map_err(|e| storage(&e))?;
+            }
         }
         if let Some(days) = input.output_retention_days {
             if !(1..=MAX_RETENTION_DAYS).contains(&days) {

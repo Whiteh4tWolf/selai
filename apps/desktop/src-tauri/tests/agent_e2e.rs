@@ -27,7 +27,7 @@ async fn disk_usage_runs_on_the_bound_host_and_is_recorded() {
 
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(&host, &provider, "check disk usage", on_event)
+        .agent_start(&host, &provider, "check disk usage", &[], on_event)
         .await
         .expect("start");
     let seen = until(&mut rx, is_terminal).await;
@@ -67,7 +67,7 @@ async fn five_diagnostics_are_each_recorded_and_the_chain_verifies() {
 
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(&host, &provider, "give me a health summary", on_event)
+        .agent_start(&host, &provider, "give me a health summary", &[], on_event)
         .await
         .expect("start");
     let seen = until(&mut rx, is_terminal).await;
@@ -98,7 +98,7 @@ async fn approved_command_runs_only_after_the_operator_approves() {
     let (on_event, mut rx) = sink();
     let task = h
         .services
-        .agent_start(&host, &provider, "create the marker file", on_event)
+        .agent_start(&host, &provider, "create the marker file", &[], on_event)
         .await
         .expect("start");
     assert!(!task.is_empty());
@@ -143,7 +143,7 @@ async fn denied_command_never_runs() {
 
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(&host, &provider, "create the marker file", on_event)
+        .agent_start(&host, &provider, "create the marker file", &[], on_event)
         .await
         .expect("start");
     let waiting = until(&mut rx, |e| {
@@ -179,7 +179,7 @@ async fn cancel_while_awaiting_approval_stops_the_task_without_running() {
     let (on_event, mut rx) = sink();
     let task = h
         .services
-        .agent_start(&host, &provider, "create the marker file", on_event)
+        .agent_start(&host, &provider, "create the marker file", &[], on_event)
         .await
         .expect("start");
     until(&mut rx, |e| {
@@ -215,7 +215,7 @@ async fn archived_hosts_and_unverified_providers_are_refused_before_any_connecti
     let (on_event, _rx) = sink();
     let err = h
         .services
-        .agent_start(&host, &untested.id, "check disk usage", on_event)
+        .agent_start(&host, &untested.id, "check disk usage", &[], on_event)
         .await
         .unwrap_err();
     assert_eq!(err_code(err), ErrorCode::ProviderToolUnsupported);
@@ -225,7 +225,7 @@ async fn archived_hosts_and_unverified_providers_are_refused_before_any_connecti
     let (on_event, _rx) = sink();
     let err = h
         .services
-        .agent_start(&host, &provider, "check disk usage", on_event)
+        .agent_start(&host, &provider, "check disk usage", &[], on_event)
         .await
         .unwrap_err();
     assert_eq!(err_code(err), ErrorCode::TaskScopeInvalid);
@@ -244,7 +244,7 @@ async fn no_credential_reaches_the_model_and_history_survives_a_restart() {
 
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(&host, &provider, "how long has it been up", on_event)
+        .agent_start(&host, &provider, "how long has it been up", &[], on_event)
         .await
         .expect("start");
     let seen = until(&mut rx, is_terminal).await;

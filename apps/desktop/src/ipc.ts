@@ -347,11 +347,12 @@ export function agentStart(
   hostId: string,
   providerId: string,
   prompt: string,
+  history: ChatMessage[],
   onEvent: (event: AgentEvent) => void,
 ): Promise<string> {
   const channel = new Channel<AgentEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>('agent_start', { hostId, providerId, prompt, onEvent: channel });
+  return invoke<string>('agent_start', { hostId, providerId, prompt, history, onEvent: channel });
 }
 
 /** Events of a plain discussion reply. No host and no tools are involved. */
@@ -469,6 +470,8 @@ export interface PurgeResult {
 export interface AiPreferences {
   lastProviderId: string | null;
   outputRetentionDays: number;
+  /** The server the chat is pinned to. Null or "" when none is pinned. */
+  pinnedHostId: string | null;
 }
 
 export function historyQuery(

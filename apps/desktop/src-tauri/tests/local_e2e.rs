@@ -120,6 +120,7 @@ async fn the_agent_works_on_this_computer_with_the_same_approval_gate() {
             &local.id,
             &provider,
             "check uptime and create the marker",
+            &[],
             on_event,
         )
         .await
@@ -170,7 +171,7 @@ async fn a_root_command_on_this_computer_goes_through_local_sudo() {
 
     let (on_event, mut rx) = sink();
     h.services
-        .agent_start(&local.id, &provider, "what is root's uid?", on_event)
+        .agent_start(&local.id, &provider, "what is root's uid?", &[], on_event)
         .await
         .expect("start");
     let waiting = until(&mut rx, |e| {
@@ -202,4 +203,129 @@ async fn a_root_command_on_this_computer_goes_through_local_sudo() {
         .items[0];
     assert_eq!(row.state, "completed");
     assert_eq!(row.stdout_preview.as_deref().map(str::trim), Some("0"));
+}
+
+#[tokio::test]
+async fn a_pinned_server_is_remembered_and_archived_ones_cannot_be_pinned() {
+    use selai_desktop_lib::history_service::AiPreferencesInput;
+    let h = harness();
+    let local = h.services.local_host().expect("local");
+    let pin = |id: Option<&str>| AiPreferencesInput {
+        last_provider_id: None,
+        output_retention_days: None,
+        pinned_host_id: id.map(str::to_owned),
+    };
+
+    assert_eq!(
+        h.services.preferences_get().expect("prefs").pinned_host_id,
+        None
+    );
+    let set = h
+        .services
+        .preferences_set(pin(Some(&local.id)))
+        .expect("pin");
+    assert_eq!(set.pinned_host_id.as_deref(), Some(local.id.as_str()));
+    assert_eq!(
+        h.services
+            .preferences_get()
+            .expect("prefs")
+            .pinned_host_id
+            .as_deref(),
+        Some(local.id.as_str()),
+        "the pin survives a reload of preferences"
+    );
+    assert_eq!(
+        h.services
+            .preferences_set(pin(Some("")))
+            .expect("unpin")
+            .pinned_host_id,
+        None
+    );
+
+    let unknown = h
+        .services
+        .preferences_set(pin(Some("0a0a0a0a-0000-4000-8000-00000000000a")));
+    assert_eq!(err_code(unknown.expect_err("unknown")), ErrorCode::NotFound);
+
+    let ssh = h
+        .services
+        .host_save(password_host("archived-box", 22))
+        .expect("save");
+    h.services.host_archive(&ssh.id).expect("archive");
+    let refused = h.services.preferences_set(pin(Some(&ssh.id)));
+    assert_eq!(
+        err_code(refused.expect_err("archived")),
+        ErrorCode::InvalidInput
+    );
+}
+
+#[tokio::test]
+async fn a_host_task_gets_the_earlier_messages_of_its_chat_as_context() {
+    use selai_desktop_lib::chat_service::ChatMessageInput;
+    let h = harness();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let captured = Arc::clone(&seen);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(move |req: &Request| {
+            let raw = String::from_utf8_lossy(&req.body).into_owned();
+            let body: Value = serde_json::from_str(&raw).expect("json");
+            if raw.contains("selai_echo") {
+                let has_result = body["messages"]
+                    .as_array()
+                    .is_some_and(|m| m.iter().any(|x| x["role"] == "tool"));
+                let payload = if has_result {
+                    sse(&[json!({"choices":[{"delta":{"content":"done"}}]}), json!({"choices":[{"delta":{},"finish_reason":"stop"}]})])
+                } else {
+                    sse(&[
+                        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"selai_echo","arguments":"{\"text\":\"selai-probe-7f3a\"}"}}]}}]}),
+                        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+                    ])
+                };
+                return ResponseTemplate::new(200).set_body_raw(payload, "text/event-stream");
+            }
+            captured.lock().expect("lock").push(body);
+            ResponseTemplate::new(200).set_body_raw(
+                sse(&[json!({"choices":[{"delta":{"content":"It is 4 GB."}}]}), json!({"choices":[{"delta":{},"finish_reason":"stop"}]})]),
+                "text/event-stream",
+            )
+        })
+        .mount(&server)
+        .await;
+    let provider = provider(&h, &server).await;
+    let local = h.services.local_host().expect("local");
+
+    let msg = |role: &str, content: &str| ChatMessageInput {
+        role: role.into(),
+        content: content.into(),
+    };
+    let (on_event, mut rx) = sink();
+    h.services
+        .agent_start(
+            &local.id,
+            &provider,
+            "and the free space?",
+            &[
+                msg("user", "how much memory is there?"),
+                msg("assistant", "Let me check."),
+            ],
+            on_event,
+        )
+        .await
+        .expect("start");
+    assert_eq!(
+        terminal_state(&until(&mut rx, is_terminal).await),
+        "completed"
+    );
+
+    let bodies = seen.lock().expect("lock").clone();
+    let messages = bodies[0]["messages"].as_array().expect("messages").clone();
+    let roles: Vec<&str> = messages
+        .iter()
+        .map(|m| m["role"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(roles, vec!["system", "user", "assistant", "user"]);
+    assert_eq!(messages[1]["content"], "how much memory is there?");
+    assert_eq!(messages[3]["content"], "and the free space?");
 }

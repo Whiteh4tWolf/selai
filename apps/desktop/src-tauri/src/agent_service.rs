@@ -23,6 +23,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    chat_service::{prior_messages, ChatMessageInput},
     dto::CommandError,
     local_exec::LocalExecutor,
     provider_service::{settings_from_record, tool_calling_view},
@@ -403,8 +404,10 @@ impl Services {
         host_id: &str,
         provider_id: &str,
         prompt: &str,
+        history: &[ChatMessageInput],
         on_event: Arc<dyn Fn(AgentEventView) + Send + Sync>,
     ) -> Result<String, CommandError> {
+        let history = prior_messages(history)?;
         let host: HostId = host_id
             .parse()
             .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid host id"))?;
@@ -445,6 +448,7 @@ impl Services {
             provider: Some(provider),
             settings,
             api_key,
+            history,
             prompt: prompt.to_owned(),
             limits: Limits::default(),
         };
