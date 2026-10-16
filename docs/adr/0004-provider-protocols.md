@@ -46,8 +46,12 @@ Chat Completions (also used by many compatible servers), and Anthropic Messages.
 
 7. **No redirects.** The HTTP client does not follow redirects. A `3xx` is an
    error, so an API key can never reach a different origin. Plain `http://` is
-   allowed only for loopback hosts (`localhost`, `127.0.0.0/8`, `::1`), for local
-   Ollama, vLLM and LiteLLM. Userinfo, query and fragment in base URLs are
+   allowed for loopback hosts (`localhost`, `127.0.0.0/8`, `::1`), for local
+   Ollama, vLLM and LiteLLM. *Amended (UI revamp):* plain `http://` to another
+   host is allowed only when the profile has the explicit `allowInsecureHttp`
+   option ("Allow plain HTTP"), for a gateway such as LiteLLM on a trusted
+   network. The UI warns that the key, prompts and tool results then travel
+   unencrypted. The option is stored in `options_json`; it needs no migration. Userinfo, query and fragment in base URLs are
    rejected.
 
 8. **No provider fallback.** A failed request is reported. Switching to another
@@ -60,6 +64,9 @@ Chat Completions (also used by many compatible servers), and Anthropic Messages.
      call with a non-empty `text` argument, returns a fixed tool result, and
      requires a final text reply. Only then is the provider marked
      `tool_probe_passed`. The probe executes no SSH and no local command.
+   - The UI runs both with one Test button: connectivity first, then tool
+     calling. Tool calling is skipped, and shown as skipped, when connectivity
+     fails.
    - The stored result is tied to `protocol | base_url | model_id`. Changing any
      of these clears the result.
 

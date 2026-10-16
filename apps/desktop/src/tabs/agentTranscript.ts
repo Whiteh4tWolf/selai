@@ -19,6 +19,8 @@ export type TranscriptItem =
     }
   | { kind: 'failed'; code: string; message: string };
 
+const QUIET_STATES = new Set(['running', 'validating_scope', 'ready', 'awaiting_approval', 'completed']);
+
 export function isTerminal(event: TaskEvent): boolean {
   return (
     (event.type === 'state' && ['completed', 'failed', 'cancelled'].includes(event.state)) ||
@@ -37,8 +39,10 @@ export function applyEvent(items: TranscriptItem[], event: TaskEvent): Transcrip
       return [...items, { kind: 'text', text: event.text }];
     }
     case 'state':
-      // "running" is noise between steps; the operator sees the outcome instead.
-      if (event.state === 'running') return items;
+      // Routine steps are noise in a chat; the tool cards and the turn's spinner
+      // already show them. Outcomes that need attention (cancelled, failed,
+      // interrupted) stay visible.
+      if (QUIET_STATES.has(event.state)) return items;
       return [...items, { kind: 'status', text: stateText(event.state, event.errorCode) }];
     case 'toolProposed':
       return [

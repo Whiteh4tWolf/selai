@@ -10,26 +10,31 @@ the operator). Linux is the only platform tested end to end. Windows and macOS
 installers are built by the release workflow but not run here, and no live AI
 provider has been verified.** Working on Linux:
 
-- Host profiles: create, edit, archive, filter. Labels are unique and
-  case-insensitive. Secrets are kept in the OS credential store, never in the
-  database.
-- Host keys: read the server key, trust it explicitly, pin it, and replace a
-  changed key only with a separate confirmed action. Connections to unpinned or
-  changed keys are refused before any credential is sent.
-- Terminal: interactive PTY sessions over SSH, with resize, several tabs, and
-  exit status. Sessions are bound to one host.
+- Host profiles: create, edit, archive, filter, and "Save & connect". Labels may
+  contain spaces, are unique ignoring case, and keep the case you typed. Secrets
+  are kept in the OS credential store, never in the database.
+- Host keys: the first connect stops before any credential is sent and asks you
+  to trust the server's fingerprint in the same flow ("Trust & connect"). A
+  changed key is refused, and replacing it needs an explicit confirmation.
+- Terminal: interactive PTY sessions over SSH in tabs with status, resize,
+  exit status, reconnect, and a retry or "Edit host" step after a failed login.
+  Sessions are bound to one host.
 - AI providers: OpenAI Responses, OpenAI Chat Completions (and compatible
-  servers), and Anthropic Messages. A provider is shown as verified only after a
-  real tool-call round trip.
+  servers), and Anthropic Messages. One Test button checks the connection and
+  then a real tool-call round trip; only that marks a provider as verified.
+  Plain `http://` to a non-loopback gateway (for example LiteLLM on a trusted
+  network) needs the explicit "Allow plain HTTP" option.
 - Startup reconciliation: work that was live at the last shutdown is marked
   `interrupted` and is never re-run.
 
-Provider profiles can be configured and tested for tool calling (M2). The AI tab
-has an `@host` request box that runs one task on the chosen host. Diagnostics run
-without approval; free-form commands wait for an approval, and the model cannot
+The AI Agent is a chat console. Type `@` to mention a host (labels with spaces
+work), and each message runs as one task on that host. Diagnostics run without
+approval; free-form commands wait for an approval card, and the model cannot
 choose the host (M3). Every attempt is recorded in that host's history, and the
-audit chain can be verified. The AI history tab (M4) shows filtered history,
-task timelines, a redacted JSON export, and output purge with a retention window.
+audit chain can be verified. The History view (M4) shows filtered history, task
+timelines, a redacted JSON export, and output purge with a retention window.
+
+The interface is dark by default, with light and system themes in the sidebar.
 
 ## Build and test
 

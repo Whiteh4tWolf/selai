@@ -30,7 +30,36 @@ describe('HostForm', () => {
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(save.mock.calls[0]?.[0]).toMatchObject({ label: "production-web", password: "correct horse" });
+    expect(onSaved).toHaveBeenCalledWith(expect.anything(), false);
     expect(screen.queryByDisplayValue('correct horse')).not.toBeInTheDocument();
+  });
+
+  it('keeps spaces in the label and opens a terminal with Save & connect', async () => {
+    const saved = { id: 'h9', label: 'Production Web' } as ipc.HostView;
+    const save = vi.spyOn(ipc, 'hostSave').mockResolvedValue(saved);
+    const onSaved = vi.fn();
+    render(<HostForm host={null} onCancel={() => {}} onSaved={onSaved} />);
+    fill('Label', '  Production Web ');
+    fill('Host name or IP', 'web.example.com');
+    fill('Username', 'deploy');
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(saved, true));
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ label: 'Production Web' });
+  });
+
+  it('switches to key authentication without sending a password', async () => {
+    const save = vi.spyOn(ipc, 'hostSave').mockResolvedValue({} as ipc.HostView);
+    render(<HostForm host={null} onCancel={() => {}} onSaved={() => {}} />);
+    fill('Label', 'db');
+    fill('Host name or IP', 'db.example.com');
+    fill('Username', 'ops');
+    fill('Password', 'typed by mistake');
+    fireEvent.click(screen.getByRole('button', { name: 'Private key' }));
+    fill('Private key file path', '/home/ops/.ssh/id_ed25519');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ authMethod: 'private_key', password: undefined });
   });
 
   it('never prefills a saved secret when editing', () => {

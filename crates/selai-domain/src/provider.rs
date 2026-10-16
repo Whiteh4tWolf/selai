@@ -12,7 +12,7 @@ pub enum ProviderFieldError {
     Name,
     #[error("model ID must be 1 to 200 printable characters without spaces")]
     ModelId,
-    #[error("base URL must be https, or http to a loopback address")]
+    #[error("base URL must be https, http to a loopback address, or http with \"Allow plain HTTP\" turned on")]
     BaseUrlScheme,
     #[error("base URL must not contain credentials, a query, or a fragment")]
     BaseUrlShape,

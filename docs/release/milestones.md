@@ -190,6 +190,34 @@ result." after the command has finished. Cosmetic.
 Not covered by this run: Stop during a slow remote command, reconnect after a
 network drop, opening an export in another application, and Windows or macOS.
 
+### UI revamp run (2026-10-16, Linux, debug build)
+
+Same setup as above, after the UI was rebuilt (sidebar navigation, dark and light
+themes, host drawer, terminal tabs with status, chat-style AI Agent, provider
+cards). Steps and results:
+
+- Pass: new host with the label `Production Web` (with a space) through "Save &
+  connect". The connect stopped at the server key, showed the fingerprint in a
+  dialog, and "Trust & connect" pinned it and opened the shell. No separate host
+  key step.
+- Pass: a failed login showed "Authentication failed" with Retry and "Edit host";
+  after editing, "Save & connect" reused the failed tab.
+- Pass: provider at `http://192.0.2.2:8765/v1` (non-loopback) was refused
+  without the opt-in and saved with "Allow plain HTTP". One Test click ran the
+  connection check and then the tool-calling check; both passed and the
+  provider showed Verified.
+- Pass: AI Agent: `@Produc` listed `Production Web`, Enter picked it, and the
+  task ran `df -hP` on that host. A free-form command showed one approval card;
+  Approve ran it and the card showed the exit code.
+- Pass: mentioning a second, untrusted host from the AI Agent showed the same
+  key dialog; after trusting, the task started on its own.
+- Pass: History table, execution drawer, and the light theme.
+
+The earlier cosmetic issue (approval card text after the command finished) is
+fixed: the card now reads "Approved by you." with the result badge.
+
+Not covered: Windows and macOS rendering, and screen readers.
+
 ## M6 — Not planned
 
 Nothing beyond M5 is started. The master plan lists v1.1 and later work (SFTP, tunnels, multi-host AI, and so on).

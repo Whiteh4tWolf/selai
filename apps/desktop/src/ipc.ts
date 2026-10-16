@@ -155,6 +155,23 @@ export function terminalDisconnect(sessionId: string): Promise<void> {
   return invoke<void>('terminal_disconnect', { sessionId });
 }
 
+export function isCommandError(err: unknown): err is CommandError {
+  return typeof err === 'object' && err !== null && 'code' in err && 'message' in err;
+}
+
+/** A refused connect the user can resolve by approving the server key. */
+export interface HostKeyProblem {
+  kind: 'unknown' | 'changed';
+  details: KeyErrorDetails;
+}
+
+export function hostKeyProblem(err: unknown): HostKeyProblem | null {
+  if (!isCommandError(err) || !err.details) return null;
+  if (err.code === 'SSH_HOSTKEY_UNKNOWN') return { kind: 'unknown', details: err.details };
+  if (err.code === 'SSH_HOSTKEY_CHANGED') return { kind: 'changed', details: err.details };
+  return null;
+}
+
 export function describeError(err: unknown): string {
   if (typeof err === 'object' && err !== null && 'code' in err && 'message' in err) {
     const { code, message } = err as CommandError;
@@ -190,6 +207,7 @@ export interface ProviderView {
   maxOutputTokens: number;
   keyConfigured: boolean;
   isLoopback: boolean;
+  allowInsecureHttp: boolean;
   updatedAtMs: number;
   toolCalling: ToolCallingStatus;
 }
@@ -211,6 +229,8 @@ export interface ProviderInput {
   modelId: string;
   timeoutSeconds: number;
   maxOutputTokens: number;
+  /** Lets `http://` reach a non-loopback host. The key and prompts then travel unencrypted. */
+  allowInsecureHttp?: boolean;
   /** Write-only. Empty or absent keeps the stored key. */
   apiKey?: string;
   clearApiKey?: boolean;

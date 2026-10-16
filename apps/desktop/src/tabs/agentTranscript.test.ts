@@ -15,12 +15,15 @@ describe('agent transcript', () => {
     expect(items).toEqual([{ kind: 'text', text: 'The disk is fine.' }]);
   });
 
-  it('hides running between steps but shows the outcome', () => {
+  it('hides routine steps but shows outcomes that need attention', () => {
     const items = run([
+      { type: 'state', state: 'validating_scope', errorCode: null },
+      { type: 'state', state: 'ready', errorCode: null },
       { type: 'state', state: 'running', errorCode: null },
       { type: 'state', state: 'completed', errorCode: null },
+      { type: 'state', state: 'cancelled', errorCode: null },
     ]);
-    expect(items).toEqual([{ kind: 'status', text: 'completed' }]);
+    expect(items).toEqual([{ kind: 'status', text: 'cancelled' }]);
   });
 
   it('keeps the exact command and updates the tool card when it finishes', () => {

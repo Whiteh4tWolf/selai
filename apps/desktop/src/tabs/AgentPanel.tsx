@@ -1,44 +1,85 @@
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   agentCancel,
   agentStart,
   approvalDecide,
   auditVerify,
   describeError,
-  historyList,
+  hostKeyProblem,
   hostList,
   preferencesGet,
   preferencesSet,
   providerList,
-  type ExecutionView,
+  type HostKeyProblem,
   type HostView,
   type ProviderView,
 } from '../ipc';
+import { HostAvatar } from '../ui/HostAvatar';
+import { HostKeyDialog } from '../ui/HostKeyDialog';
+import {
+  AlertIcon,
+  AtIcon,
+  CheckIcon,
+  CloseIcon,
+  PlusIcon,
+  SendIcon,
+  ShieldIcon,
+  SparkIcon,
+  StopIcon,
+  TerminalIcon,
+} from '../ui/icons';
 import { applyEvent, isTerminal, setApprovalState, type TranscriptItem } from './agentTranscript';
 import { PROVIDERS_CHANGED } from './ProvidersPanel';
 
-interface HostChip {
+/** The "@query" being typed at the end of the request. Labels may hold spaces. */
+const MENTION = /(^|\s)@([^\n@]{0,64})$/;
+
+interface Turn {
+  id: number;
   hostId: string;
-  label: string;
+  hostLabel: string;
+  /** The "@Label" text inside the prompt, highlighted in the bubble. */
+  mentionText: string | null;
+  prompt: string;
+  items: TranscriptItem[];
+  taskId: string | null;
+  running: boolean;
+  notice: string | null;
+  error: string | null;
 }
 
-/** The "@query" being typed at the end of the request, if any. */
-const MENTION = /(^|\s)@([^\s@]*)$/;
+const SUGGESTIONS = [
+  { title: 'Check disk usage', detail: 'and find the largest directories' },
+  { title: 'Why is the load high?', detail: 'look at CPU, memory and top processes' },
+  { title: 'Is nginx healthy?', detail: 'service status and recent errors' },
+  { title: 'Summarise recent logins', detail: 'who connected in the last day' },
+];
 
-export function AgentPanel() {
+let nextTurnId = 0;
+
+interface Props {
+  onOpenProviders?: () => void;
+  onOpenHosts?: () => void;
+}
+
+export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [providerId, setProviderId] = useState('');
-  const [host, setHost] = useState<HostChip | null>(null);
+  const [host, setHost] = useState<HostView | null>(null);
+  const [draftMention, setDraftMention] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
   const [mention, setMention] = useState<string | null>(null);
   const [matches, setMatches] = useState<HostView[]>([]);
   const [active, setActive] = useState(0);
-  const [running, setRunning] = useState(false);
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [items, setItems] = useState<TranscriptItem[]>([]);
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<ExecutionView[]>([]);
-  const [audit, setAudit] = useState<string | null>(null);
+  const [audit, setAudit] = useState<{ ok: boolean; text: string } | null>(null);
+  const [keyPrompt, setKeyPrompt] = useState<{ turn: Turn; host: HostView; problem: HostKeyProblem } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const running = turns.some((t) => t.running);
+  const runningTask = turns.find((t) => t.running)?.taskId ?? null;
 
   useEffect(() => {
     let active = true;
@@ -70,7 +111,7 @@ export function AgentPanel() {
   useEffect(() => {
     if (mention === null) return;
     let active = true;
-    hostList(mention)
+    hostList(mention.trim() || undefined)
       .then((page) => {
         if (!active) return;
         setMatches(page.items.filter((h) => !h.archived));
@@ -83,51 +124,78 @@ export function AgentPanel() {
   }, [mention]);
 
   useEffect(() => {
-    if (!host) {
-      setHistory([]);
-      return;
-    }
-    // Reload only when the chosen host changes, not on every render.
-    refreshHistory(host.hostId);
-  }, [host?.hostId]);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns]);
 
-  function refreshHistory(hostId: string) {
-    historyList(hostId)
-      .then((page) => setHistory(page.items))
-      .catch((err: unknown) => setError(describeError(err)));
-  }
+  // A query that already holds a space and matches nothing is plain text, not a mention.
+  const pickerOpen = mention !== null && !(matches.length === 0 && mention.includes(' '));
 
   function onPromptChange(value: string) {
     setPrompt(value);
+    if (draftMention && !value.includes(draftMention)) {
+      // The operator deleted the mention, so the target goes with it.
+      setDraftMention(null);
+      setHost(null);
+    }
     const m = MENTION.exec(value);
-    setMention(m ? (m[2] ?? '') : null);
-  }
-
-  function onPromptKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (mention === null) return;
-    if (e.key === 'Escape') {
-      e.preventDefault();
+    if (!m || (draftMention && `@${m[2] ?? ''}`.startsWith(draftMention))) {
       setMention(null);
       return;
     }
-    if (matches.length === 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setActive((i) => (i + 1) % matches.length);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActive((i) => (i - 1 + matches.length) % matches.length);
-    } else if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      const target = matches[active] ?? matches[0];
-      if (target) pickHost(target);
-    }
+    setMention(m[2] ?? '');
   }
 
   function pickHost(h: HostView) {
-    setHost({ hostId: h.id, label: h.label });
-    setPrompt((p) => p.replace(MENTION, '$1'));
+    const text = `@${h.label}`;
+    setHost(h);
+    setDraftMention(text);
+    setPrompt((p) => p.replace(MENTION, `$1${text} `));
     setMention(null);
+    textareaRef.current?.focus();
+  }
+
+  function insertAt() {
+    onPromptChange(prompt.length === 0 || /\s$/.test(prompt) ? `${prompt}@` : `${prompt} @`);
+    textareaRef.current?.focus();
+  }
+
+  function clearTarget() {
+    if (draftMention) setPrompt((p) => p.replace(draftMention, '').replace(/^\s+/, ''));
+    setDraftMention(null);
+    setHost(null);
+  }
+
+  function onPromptKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (pickerOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+      if (matches.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setActive((i) => (i + 1) % matches.length);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setActive((i) => (i - 1 + matches.length) % matches.length);
+          return;
+        }
+        if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+          e.preventDefault();
+          const target = matches[active] ?? matches[0];
+          if (target) pickHost(target);
+          return;
+        }
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void send();
+    }
   }
 
   function chooseProvider(id: string) {
@@ -137,50 +205,77 @@ export function AgentPanel() {
     preferencesSet({ lastProviderId: id }).catch(() => undefined);
   }
 
-  const verified = providers.find((p) => p.id === providerId)?.toolCalling.status === 'verified';
+  const provider = providers.find((p) => p.id === providerId);
+  const verified = provider?.toolCalling.status === 'verified';
   const canSend = !running && host !== null && verified && prompt.trim().length > 0;
 
-  async function send() {
-    if (!host || !canSend) return;
-    const hostId = host.hostId;
-    setItems([]);
-    setError(null);
-    setAudit(null);
-    setRunning(true);
-    setTaskId(null);
+  const updateTurn = (id: number, change: (t: Turn) => Turn) =>
+    setTurns((prev) => prev.map((t) => (t.id === id ? change(t) : t)));
+
+  async function startTurn(turn: Turn, target: HostView) {
+    updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [] }));
     try {
-      const id = await agentStart(hostId, providerId, prompt.trim(), (event) => {
-        setItems((prev) => applyEvent(prev, event));
-        if (isTerminal(event)) {
-          setRunning(false);
-          refreshHistory(hostId);
-        }
+      const id = await agentStart(target.id, providerId, turn.prompt, (event) => {
+        updateTurn(turn.id, (t) => ({
+          ...t,
+          items: applyEvent(t.items, event),
+          running: t.running && !isTerminal(event),
+        }));
       });
-      setTaskId(id);
-      setPrompt('');
+      updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
     } catch (err) {
-      setRunning(false);
-      setError(describeError(err));
+      const problem = hostKeyProblem(err);
+      if (problem) {
+        updateTurn(turn.id, (t) => ({ ...t, running: false, notice: 'Waiting for you to approve the server key…' }));
+        setKeyPrompt({ turn, host: target, problem });
+        return;
+      }
+      updateTurn(turn.id, (t) => ({ ...t, running: false, error: describeError(err) }));
     }
   }
 
+  async function send() {
+    if (!host || !canSend) return;
+    nextTurnId += 1;
+    const turn: Turn = {
+      id: nextTurnId,
+      hostId: host.id,
+      hostLabel: host.label,
+      mentionText: draftMention,
+      prompt: prompt.trim(),
+      items: [],
+      taskId: null,
+      running: true,
+      notice: null,
+      error: null,
+    };
+    setTurns((prev) => [...prev, turn]);
+    setPrompt('');
+    setDraftMention(null);
+    setMention(null);
+    setError(null);
+    await startTurn(turn, host);
+  }
+
   async function stop() {
-    if (!taskId) return;
+    if (!runningTask) return;
     try {
-      await agentCancel(taskId);
+      await agentCancel(runningTask);
     } catch (err) {
       setError(describeError(err));
     }
   }
 
   async function decide(approvalId: string, approve: boolean) {
-    setItems((prev) => setApprovalState(prev, approvalId, 'sending'));
+    const update = (state: 'sending' | 'approved' | 'denied' | 'pending', why: string | null = null) =>
+      setTurns((prev) => prev.map((t) => ({ ...t, items: setApprovalState(t.items, approvalId, state, why) })));
+    update('sending');
     try {
       await approvalDecide(approvalId, approve);
-      setItems((prev) => setApprovalState(prev, approvalId, approve ? 'approved' : 'denied'));
+      update(approve ? 'approved' : 'denied');
     } catch (err) {
       // The database refused it (expired or already decided). Show why.
-      setItems((prev) => setApprovalState(prev, approvalId, 'pending', describeError(err)));
+      update('pending', describeError(err));
     }
   }
 
@@ -189,133 +284,266 @@ export function AgentPanel() {
       const result = await auditVerify();
       setAudit(
         result.ok
-          ? `Audit log intact: ${result.eventsChecked} event(s) checked.`
-          : `Audit log broken at sequence ${result.brokenAtSeq ?? '?'}.`,
+          ? { ok: true, text: `Audit log intact: ${result.eventsChecked} event(s) checked.` }
+          : { ok: false, text: `Audit log broken at sequence ${result.brokenAtSeq ?? '?'}.` },
       );
     } catch (err) {
-      setAudit(describeError(err));
+      setAudit({ ok: false, text: describeError(err) });
     }
   }
 
   return (
-    <section aria-label="AI">
-      <h2>AI</h2>
-      <p className="muted">
-        Type <kbd>@</kbd> and pick a host. The model can only act on that host. Free-form commands
-        wait for your approval.
-      </p>
-
-      <div className="agent-composer">
-        <div className="chip-row">
-          {host ? (
-            <span className="chip">
-              @{host.label}
-              <button type="button" aria-label={`Remove ${host.label}`} onClick={() => setHost(null)}>
-                ×
-              </button>
-            </span>
-          ) : (
-            <span className="muted">No host selected</span>
+    <section aria-label="AI Agent" className="chat">
+      <header className="chat-head">
+        <SparkIcon size={18} style={{ color: 'var(--accent)' }} />
+        <h1>AI Agent</h1>
+        <span className="grow" />
+        <select
+          aria-label="Provider"
+          value={providerId}
+          onChange={(e) => chooseProvider(e.target.value)}
+          disabled={running}
+        >
+          {providers.length === 0 && <option value="">No providers configured</option>}
+          {providers.length > 0 && providerId === '' && (
+            <option value="" disabled>
+              Choose a provider
+            </option>
           )}
-        </div>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id} disabled={p.toolCalling.status !== 'verified'}>
+              {p.name} · {p.modelId}
+              {p.toolCalling.status === 'verified' ? '' : ' (not verified)'}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={verifyAudit}>
+          <ShieldIcon size={14} /> Verify audit log
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => setTurns([])}
+          disabled={running || turns.length === 0}
+        >
+          <PlusIcon size={14} /> New chat
+        </button>
+      </header>
 
-        {mention !== null && (
-          <ul className="host-picker" aria-label="Matching hosts">
-            {matches.length === 0 && <li className="muted">No matching host</li>}
-            {matches.map((h, i) => (
-              <li key={h.id} className={i === active ? 'active' : undefined}>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  aria-current={i === active ? 'true' : undefined}
-                  onClick={() => pickHost(h)}
-                >
-                  {h.label} <small>{h.hostname}</small>
-                </button>
-              </li>
-            ))}
-          </ul>
+      <div className="chat-scroll" ref={scrollRef}>
+        {audit && (
+          <div className="thread" style={{ paddingBottom: 0 }}>
+            <p role="status" className="banner" data-tone={audit.ok ? 'success' : 'danger'}>
+              {audit.ok ? <CheckIcon /> : <AlertIcon />}
+              <span className="grow">{audit.text}</span>
+            </p>
+          </div>
         )}
+        {turns.length === 0 ? (
+          <div className="chat-empty">
+            <span className="empty-icon">
+              <SparkIcon size={26} />
+            </span>
+            <h2>What should we check?</h2>
+            <p>
+              Type <kbd>@</kbd> to mention a host, then ask in plain language. Read-only diagnostics run
+              on their own; any other command waits for your approval.
+            </p>
+            <div className="suggestions">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s.title}
+                  type="button"
+                  className="suggestion"
+                  onClick={() => {
+                    const body = `${s.title} ${s.detail}`;
+                    const next = draftMention ? `${draftMention} ${body}` : body;
+                    setPrompt(next);
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  {s.title}
+                  <small>{s.detail}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <ol className="thread" aria-label="Transcript">
+            {turns.map((turn) => (
+              <Fragment key={turn.id}>
+                <li className="turn-user">
+                  <div className="bubble">{highlight(turn.prompt, turn.mentionText)}</div>
+                </li>
+                <li className="turn-ai">
+                  <span className="ai-avatar">
+                    <SparkIcon size={15} />
+                  </span>
+                  <div className="ai-body">
+                    <div className="ai-meta">
+                      <span>Selai</span>
+                      <span>·</span>
+                      <span>on {turn.hostLabel}</span>
+                      {turn.running && <span className="spinner" aria-label="Working" />}
+                    </div>
+                    {turn.items.map((item, i) => (
+                      <TranscriptRow key={i} item={item} items={turn.items} onDecide={decide} />
+                    ))}
+                    {turn.running && turn.items.length === 0 && <p className="status-line">Thinking…</p>}
+                    {turn.notice && <p className="status-line">{turn.notice}</p>}
+                    {turn.error && (
+                      <p role="alert" className="banner" data-tone="danger">
+                        <AlertIcon />
+                        <span className="grow">{turn.error}</span>
+                      </p>
+                    )}
+                  </div>
+                </li>
+              </Fragment>
+            ))}
+          </ol>
+        )}
+      </div>
 
-        <label>
-          Request
+      <div className="composer-wrap">
+        {error && (
+          <p role="alert" className="banner" data-tone="danger" style={{ maxWidth: 820, margin: '0 auto 0.6rem' }}>
+            {error}
+          </p>
+        )}
+        {!verified && (
+          <div className="banner" data-tone="warning" style={{ maxWidth: 820, margin: '0 auto 0.6rem' }}>
+            <AlertIcon />
+            <span className="grow">
+              {providers.length === 0
+                ? 'Add an AI provider first.'
+                : 'No verified provider selected. Run Test on the Providers page to check connection and tool calling.'}
+            </span>
+            {onOpenProviders && (
+              <button type="button" className="btn btn-sm" onClick={onOpenProviders}>
+                Open Providers
+              </button>
+            )}
+          </div>
+        )}
+        <div className="composer">
+          {pickerOpen && (
+            <ul className="mention-pop" aria-label="Matching hosts">
+              <li className="head">Hosts</li>
+              {matches.length === 0 && (
+                <li className="none">
+                  No matching host.{' '}
+                  {onOpenHosts && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenHosts}>
+                      Add a host
+                    </button>
+                  )}
+                </li>
+              )}
+              {matches.map((h, i) => (
+                <li key={h.id} className={i === active ? 'active' : undefined}>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-current={i === active ? 'true' : undefined}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pickHost(h)}
+                  >
+                    <HostAvatar label={h.label} size={14} />
+                    <span>
+                      {h.label}
+                      <small>
+                        {h.username}@{h.hostname}
+                      </small>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <textarea
+            ref={textareaRef}
+            aria-label="Request"
             value={prompt}
             onChange={(e) => onPromptChange(e.target.value)}
             onKeyDown={onPromptKeyDown}
-            rows={3}
-            placeholder="@production-web check disk usage"
-            disabled={running}
+            rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
+            placeholder={host ? `Ask about ${host.label}…` : 'Type @ to choose a host, then describe what you need'}
           />
-        </label>
-
-        <label>
-          Provider
-          <select value={providerId} onChange={(e) => chooseProvider(e.target.value)} disabled={running}>
-            {providers.length === 0 && <option value="">No providers configured</option>}
-            {providers.length > 0 && providerId === '' && (
-              <option value="" disabled>
-                Choose a provider
-              </option>
+          <div className="composer-bar">
+            {host ? (
+              <span className="target-chip" title={`${host.username}@${host.hostname}`}>
+                <TerminalIcon size={13} />
+                {host.label}
+                <button type="button" aria-label={`Remove ${host.label}`} onClick={clearTarget}>
+                  <CloseIcon size={11} />
+                </button>
+              </span>
+            ) : (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={insertAt}>
+                <AtIcon size={14} /> Mention host
+              </button>
             )}
-            {providers.map((p) => (
-              <option key={p.id} value={p.id} disabled={p.toolCalling.status !== 'verified'}>
-                {p.name} ({p.toolCalling.status === 'verified' ? 'tool calling verified' : 'not verified'})
-              </option>
-            ))}
-          </select>
-        </label>
-        {providers.length > 0 && !verified && (
-          <p className="muted">Run the tool calling test for this provider in the list below first.</p>
-        )}
-
-        <div className="button-row">
-          <button type="button" onClick={send} disabled={!canSend}>
-            Send
-          </button>
-          {running && (
-            <button type="button" onClick={stop} disabled={!taskId}>
-              Stop
-            </button>
-          )}
+            <span className="grow" />
+            {running ? (
+              <button type="button" className="btn btn-danger send-btn" aria-label="Stop" title="Stop" onClick={stop} disabled={!runningTask}>
+                <StopIcon size={14} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary send-btn"
+                aria-label="Send"
+                title="Send (Enter)"
+                onClick={() => void send()}
+                disabled={!canSend}
+              >
+                <SendIcon />
+              </button>
+            )}
+          </div>
         </div>
+        <p className="composer-note">
+          Enter to send · Shift+Enter for a new line · Each message runs as its own task on the mentioned host.
+        </p>
       </div>
 
-      {error && <p role="alert">{error}</p>}
-
-      <ol className="transcript" aria-label="Transcript">
-        {items.map((item, i) => (
-          <li key={i}>
-            <TranscriptRow item={item} items={items} onDecide={decide} />
-          </li>
-        ))}
-      </ol>
-
-      {host && (
-        <section aria-label="Command history" className="history">
-          <h3>Command history: {host.label}</h3>
-          {history.length === 0 && <p className="muted">No commands on this host yet.</p>}
-          <ul>
-            {history.map((row) => (
-              <li key={row.id}>
-                <code>{row.commandRedacted}</code>{' '}
-                <span className="muted">
-                  {row.tool.includes('diagnostic') ? 'diagnostic' : 'command'} · {row.state}
-                  {row.exitCode !== null ? ` · exit ${row.exitCode}` : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {keyPrompt && (
+        <HostKeyDialog
+          hostId={keyPrompt.host.id}
+          hostLabel={keyPrompt.host.label}
+          address={`${keyPrompt.host.hostname}:${keyPrompt.host.port}`}
+          problem={keyPrompt.problem}
+          onTrusted={() => {
+            const { turn, host: target } = keyPrompt;
+            setKeyPrompt(null);
+            void startTurn(turn, target);
+          }}
+          onCancel={() => {
+            updateTurn(keyPrompt.turn.id, (t) => ({
+              ...t,
+              notice: null,
+              error: 'Not started: the server key was not approved, so nothing was sent to the host.',
+            }));
+            setKeyPrompt(null);
+          }}
+        />
       )}
-
-      <div className="button-row">
-        <button type="button" onClick={verifyAudit}>
-          Verify audit log
-        </button>
-        {audit && <span role="status">{audit}</span>}
-      </div>
     </section>
+  );
+}
+
+/** Shows the bound "@Label" as a pill inside the sent message. */
+function highlight(text: string, mentionText: string | null): ReactNode {
+  if (!mentionText) return text;
+  const at = text.indexOf(mentionText);
+  if (at < 0) return text;
+  return (
+    <>
+      {text.slice(0, at)}
+      <span className="mention">{mentionText}</span>
+      {text.slice(at + mentionText.length)}
+    </>
   );
 }
 
@@ -332,56 +560,116 @@ function TranscriptRow({
     case 'text':
       return <p className="reply">{item.text}</p>;
     case 'status':
-      return <p className="muted">{item.text}</p>;
+      return <p className="status-line">{item.text}</p>;
     case 'failed':
       return (
-        <p role="alert">
-          {item.message} <small>({item.code})</small>
+        <p role="alert" className="banner" data-tone="danger">
+          <AlertIcon />
+          <span className="grow">
+            {item.message} <small>({item.code})</small>
+          </span>
         </p>
       );
-    case 'tool':
-      return (
-        <div className="card" aria-label="Command">
-          <code>{item.command}</code>
-          <div className="muted">
-            on {item.hostLabel} · {item.status}
-            {item.exitCode !== null ? ` · exit ${item.exitCode}` : ''}
-          </div>
-        </div>
+    case 'tool': {
+      // A command that needs approval is one card: the command, then the decision.
+      const approval = items.find(
+        (i): i is Extract<TranscriptItem, { kind: 'approval' }> =>
+          i.kind === 'approval' && i.executionId === item.executionId,
       );
+      if (approval) return <ApprovalCard item={approval} hostLabel={item.hostLabel} status={item} onDecide={onDecide} />;
+      return <ToolCard item={item} />;
+    }
     case 'approval': {
-      const hostLabel = items.find(
-        (i) => i.kind === 'tool' && i.executionId === item.executionId,
-      );
-      const expired = Date.now() > item.expiresAtMs;
-      const open = item.state === 'pending' && !expired;
-      return (
-        <div className="card approval" role="group" aria-label="Approval required">
-          <p>
-            Run this command on {hostLabel?.kind === 'tool' ? hostLabel.hostLabel : 'the host'}?
-          </p>
-          <pre>
-            <code>{item.command}</code>
-          </pre>
-          <p className="muted">
-            {expired
-              ? 'Expired. The command will not run.'
-              : `Expires at ${new Date(item.expiresAtMs).toLocaleTimeString()}`}
-          </p>
-          {item.state === 'sending' && <p className="muted">Sending your decision…</p>}
-          {item.state === 'approved' && <p>Approved. Waiting for the result.</p>}
-          {item.state === 'denied' && <p>Denied. The command will not run.</p>}
-          {item.error && <p role="alert">{item.error}</p>}
-          <div className="button-row">
-            <button type="button" disabled={!open} onClick={() => onDecide(item.approvalId, true)}>
-              Approve
-            </button>
-            <button type="button" disabled={!open} onClick={() => onDecide(item.approvalId, false)}>
-              Deny
-            </button>
-          </div>
-        </div>
-      );
+      // Shown inside its command card when that card exists.
+      if (items.some((i) => i.kind === 'tool' && i.executionId === item.executionId)) return null;
+      return <ApprovalCard item={item} hostLabel={null} status={null} onDecide={onDecide} />;
     }
   }
+}
+
+type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>;
+type ApprovalItem = Extract<TranscriptItem, { kind: 'approval' }>;
+
+function StatusBadge({ item }: { item: ToolItem }) {
+  const done = item.status === 'completed';
+  const bad = ['failed', 'denied', 'timed_out', 'cancelled', 'interrupted'].includes(item.status);
+  return (
+    <span className="badge" data-tone={done ? 'success' : bad ? 'danger' : 'accent'}>
+      {item.status.replace(/_/g, ' ')}
+      {item.exitCode !== null ? ` · exit ${item.exitCode}` : ''}
+    </span>
+  );
+}
+
+function ToolCard({ item }: { item: ToolItem }) {
+  return (
+    <div className="tool-card" aria-label="Command">
+      <div className="tool-head">
+        <TerminalIcon size={13} />
+        <span>{item.hostLabel}</span>
+        <span className="grow" />
+        <StatusBadge item={item} />
+      </div>
+      <pre className="tool-cmd">
+        <code>{item.command}</code>
+      </pre>
+    </div>
+  );
+}
+
+function ApprovalCard({
+  item,
+  hostLabel,
+  status,
+  onDecide,
+}: {
+  item: ApprovalItem;
+  hostLabel: string | null;
+  status: ToolItem | null;
+  onDecide: (approvalId: string, approve: boolean) => void;
+}) {
+  const expired = Date.now() > item.expiresAtMs;
+  const open = item.state === 'pending' && !expired;
+  return (
+    <div
+      className={open || item.state === 'sending' ? 'tool-card approval' : 'tool-card'}
+      role="group"
+      aria-label="Approval required"
+    >
+      <div className="tool-head">
+        <ShieldIcon size={13} />
+        <span>Run this command on {hostLabel ?? 'the host'}?</span>
+        <span className="grow" />
+        {status && item.state === 'approved' && <StatusBadge item={status} />}
+      </div>
+      <pre className="tool-cmd">
+        <code>{item.command}</code>
+      </pre>
+      <div className="approval-foot">
+        <span className="grow">
+          {item.state === 'sending' && 'Sending your decision…'}
+          {item.state === 'approved' &&
+            (status && status.status !== 'proposed' ? 'Approved by you.' : 'Approved. Waiting for the result.')}
+          {item.state === 'denied' && 'Denied. The command will not run.'}
+          {item.state === 'pending' &&
+            (expired ? 'Expired. The command will not run.' : `Expires at ${new Date(item.expiresAtMs).toLocaleTimeString()}`)}
+        </span>
+        {item.state === 'pending' && (
+          <>
+            <button type="button" className="btn btn-sm" disabled={!open} onClick={() => onDecide(item.approvalId, false)}>
+              Deny
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={!open} onClick={() => onDecide(item.approvalId, true)}>
+              Approve
+            </button>
+          </>
+        )}
+      </div>
+      {item.error && (
+        <p role="alert" className="banner" data-tone="danger" style={{ margin: '0 0.75rem 0.75rem' }}>
+          {item.error}
+        </p>
+      )}
+    </div>
+  );
 }

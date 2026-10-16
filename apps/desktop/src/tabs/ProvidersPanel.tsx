@@ -12,6 +12,9 @@ import {
   type ProviderView,
   type TemplateView,
 } from '../ipc';
+import { Field } from '../ui/Field';
+import { Drawer } from '../ui/Overlay';
+import { AlertIcon, BoltIcon, CheckIcon, CloseIcon, EditIcon, PlugIcon, PlusIcon, TrashIcon } from '../ui/icons';
 
 const PROTOCOLS: { value: ProviderProtocolName; label: string }[] = [
   { value: 'openai_chat', label: 'OpenAI-compatible Chat Completions' },
@@ -20,9 +23,9 @@ const PROTOCOLS: { value: ProviderProtocolName; label: string }[] = [
 ];
 
 const STATUS_TEXT: Record<ProviderView['toolCalling']['status'], string> = {
-  verified: 'tool calling verified for this model',
-  failed: 'tool calling test failed',
-  not_verified: 'not verified',
+  verified: 'Verified',
+  failed: 'Test failed',
+  not_verified: 'Not verified',
 };
 
 interface FormState {
@@ -35,6 +38,7 @@ interface FormState {
   timeoutSeconds: string;
   maxOutputTokens: string;
   keyConfigured: boolean;
+  allowInsecureHttp: boolean;
   note: string;
 }
 
@@ -46,6 +50,7 @@ const EMPTY: FormState = {
   timeoutSeconds: '120',
   maxOutputTokens: '4096',
   keyConfigured: false,
+  allowInsecureHttp: false,
   note: '',
 };
 
@@ -60,8 +65,24 @@ function fromProvider(p: ProviderView): FormState {
     timeoutSeconds: String(p.timeoutSeconds),
     maxOutputTokens: String(p.maxOutputTokens),
     keyConfigured: p.keyConfigured,
+    allowInsecureHttp: p.allowInsecureHttp,
     note: '',
   };
+}
+
+/** Plain http:// to anything but this machine. Rust makes the real decision. */
+function isRemotePlainHttp(url: string): boolean {
+  const m = /^http:\/\/(\[[^\]]+\]|[^/:?#]+)/i.exec(url.trim());
+  if (!m) return false;
+  const host = (m[1] ?? '').toLowerCase().replace(/^\[|\]$/g, '');
+  return !(host === 'localhost' || host === '::1' || host.startsWith('127.'));
+}
+
+type Step = ProviderTestView | 'running' | 'skipped';
+
+interface TestRun {
+  connectivity?: Step;
+  toolCalling?: Step;
 }
 
 export const PROVIDERS_CHANGED = 'selai:providers-changed';
@@ -73,7 +94,8 @@ export function ProvidersPanel() {
   const [apiKey, setApiKey] = useState('');
   const [clearKey, setClearKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<Record<string, ProviderTestView>>({});
+  const [formError, setFormError] = useState<string | null>(null);
+  const [runs, setRuns] = useState<Record<string, TestRun>>({});
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
@@ -93,6 +115,13 @@ export function ProvidersPanel() {
       .catch((err: unknown) => setError(describeError(err)));
   }, []);
 
+  function openForm(state: FormState) {
+    setForm(state);
+    setApiKey('');
+    setClearKey(false);
+    setFormError(null);
+  }
+
   function applyTemplate(id: string) {
     const t = templates.find((x) => x.id === id);
     if (!t) return;
@@ -108,6 +137,7 @@ export function ProvidersPanel() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!form) return;
+    const remoteHttp = isRemotePlainHttp(form.baseUrl);
     const input: ProviderInput = {
       id: form.id,
       expectedUpdatedAtMs: form.expectedUpdatedAtMs,
@@ -117,6 +147,7 @@ export function ProvidersPanel() {
       modelId: form.modelId.trim(),
       timeoutSeconds: Number(form.timeoutSeconds),
       maxOutputTokens: Number(form.maxOutputTokens),
+      allowInsecureHttp: remoteHttp && form.allowInsecureHttp,
       apiKey: apiKey || undefined,
       clearApiKey: clearKey || undefined,
     };
@@ -129,23 +160,39 @@ export function ProvidersPanel() {
       setError(null);
       await refresh();
     } catch (err) {
-      setError(describeError(err));
+      setFormError(describeError(err));
     } finally {
       setBusy(false);
     }
   }
 
-  async function test(provider: ProviderView, kind: 'connectivity' | 'tool_calling') {
-    setBusy(true);
+  /** One button: connection first, then the tool-calling round trip that verifies the model. */
+  async function test(provider: ProviderView) {
+    const set = (run: TestRun) => setRuns((prev) => ({ ...prev, [provider.id]: run }));
+    set({ connectivity: 'running' });
+    setError(null);
+    let connectivity: ProviderTestView;
     try {
-      const result = await providerTest(provider.id, kind);
-      setResults((prev) => ({ ...prev, [provider.id]: result }));
-      await refresh();
+      connectivity = await providerTest(provider.id, 'connectivity');
     } catch (err) {
       setError(describeError(err));
-    } finally {
-      setBusy(false);
+      set({});
+      return;
     }
+    if (!connectivity.ok) {
+      set({ connectivity, toolCalling: 'skipped' });
+      await refresh();
+      return;
+    }
+    set({ connectivity, toolCalling: 'running' });
+    try {
+      const toolCalling = await providerTest(provider.id, 'tool_calling');
+      set({ connectivity, toolCalling });
+    } catch (err) {
+      setError(describeError(err));
+      set({ connectivity });
+    }
+    await refresh();
   }
 
   async function remove(provider: ProviderView) {
@@ -159,146 +206,248 @@ export function ProvidersPanel() {
   }
 
   const keyPlaceholder = form?.keyConfigured ? '•••• saved (leave blank to keep)' : '';
+  const remoteHttp = form ? isRemotePlainHttp(form.baseUrl) : false;
 
   return (
-    <section aria-label="AI providers" className="providers">
-      <div className="toolbar">
-        <h3>Providers</h3>
-        <button type="button" onClick={() => setForm({ ...EMPTY })}>
-          Add provider
+    <section aria-label="AI providers" className="page">
+      <header className="page-head">
+        <div className="grow">
+          <h1>AI Providers</h1>
+          <p>Models the agent can use. A provider is usable once its test passes.</p>
+        </div>
+        <button type="button" className="btn btn-primary" onClick={() => openForm({ ...EMPTY })}>
+          <PlusIcon /> Add provider
         </button>
-      </div>
+      </header>
+
       {error && (
-        <p role="alert" className="error">
+        <p role="alert" className="banner" data-tone="danger">
           {error}
         </p>
       )}
 
-      {form && (
-        <form className="host-form" aria-label={form.id ? 'Edit provider' : 'New provider'} onSubmit={submit}>
-          <label>
-            Start from a template
-            <select defaultValue="" onChange={(e) => applyTemplate(e.target.value)}>
-              <option value="" disabled>
-                Choose…
-              </option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          {form.note && <p className="muted">{form.note}</p>}
-          <label>
-            Name
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </label>
-          <label>
-            Protocol
-            <select
-              value={form.protocol}
-              onChange={(e) => setForm({ ...form, protocol: e.target.value as ProviderProtocolName })}
-            >
-              {PROTOCOLS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Base URL (API root, without the endpoint path)
-            <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
-          </label>
-          <label>
-            Model ID (copy it from your provider)
-            <input value={form.modelId} onChange={(e) => setForm({ ...form, modelId: e.target.value })} />
-          </label>
-          <label>
-            API key (write-only; blank for a local server)
-            <input
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              placeholder={keyPlaceholder}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </label>
-          {form.keyConfigured && (
-            <label className="confirm">
-              <input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
-              Remove the saved key
-            </label>
-          )}
-          <label>
-            Timeout (seconds)
-            <input value={form.timeoutSeconds} onChange={(e) => setForm({ ...form, timeoutSeconds: e.target.value })} />
-          </label>
-          <label>
-            Max output tokens per turn
-            <input value={form.maxOutputTokens} onChange={(e) => setForm({ ...form, maxOutputTokens: e.target.value })} />
-          </label>
-          <div className="form-actions">
-            <button type="submit" disabled={busy}>
-              Save provider
-            </button>
-            <button type="button" onClick={() => setForm(null)}>
-              Cancel
-            </button>
-          </div>
-        </form>
+      {providers.length === 0 && (
+        <div className="empty">
+          <span className="empty-icon">
+            <PlugIcon size={26} />
+          </span>
+          <h2>No providers yet</h2>
+          <p>Connect OpenAI, Anthropic, or a local server such as vLLM, Ollama or LiteLLM.</p>
+          <button type="button" className="btn btn-primary" onClick={() => openForm({ ...EMPTY })}>
+            <PlusIcon /> Add provider
+          </button>
+        </div>
       )}
 
-      <ul className="host-list">
+      <ul className="provider-list">
         {providers.map((p) => {
-          const result = results[p.id];
+          const run = runs[p.id];
+          const testing = run?.connectivity === 'running' || run?.toolCalling === 'running';
+          const insecure = p.baseUrl.startsWith('http://') && !p.isLoopback;
           return (
-            <li key={p.id} className="host-row">
-              <div className="host-main">
-                <strong>{p.name}</strong>
-                <span className="muted">
-                  {p.modelId} · {p.baseUrl}
+            <li key={p.id} className="card provider-card">
+              <div className="provider-top">
+                <span className="provider-icon">
+                  <PlugIcon size={18} />
                 </span>
-                <span className="badge" data-status={p.toolCalling.status}>
-                  {STATUS_TEXT[p.toolCalling.status]}
-                </span>
-                {!p.keyConfigured && !p.isLoopback && <span className="badge">no key saved</span>}
-                {result && (
-                  <span role="status" className={result.ok ? '' : 'error'}>
-                    {result.kind === 'tool_calling' ? 'Tool calling' : 'Connectivity'}:{' '}
-                    {result.ok ? 'passed' : 'failed'}
-                    {result.code ? ` (${result.code})` : ''} — {result.message}
-                    {result.replyPreview ? ` “${result.replyPreview}”` : ''}
-                  </span>
-                )}
+                <div className="provider-main">
+                  <strong>{p.name}</strong>
+                  <div className="meta">
+                    {p.modelId} · {p.baseUrl}
+                  </div>
+                  <div className="provider-tags">
+                    <span className="badge" data-status={p.toolCalling.status}>
+                      {p.toolCalling.status === 'verified' && <CheckIcon size={11} />}
+                      {STATUS_TEXT[p.toolCalling.status]}
+                    </span>
+                    <span className="badge">{PROTOCOLS.find((x) => x.value === p.protocol)?.label}</span>
+                    {insecure && (
+                      <span className="badge" data-tone="warning">
+                        Plain HTTP
+                      </span>
+                    )}
+                    {!p.keyConfigured && !p.isLoopback && <span className="badge">No key saved</span>}
+                  </div>
+                </div>
+                <div className="provider-actions">
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => void test(p)} disabled={testing}>
+                    <BoltIcon size={13} /> {testing ? 'Testing…' : 'Test'}
+                  </button>
+                  <button type="button" className="icon-btn" aria-label={`Edit ${p.name}`} title="Edit" onClick={() => openForm(fromProvider(p))}>
+                    <EditIcon />
+                  </button>
+                  <button type="button" className="icon-btn" aria-label={`Delete ${p.name}`} title="Delete" onClick={() => void remove(p)}>
+                    <TrashIcon />
+                  </button>
+                </div>
               </div>
-              <div className="host-actions">
-                <button type="button" onClick={() => void test(p, 'connectivity')} disabled={busy}>
-                  Test connectivity
-                </button>
-                <button type="button" onClick={() => void test(p, 'tool_calling')} disabled={busy}>
-                  Test tool calling
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setForm(fromProvider(p));
-                    setApiKey('');
-                    setClearKey(false);
-                  }}
-                >
-                  Edit
-                </button>
-                <button type="button" onClick={() => void remove(p)}>
-                  Delete
-                </button>
-              </div>
+              {run && (run.connectivity || run.toolCalling) && (
+                <ul className="checks" aria-label={`Test results for ${p.name}`}>
+                  <CheckRow name="Connection" step={run.connectivity} />
+                  <CheckRow name="Tool calling" step={run.toolCalling} />
+                </ul>
+              )}
             </li>
           );
         })}
       </ul>
-      {providers.length === 0 && <p>No providers yet.</p>}
+
+      {form && (
+        <Drawer
+          title={form.id ? `Edit ${form.name}` : 'Add provider'}
+          subtitle="The API key is stored in the OS keychain and never shown again."
+          onClose={() => setForm(null)}
+          footer={
+            <>
+              <button type="button" className="btn btn-ghost" onClick={() => setForm(null)}>
+                Cancel
+              </button>
+              <button type="submit" form="provider-form" className="btn btn-primary" disabled={busy}>
+                Save provider
+              </button>
+            </>
+          }
+        >
+          <form id="provider-form" aria-label={form.id ? 'Edit provider' : 'New provider'} onSubmit={submit}>
+            {formError && (
+              <p role="alert" className="banner" data-tone="danger" style={{ marginBottom: '1rem' }}>
+                {formError}
+              </p>
+            )}
+            <div className="form-section">
+              <Field label="Start from a template" hint={form.note || undefined}>
+                <select defaultValue="" onChange={(e) => applyTemplate(e.target.value)}>
+                  <option value="" disabled>
+                    Choose…
+                  </option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.displayName}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <label className="field">
+                Name
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              </label>
+              <label className="field">
+                Protocol
+                <select
+                  value={form.protocol}
+                  onChange={(e) => setForm({ ...form, protocol: e.target.value as ProviderProtocolName })}
+                >
+                  {PROTOCOLS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="form-section">
+              <h3>Endpoint</h3>
+              <Field label="Base URL" hint="The API root, without the endpoint path.">
+                <input
+                  value={form.baseUrl}
+                  placeholder="https://api.example.com/v1"
+                  onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+                />
+              </Field>
+              {remoteHttp && (
+                <div className="banner" data-tone="warning">
+                  <AlertIcon />
+                  <div className="grow">
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={form.allowInsecureHttp}
+                        onChange={(e) => setForm({ ...form, allowInsecureHttp: e.target.checked })}
+                      />
+                      <span>Allow plain HTTP</span>
+                    </label>
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      For a LiteLLM or similar gateway on a trusted network. The API key, your prompts and
+                      command output travel unencrypted.
+                    </p>
+                  </div>
+                </div>
+              )}
+              <Field label="Model ID" hint="Copy it exactly from your provider.">
+                <input value={form.modelId} onChange={(e) => setForm({ ...form, modelId: e.target.value })} />
+              </Field>
+              <Field label="API key" hint="Write-only. Leave blank for a local server without a key.">
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={apiKey}
+                  placeholder={keyPlaceholder}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+              </Field>
+              {form.keyConfigured && (
+                <label className="check">
+                  <input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
+                  <span>Remove the saved key</span>
+                </label>
+              )}
+            </div>
+            <div className="form-section">
+              <h3>Limits</h3>
+              <div className="field-grid">
+                <label className="field">
+                  Timeout (seconds)
+                  <input value={form.timeoutSeconds} onChange={(e) => setForm({ ...form, timeoutSeconds: e.target.value })} />
+                </label>
+                <label className="field">
+                  Max output tokens per turn
+                  <input
+                    value={form.maxOutputTokens}
+                    onChange={(e) => setForm({ ...form, maxOutputTokens: e.target.value })}
+                  />
+                </label>
+              </div>
+            </div>
+          </form>
+        </Drawer>
+      )}
     </section>
+  );
+}
+
+function CheckRow({ name, step }: { name: string; step: Step | undefined }) {
+  if (!step) return null;
+  if (step === 'running') {
+    return (
+      <li data-result="wait">
+        <span className="spinner" style={{ width: 18, height: 18 }} />
+        <span>
+          {name} <span className="detail">checking…</span>
+        </span>
+      </li>
+    );
+  }
+  if (step === 'skipped') {
+    return (
+      <li data-result="skip">
+        <span className="mark">–</span>
+        <span>
+          {name} <span className="detail">skipped because the connection failed</span>
+        </span>
+      </li>
+    );
+  }
+  return (
+    <li data-result={step.ok ? 'ok' : 'fail'} role="status">
+      <span className="mark">{step.ok ? <CheckIcon size={11} /> : <CloseIcon size={11} />}</span>
+      <span>
+        {name}: {step.ok ? 'passed' : 'failed'}
+        {step.code ? ` (${step.code})` : ''}{' '}
+        <span className="detail">
+          — {step.message} · {step.latencyMs} ms
+          {step.replyPreview ? ` · “${step.replyPreview}”` : ''}
+        </span>
+      </span>
+    </li>
   );
 }
