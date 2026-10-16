@@ -59,6 +59,9 @@ jobs:
         run: |
           choco install strawberryperl nasm --no-progress -y
           "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # openssl-src builds OpenSSL from source and reads this variable. Without it,
+          # the Perl on PATH is Git for Windows' MSYS Perl, which lacks the modules.
+          "OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
