@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { describeError, HOSTS_CHANGED, hostArchive, hostList, localHost, type HostView } from '../ipc';
 import { HostAvatar } from '../ui/HostAvatar';
-import { ArchiveIcon, ChevronIcon, EditIcon, PlusIcon, RefreshIcon, SearchIcon, TerminalIcon } from '../ui/icons';
+import { collectPages } from '../ui/collectPages';
+import { ArchiveIcon, ChevronIcon, EditIcon, ImportIcon, PlusIcon, RefreshIcon, SearchIcon, TerminalIcon } from '../ui/icons';
 import { SelaiLogo } from '../ui/SelaiLogo';
 import { HostForm } from './HostForm';
+import { HostImport } from './HostImport';
 import type { SessionStatus } from './TerminalTab';
 
 interface Props {
@@ -21,6 +23,7 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<HostView | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [local, setLocal] = useState<HostView | null>(null);
@@ -38,8 +41,8 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
 
   const refresh = useCallback(async (filter: string) => {
     try {
-      const page = await hostList(filter || undefined);
-      setHosts(page.items);
+      const items = await collectPages((cursor) => hostList(filter || undefined, false, cursor));
+      setHosts(items);
       setError(null);
     } catch (err) {
       setError(describeError(err));
@@ -56,9 +59,9 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
     if (!editRequest) return;
     let active = true;
     // Look the host up without the current filter, so it is found even when hidden.
-    hostList()
-      .then((page) => {
-        const host = page.items.find((h) => h.id === editRequest.hostId);
+    collectPages((cursor) => hostList(undefined, false, cursor))
+      .then((items) => {
+        const host = items.find((h) => h.id === editRequest.hostId);
         if (active && host) setEditing(host);
       })
       .catch(() => undefined);
@@ -88,6 +91,12 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
       <header className="panel-head">
         <h2>Hosts</h2>
         <span className="grow" />
+        <button type="button" className="icon-btn" aria-label="Import SSH profiles" title="Import SSH profiles" onClick={() => {
+          setEditing(null);
+          setImporting(true);
+        }}>
+          <ImportIcon size={15} />
+        </button>
         <button type="button" className="icon-btn" aria-label="New host" title="New host" onClick={() => setEditing('new')}>
           <PlusIcon size={15} />
         </button>
@@ -190,6 +199,15 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
             window.dispatchEvent(new Event(HOSTS_CHANGED));
             await refresh(query);
             if (connect) onConnect(saved);
+          }}
+        />
+      )}
+      {importing && (
+        <HostImport
+          onClose={() => setImporting(false)}
+          onImported={async () => {
+            window.dispatchEvent(new Event(HOSTS_CHANGED));
+            await refresh(query);
           }}
         />
       )}

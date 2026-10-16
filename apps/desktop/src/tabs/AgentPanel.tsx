@@ -21,6 +21,7 @@ import {
   type ProviderView,
 } from '../ipc';
 import { HostAvatar } from '../ui/HostAvatar';
+import { collectPages } from '../ui/collectPages';
 import { HostKeyDialog } from '../ui/HostKeyDialog';
 import { Markdown } from '../ui/Markdown';
 import {
@@ -42,13 +43,15 @@ import { PROVIDERS_CHANGED } from './ProvidersPanel';
 /** "This computer" when it matches `query`, then the matching SSH hosts. */
 async function targetSearch(query: string): Promise<HostView[]> {
   const q = query.trim().toLowerCase();
-  const [local, page] = await Promise.all([
+  const [local, hosts] = await Promise.all([
     localHost().catch(() => null),
-    hostList(query.trim() || undefined),
+    collectPages((cursor) => cursor
+      ? hostList(query.trim() || undefined, false, cursor)
+      : hostList(query.trim() || undefined)),
   ]);
   const localMatches =
     local !== null && (!q || local.label.toLowerCase().includes(q) || 'local'.startsWith(q));
-  return [...(localMatches ? [local] : []), ...page.items.filter((h) => !h.archived)];
+  return [...(localMatches ? [local] : []), ...hosts.filter((h) => !h.archived)];
 }
 
 /** The "@query" being typed at the end of the request. Labels may hold spaces. */

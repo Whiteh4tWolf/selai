@@ -20,6 +20,7 @@ import {
 } from '../ipc';
 import { formatCompact, formatCount, formatDuration, formatWhen, sumTokens } from '../ui/format';
 import { HostAvatar } from '../ui/HostAvatar';
+import { collectPages } from '../ui/collectPages';
 import { Drawer } from '../ui/Overlay';
 import { ClockIcon, TerminalIcon } from '../ui/icons';
 import { SelaiLogo } from '../ui/SelaiLogo';
@@ -74,10 +75,10 @@ export function HistoryTab({ visible }: { visible: boolean }) {
 
   useEffect(() => {
     let active = true;
-    Promise.all([localHost().catch(() => null), hostList(undefined, true)])
-      .then(([local, page]) => {
+    Promise.all([localHost().catch(() => null), collectPages((cursor) => hostList(undefined, true, cursor))])
+      .then(([local, items]) => {
         if (!active) return;
-        const all = [...page.items, ...(local ? [local] : [])];
+        const all = [...items, ...(local ? [local] : [])];
         setHosts(all);
         setHostId((current) => current || all[0]?.id || '');
       })

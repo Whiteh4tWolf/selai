@@ -114,8 +114,8 @@ Notes:
 - **Auto-updater.** No updater artifacts (`.sig`, `latest.json`) are produced and
   `TAURI_SIGNING_PRIVATE_KEY` is not used. Adding the updater needs a signing key
   pair and a hosting decision.
-- **GitHub release.** Nothing is published. Downloading and distributing the
-  artifacts is a manual step.
+- **Automatic publication from a manual workflow run.** Manual runs produce
+  workflow artifacts; a `v*` tag triggers the publish job described above.
 
 ## What is NOT verified
 
@@ -132,7 +132,7 @@ Notes:
 | Attestation (`attest` job) | Not run. Needs a tag push. |
 | SBOM job on a clean runner | Local run only, on a clean `git archive` of HEAD with `cargo-cyclonedx` 0.5.9 and cdxgen 12.8.6. |
 | Auto-updater | Not included. |
-| Icons | **Blocker.** `apps/desktop/src-tauri/icons/` contains only `icon.png`. Windows builds need `icons/icon.ico` (tauri-build reads it, `tauri-build` 2.7.3 `src/lib.rs`). macOS needs `icons/icon.icns`. `bundle.icon` is not set. Generate the set with `pnpm tauri icon` and commit it. |
+| Icons | `icon.png`, `icon.ico`, `icon.icns`, and platform sizes are present. The Windows and macOS bundles have not been run here. |
 
 ## Helper scripts
 

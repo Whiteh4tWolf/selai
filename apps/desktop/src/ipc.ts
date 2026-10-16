@@ -114,8 +114,8 @@ export function storageStatus(): Promise<StorageStatus> {
   return invoke<StorageStatus>('storage_status');
 }
 
-export function hostList(query?: string, includeArchived = false): Promise<Page<HostView>> {
-  return invoke<Page<HostView>>('host_list', { query: query ?? null, includeArchived });
+export function hostList(query?: string, includeArchived = false, cursor?: string): Promise<Page<HostView>> {
+  return invoke<Page<HostView>>('host_list', { query: query ?? null, includeArchived, cursor: cursor ?? null });
 }
 
 /** The built-in "This computer" entry, for a local terminal and local agent tasks. */

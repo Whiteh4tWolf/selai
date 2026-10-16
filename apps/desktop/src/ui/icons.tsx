@@ -50,6 +50,7 @@ export const ClockIcon = make(
   </>,
 );
 export const PlusIcon = make(<path d="M12 5v14M5 12h14" />);
+export const ImportIcon = make(<path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4" />);
 export const SearchIcon = make(
   <>
     <circle cx="11" cy="11" r="7" />

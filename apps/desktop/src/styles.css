@@ -1233,6 +1233,64 @@ details.advanced > .form-section {
   flex: 1;
 }
 
+.import-mapping {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.import-note-option,
+.import-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.import-preview {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.import-row {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) minmax(90px, 120px);
+  align-items: center;
+  gap: 0.65rem;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+
+.import-row + .import-row {
+  border-top: 1px solid var(--border);
+}
+
+.import-row[data-invalid='true'] {
+  opacity: 0.65;
+}
+
+.import-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.import-row-main strong,
+.import-row-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-row-state {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .dialog {
   width: min(500px, 100%);
   background: var(--surface);
