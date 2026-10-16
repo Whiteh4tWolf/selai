@@ -1,34 +1,20 @@
-import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AgentPanel } from './tabs/AgentPanel';
-import { ConnectionsTab } from './tabs/ConnectionsTab';
 import { HistoryTab } from './tabs/HistoryTab';
+import { HostsSidebar } from './tabs/HostsSidebar';
 import { ProvidersPanel } from './tabs/ProvidersPanel';
 import { appInfo, describeError, localHost, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
-import { ClockIcon, PlugIcon, ServerIcon, SparkIcon, TerminalIcon } from './ui/icons';
+import { ClockIcon, CloseIcon, PlugIcon, PlusIcon, ServerIcon, SparkIcon, TerminalIcon } from './ui/icons';
 
 // xterm.js is large; load it only when a terminal is first needed.
-const TerminalTab = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalTab })));
+const TerminalStack = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalStack })));
 
-type ViewId = 'hosts' | 'terminal' | 'agent' | 'providers' | 'history';
+/** A tab in the centre area: a terminal, or one of the pages that open as a tab. */
+type PageId = 'history' | 'providers';
+type EditorTab = ({ kind: 'terminal' } & TerminalSessionTab) | { kind: PageId; key: PageId };
 
-const NAV: { section: string; items: { id: ViewId; label: string; icon: ReactNode }[] }[] = [
-  {
-    section: 'Workspace',
-    items: [
-      { id: 'hosts', label: 'Hosts', icon: <ServerIcon /> },
-      { id: 'terminal', label: 'Terminal', icon: <TerminalIcon /> },
-    ],
-  },
-  {
-    section: 'AI',
-    items: [
-      { id: 'agent', label: 'AI Agent', icon: <SparkIcon /> },
-      { id: 'providers', label: 'Providers', icon: <PlugIcon /> },
-      { id: 'history', label: 'History', icon: <ClockIcon /> },
-    ],
-  },
-];
+const PAGE_TITLES: Record<PageId, string> = { history: 'History', providers: 'Providers' };
 
 let nextTabNumber = 0;
 
@@ -36,36 +22,136 @@ type Theme = 'dark' | 'light' | 'system';
 const THEMES: Theme[] = ['dark', 'light', 'system'];
 const THEME_KEY = 'selai.theme';
 
-/** The theme is a per-device display preference, so browser storage is enough. */
-function storedTheme(): Theme {
+/** Display preferences are per device, so browser storage is enough. */
+function stored(key: string): string | null {
   try {
-    const value = window.localStorage.getItem(THEME_KEY);
-    return THEMES.includes(value as Theme) ? (value as Theme) : 'dark';
+    return window.localStorage.getItem(key);
   } catch {
-    return 'dark';
+    return null;
   }
 }
 
+function store(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Not saved; the choice still applies until the app closes.
+  }
+}
+
+function storedTheme(): Theme {
+  const value = stored(THEME_KEY);
+  return THEMES.includes(value as Theme) ? (value as Theme) : 'dark';
+}
+
+/** A panel width the operator drags, remembered across starts. */
+function usePanelWidth(key: string, initial: number, min: number, max: number) {
+  const [width, setWidth] = useState(() => {
+    const saved = Number(stored(key));
+    return Number.isFinite(saved) && saved >= min && saved <= max ? saved : initial;
+  });
+  const clamp = useCallback((w: number) => Math.round(Math.min(max, Math.max(min, w))), [min, max]);
+  const commit = useCallback((w: number) => store(key, String(w)), [key]);
+  const set = (w: number) => {
+    const next = clamp(w);
+    setWidth(next);
+    return next;
+  };
+  return { width, setWidth: set, commit };
+}
+
+function Resizer({
+  label,
+  width,
+  setWidth,
+  commit,
+  direction,
+}: {
+  label: string;
+  width: number;
+  setWidth: (w: number) => number;
+  commit: (w: number) => void;
+  /** 1 when dragging right widens the panel (left sidebar), -1 for the right panel. */
+  direction: 1 | -1;
+}) {
+  const drag = useRef<{ x: number; start: number; now: number } | null>(null);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      aria-valuenow={width}
+      tabIndex={0}
+      className="resizer"
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { x: e.clientX, start: width, now: width };
+        document.body.classList.add('resizing');
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (d) d.now = setWidth(d.start + direction * (e.clientX - d.x));
+      }}
+      onPointerUp={() => {
+        if (drag.current) commit(drag.current.now);
+        drag.current = null;
+        document.body.classList.remove('resizing');
+      }}
+      onKeyDown={(e) => {
+        const step = e.key === 'ArrowRight' ? 16 : e.key === 'ArrowLeft' ? -16 : 0;
+        if (!step) return;
+        e.preventDefault();
+        commit(setWidth(width + direction * step));
+      }}
+    />
+  );
+}
+
 export function App() {
-  const [view, setView] = useState<ViewId>('hosts');
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [storage, setStorage] = useState<{ ok: boolean; text: string }>({ ok: true, text: 'Checking database…' });
-  const [terminals, setTerminals] = useState<TerminalSessionTab[]>([]);
-  const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
+  const [tabs, setTabs] = useState<EditorTab[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  /** The terminal focused last; the chat follows its host. */
+  const [lastTerminal, setLastTerminal] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
+  const statusRef = useRef<Record<string, SessionStatus>>({});
   const [editRequest, setEditRequest] = useState<{ hostId: string; n: number } | null>(null);
+  const [chatRequest, setChatRequest] = useState<{ host: HostView; n: number } | null>(null);
   const [theme, setTheme] = useState<Theme>(storedTheme);
+  const [sidebarOpen, setSidebarOpen] = useState(() => stored('selai.sidebar') !== 'closed');
+  const [chatOpen, setChatOpen] = useState(() => stored('selai.chat') !== 'closed');
+  const side = usePanelWidth('selai.sidebar.width', 248, 180, 420);
+  const chat = usePanelWidth('selai.chat.width', 380, 300, 640);
 
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'system') delete root.dataset.theme;
     else root.dataset.theme = theme;
-    try {
-      window.localStorage.setItem(THEME_KEY, theme);
-    } catch {
-      // Not saved; the choice still applies until the app closes.
-    }
+    store(THEME_KEY, theme);
   }, [theme]);
+
+  useEffect(() => store('selai.sidebar', sidebarOpen ? 'open' : 'closed'), [sidebarOpen]);
+  useEffect(() => store('selai.chat', chatOpen ? 'open' : 'closed'), [chatOpen]);
+
+  // Panel shortcuts, caught before the terminal sees them. Plain Ctrl+B and Ctrl+L
+  // belong to the shell, so these use Shift.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'e') {
+        e.preventDefault();
+        setSidebarOpen((o) => !o);
+      } else if (key === 'l') {
+        e.preventDefault();
+        setChatOpen(true);
+        window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Request"]')?.focus(), 0);
+      }
+    }
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -87,130 +173,251 @@ export function App() {
     };
   }, []);
 
+  const terminals = tabs.filter((t): t is Extract<EditorTab, { kind: 'terminal' }> => t.kind === 'terminal');
+
+  function activate(key: string) {
+    setActiveKey(key);
+    if (tabs.some((t) => t.key === key && t.kind === 'terminal')) setLastTerminal(key);
+  }
+
   function openTerminal(host: HostView) {
     nextTabNumber += 1;
     const key = `term-${nextTabNumber}`;
     // A tab for this host that is not connected (failed login, refused key, ended
     // session) is replaced in place instead of piling up a second tab.
-    const stale = terminals.find(
-      (t) => t.host.id === host.id && ['failed', 'closed', 'hostkey'].includes(statuses[t.key] ?? ''),
-    );
-    setTerminals((prev) =>
-      stale ? prev.map((t) => (t.key === stale.key ? { key, host } : t)) : [...prev, { key, host }],
-    );
-    setActiveTerminal(key);
-    setView('terminal');
+    // Statuses are read from the ref: a click can land before the re-render that
+    // follows a status change.
+    const tab: EditorTab = { kind: 'terminal', key, host };
+    setTabs((prev) => {
+      const stale = prev.find(
+        (t) =>
+          t.kind === 'terminal' &&
+          t.host.id === host.id &&
+          ['failed', 'closed', 'hostkey'].includes(statusRef.current[t.key] ?? ''),
+      );
+      return stale ? prev.map((t) => (t.key === stale.key ? tab : t)) : [...prev, tab];
+    });
+    setActiveKey(key);
+    setLastTerminal(key);
   }
 
-  function closeTerminal(key: string) {
-    const next = terminals.filter((t) => t.key !== key);
-    setTerminals(next);
+  function openPage(page: PageId) {
+    setTabs((prev) => (prev.some((t) => t.key === page) ? prev : [...prev, { kind: page, key: page }]));
+    setActiveKey(page);
+  }
+
+  function closeTab(key: string) {
+    const index = tabs.findIndex((t) => t.key === key);
+    const next = tabs.filter((t) => t.key !== key);
+    setTabs(next);
     setStatuses((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== key)));
-    if (activeTerminal === key) {
-      setActiveTerminal(next.at(-1)?.key ?? null);
+    if (activeKey === key) {
+      const neighbour = next[Math.min(index, next.length - 1)] ?? null;
+      setActiveKey(neighbour?.key ?? null);
+      if (neighbour?.kind === 'terminal') setLastTerminal(neighbour.key);
+    }
+    if (lastTerminal === key) {
+      setLastTerminal(next.find((t) => t.kind === 'terminal')?.key ?? null);
     }
   }
 
   const onStatus = useCallback((key: string, status: SessionStatus) => {
+    statusRef.current = { ...statusRef.current, [key]: status };
     setStatuses((prev) => (prev[key] === status ? prev : { ...prev, [key]: status }));
   }, []);
 
   function editHost(hostId: string) {
     setEditRequest((prev) => ({ hostId, n: (prev?.n ?? 0) + 1 }));
-    setView('hosts');
+    setSidebarOpen(true);
   }
 
-  const counts: Partial<Record<ViewId, number>> = { terminal: terminals.length };
+  function askAi(host: HostView) {
+    setChatRequest((prev) => ({ host, n: (prev?.n ?? 0) + 1 }));
+    setChatOpen(true);
+  }
+
+  function openLocal() {
+    localHost()
+      .then(openTerminal)
+      .catch(() => setSidebarOpen(true));
+  }
+
+  const active = tabs.find((t) => t.key === activeKey) ?? null;
+  const focusedTerminal = terminals.find((t) => t.key === lastTerminal) ?? null;
+  // Status per host for the explorer: the best state among its open terminals.
+  const sessions: Record<string, SessionStatus> = {};
+  for (const t of terminals) {
+    const s = statuses[t.key] ?? 'connecting';
+    if (sessions[t.host.id] !== 'connected') sessions[t.host.id] = s;
+  }
+
+  const activity = (
+    label: string,
+    icon: ReactNode,
+    pressed: boolean,
+    onClick: () => void,
+    shortcut?: string,
+  ) => (
+    <button
+      type="button"
+      className="activity-btn"
+      aria-label={label}
+      aria-pressed={pressed}
+      title={shortcut ? `${label} (${shortcut})` : label}
+      onClick={onClick}
+    >
+      {icon}
+    </button>
+  );
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">S</span>
-          <span className="brand-text">
-            <span className="brand-name">{info?.name ?? 'Selai'}</span>
-            <br />
-            <span className="brand-sub">SSH workspace with AI</span>
+    <div className="workbench">
+      <div className="workbench-main">
+        <nav className="activitybar" aria-label="Main">
+          <span className="brand-mark" title={info ? `${info.name} ${info.version}` : 'Selai'}>
+            S
           </span>
-        </div>
-        <nav className="nav" role="tablist" aria-label="Main" aria-orientation="vertical">
-          {NAV.map((group) => (
-            <div key={group.section} role="presentation">
-              <div className="nav-section" role="presentation">
-                {group.section}
-              </div>
-              {group.items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  id={`tab-${item.id}`}
-                  className="nav-item"
-                  aria-selected={view === item.id}
-                  aria-controls={`panel-${item.id}`}
-                  onClick={() => setView(item.id)}
-                >
-                  {item.icon}
-                  <span className="label">{item.label}</span>
-                  {counts[item.id] ? <span className="nav-count">{counts[item.id]}</span> : null}
-                </button>
-              ))}
-            </div>
-          ))}
+          {activity('Hosts', <ServerIcon size={20} />, sidebarOpen, () => setSidebarOpen((o) => !o), 'Ctrl+Shift+E')}
+          {activity('History', <ClockIcon size={20} />, active?.kind === 'history', () => openPage('history'))}
+          {activity('Providers', <PlugIcon size={20} />, active?.kind === 'providers', () => openPage('providers'))}
+          <span className="grow" />
+          {activity('AI Agent', <SparkIcon size={20} />, chatOpen, () => setChatOpen((o) => !o), 'Ctrl+Shift+L')}
         </nav>
-        <div className="sidebar-foot">
-          <span className="health" title={storage.text}>
-            <span className="dot" data-status={storage.ok ? 'ok' : 'failed'} />
-            <span>{storage.ok ? 'Local vault ready' : 'Database problem'}</span>
-          </span>
-          <span>{storage.text}</span>
-          <span>{info ? `Version ${info.version}` : ''}</span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm theme-toggle"
-            onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length] ?? 'dark')}
-          >
-            Theme: {theme === 'system' ? 'System' : theme === 'dark' ? 'Dark' : 'Light'}
-          </button>
-        </div>
-      </aside>
 
-      <main className="main">
-        <div role="tabpanel" id="panel-hosts" aria-labelledby="tab-hosts" className="view" hidden={view !== 'hosts'}>
-          <ConnectionsTab onConnect={openTerminal} editRequest={editRequest} />
-        </div>
-        <div role="tabpanel" id="panel-terminal" aria-labelledby="tab-terminal" className="view" hidden={view !== 'terminal'}>
-          {(view === 'terminal' || terminals.length > 0) && (
-            <Suspense fallback={<div className="empty"><span className="spinner spinner-lg" /></div>}>
-              <TerminalTab
-                tabs={terminals}
-                statuses={statuses}
-                activeKey={activeTerminal}
-                visible={view === 'terminal'}
-                onSelect={setActiveTerminal}
-                onClose={closeTerminal}
-                onStatus={onStatus}
-                onNew={() => setView('hosts')}
-                onEditHost={editHost}
-                onNewLocal={() => {
-                  localHost()
-                    .then(openTerminal)
-                    .catch(() => setView('hosts'));
-                }}
-              />
-            </Suspense>
+        <aside className="sidebar" hidden={!sidebarOpen} style={{ width: side.width }}>
+          <HostsSidebar onConnect={openTerminal} onAskAi={askAi} sessions={sessions} editRequest={editRequest} />
+        </aside>
+        {sidebarOpen && <Resizer label="Resize sidebar" direction={1} {...side} />}
+
+        <main className="editor">
+          {tabs.length > 0 && (
+            <div role="tablist" aria-label="Open tabs" className="editor-tabs">
+              {tabs.map((tab) => {
+                const title = tab.kind === 'terminal' ? tab.host.label : PAGE_TITLES[tab.kind];
+                return (
+                  <span key={tab.key} className="editor-tab" data-active={tab.key === activeKey}>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={tab.key === activeKey}
+                      onClick={() => activate(tab.key)}
+                      onAuxClick={(e) => e.button === 1 && closeTab(tab.key)}
+                      title={tab.kind === 'terminal' ? `${tab.host.username}@${tab.host.hostname}` : title}
+                    >
+                      {tab.kind === 'terminal' ? (
+                        <span className="dot" data-status={statuses[tab.key] ?? 'connecting'} />
+                      ) : tab.kind === 'history' ? (
+                        <ClockIcon size={13} />
+                      ) : (
+                        <PlugIcon size={13} />
+                      )}
+                      <span>{title}</span>
+                    </button>
+                    <button type="button" className="icon-btn" aria-label={`Close ${title}`} onClick={() => closeTab(tab.key)}>
+                      <CloseIcon size={12} />
+                    </button>
+                  </span>
+                );
+              })}
+              <button type="button" className="icon-btn add" aria-label="New local terminal" title="New local terminal" onClick={openLocal}>
+                <PlusIcon size={14} />
+              </button>
+            </div>
           )}
-        </div>
-        <div role="tabpanel" id="panel-agent" aria-labelledby="tab-agent" className="view" hidden={view !== 'agent'}>
-          <AgentPanel onOpenProviders={() => setView('providers')} onOpenHosts={() => setView('hosts')} />
-        </div>
-        <div role="tabpanel" id="panel-providers" aria-labelledby="tab-providers" className="view" hidden={view !== 'providers'}>
-          <ProvidersPanel />
-        </div>
-        <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" className="view" hidden={view !== 'history'}>
-          <HistoryTab visible={view === 'history'} />
-        </div>
-      </main>
+          <div className="editor-body">
+            {tabs.length === 0 && (
+              <Welcome onLocal={openLocal} onHosts={() => setSidebarOpen(true)} onChat={() => setChatOpen(true)} />
+            )}
+            {terminals.length > 0 && (
+              <Suspense fallback={<div className="welcome"><span className="spinner spinner-lg" /></div>}>
+                <TerminalStack
+                  tabs={terminals}
+                  activeKey={activeKey}
+                  visible={active?.kind === 'terminal'}
+                  onClose={closeTab}
+                  onStatus={onStatus}
+                  onEditHost={editHost}
+                />
+              </Suspense>
+            )}
+            {tabs.some((t) => t.kind === 'history') && (
+              <div className="editor-page" hidden={active?.kind !== 'history'}>
+                <HistoryTab visible={active?.kind === 'history'} />
+              </div>
+            )}
+            {tabs.some((t) => t.kind === 'providers') && (
+              <div className="editor-page" hidden={active?.kind !== 'providers'}>
+                <ProvidersPanel />
+              </div>
+            )}
+          </div>
+        </main>
+
+        {chatOpen && <Resizer label="Resize chat" direction={-1} {...chat} />}
+        <aside className="chatbar" hidden={!chatOpen} style={{ width: chat.width }}>
+          <AgentPanel
+            activeHost={focusedTerminal?.host ?? null}
+            contextRequest={chatRequest}
+            onOpenProviders={() => openPage('providers')}
+            onOpenHosts={() => setSidebarOpen(true)}
+            onClose={() => setChatOpen(false)}
+          />
+        </aside>
+      </div>
+
+      <footer className="statusbar">
+        <span className="status-item" title={storage.text} data-tone={storage.ok ? undefined : 'danger'}>
+          <span className="dot" data-status={storage.ok ? 'ok' : 'failed'} />
+          {storage.ok ? 'Vault ready' : storage.text}
+        </span>
+        {focusedTerminal && (
+          <span className="status-item">
+            <TerminalIcon size={12} />
+            {focusedTerminal.host.label} · {statuses[focusedTerminal.key] ?? 'connecting'}
+          </span>
+        )}
+        <span className="grow" />
+        <button
+          type="button"
+          className="status-item status-btn"
+          onClick={() => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length] ?? 'dark')}
+        >
+          Theme: {theme === 'system' ? 'System' : theme === 'dark' ? 'Dark' : 'Light'}
+        </button>
+        <span className="status-item">{info ? `Selai ${info.version}` : ''}</span>
+      </footer>
+    </div>
+  );
+}
+
+function Welcome({ onLocal, onHosts, onChat }: { onLocal: () => void; onHosts: () => void; onChat: () => void }) {
+  return (
+    <div className="welcome">
+      <div className="welcome-inner">
+        <h1>Selai</h1>
+        <p className="muted">SSH workspace with an AI that asks before it changes anything.</p>
+        <h2>Start</h2>
+        <ul className="welcome-actions">
+          <li>
+            <button type="button" onClick={onLocal}>
+              <TerminalIcon size={15} /> Open a terminal on this computer
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={onHosts}>
+              <ServerIcon size={15} /> Connect to an SSH host
+              <kbd>Ctrl+Shift+E</kbd>
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={onChat}>
+              <SparkIcon size={15} /> Ask the AI
+              <kbd>Ctrl+Shift+L</kbd>
+            </button>
+          </li>
+        </ul>
+        <p className="muted small">The chat works on the terminal you have open. Use @ to ask about another host.</p>
+      </div>
     </div>
   );
 }

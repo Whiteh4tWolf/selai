@@ -70,10 +70,10 @@ interface Turn {
 }
 
 const SUGGESTIONS = [
-  { title: 'Check disk usage', detail: 'needs a server (@ or pin)', text: 'check disk usage and the largest directories' },
-  { title: 'Is nginx healthy?', detail: 'needs a server (@ or pin)', text: 'is nginx healthy? check the service and recent errors' },
-  { title: 'Explain a config', detail: 'plain discussion, nothing runs', text: 'Explain what this nginx config does:\n' },
-  { title: 'Plan a change', detail: 'plain discussion, nothing runs', text: 'Help me plan a zero-downtime PostgreSQL major upgrade.' },
+  { title: 'Check disk usage', text: 'check disk usage and the largest directories' },
+  { title: 'Is nginx healthy?', text: 'is nginx healthy? check the service and recent errors' },
+  { title: 'Explain a config', text: 'Explain what this nginx config does:\n' },
+  { title: 'Plan a change', text: 'Help me plan a zero-downtime PostgreSQL major upgrade.' },
 ];
 
 let nextTurnId = 0;
@@ -81,15 +81,27 @@ let nextTurnId = 0;
 interface Props {
   onOpenProviders?: () => void;
   onOpenHosts?: () => void;
+  onClose?: () => void;
+  /** The host of the terminal in focus. An unpinned chat follows it. */
+  activeHost?: HostView | null;
+  /** Another view asked to use this host in the chat (pins it). */
+  contextRequest?: { host: HostView; n: number } | null;
 }
 
-export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
+export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost = null, contextRequest = null }: Props = {}) {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [providerId, setProviderId] = useState('');
-  /** The server for the message being written: set by an `@` mention or the pin button. */
+  /** A server mentioned with `@` in the message being written: this message only. */
   const [host, setHost] = useState<HostView | null>(null);
-  /** The pinned server. It only stands in for a mention: the pin button writes `@label`. */
-  const [pinnedId, setPinnedId] = useState<string | null>(null);
+  /**
+   * The chat's server: messages without a mention go there, so the operator does not
+   * mention it every time. It follows the terminal in focus unless pinned. The model
+   * decides per message whether it needs the server at all; a question it can answer
+   * directly runs nothing.
+   */
+  const [contextId, setContextId] = useState<string | null>(null);
+  const [pinned, setPinned] = useState(false);
+  const [contextMenu, setContextMenu] = useState(false);
   const [targets, setTargets] = useState<HostView[]>([]);
   const [draftMention, setDraftMention] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
@@ -148,7 +160,11 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
     loadTargets();
     window.addEventListener(HOSTS_CHANGED, loadTargets);
     preferencesGet()
-      .then((prefs) => active && setPinnedId(prefs.pinnedHostId || null))
+      .then((prefs) => {
+        if (!active || !prefs.pinnedHostId) return;
+        setContextId(prefs.pinnedHostId);
+        setPinned(true);
+      })
       .catch(() => undefined);
     return () => {
       active = false;
@@ -172,6 +188,39 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
   }, [mention]);
 
   useEffect(() => {
+    if (!contextMenu) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target instanceof Element && e.target.closest('.context-row'))) setContextMenu(false);
+    };
+    const esc = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && setContextMenu(false);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [contextMenu]);
+
+  // Follow the terminal in focus, unless the operator pinned a server. Adjusted while
+  // rendering, so the chip never shows a stale server for a frame.
+  const activeId = activeHost?.id ?? null;
+  const [seenActive, setSeenActive] = useState<string | null>(null);
+  if (activeId !== seenActive) {
+    setSeenActive(activeId);
+    if (!pinned && activeId) setContextId(activeId);
+  }
+  const [seenRequest, setSeenRequest] = useState(0);
+  if (contextRequest && contextRequest.n !== seenRequest) {
+    setSeenRequest(contextRequest.n);
+    setContextId(contextRequest.host.id);
+    setPinned(true);
+  }
+  useEffect(() => {
+    // Remember a server pinned from another view.
+    if (contextRequest) preferencesSet({ pinnedHostId: contextRequest.host.id }).catch(() => undefined);
+  }, [contextRequest]);
+
+  useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [turns]);
@@ -192,17 +241,6 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
       return;
     }
     setMention(m[2] ?? '');
-  }
-
-  /** The pin button: writes the pinned server's mention, exactly as the picker would. */
-  function mentionPinned() {
-    if (!pinnedTarget) return;
-    const text = `@${pinnedTarget.label}`;
-    setHost(pinnedTarget);
-    setDraftMention(text);
-    setPrompt((p) => (p.trim() ? `${p.replace(/\s*$/, '')} ${text} ` : `${text} `));
-    setMention(null);
-    textareaRef.current?.focus();
   }
 
   function pickHost(h: HostView) {
@@ -266,17 +304,40 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
 
   const provider = providers.find((p) => p.id === providerId);
   const verified = provider?.toolCalling.status === 'verified';
-  // The server for this message: a mention, else the pinned server, else none
+  // An archived or deleted server drops out of the list and so out of the chat.
+  const contextHost =
+    targets.find((t) => t.id === contextId) ??
+    (activeHost?.id === contextId ? activeHost : null) ??
+    (contextRequest?.host.id === contextId ? contextRequest.host : null);
+  // The server for this message: a mention, else the chat's server, else none
   // (plain discussion, which any provider can answer). A server needs tool calling.
-  const pinnedTarget = targets.find((t) => t.id === pinnedId) ?? null;
-  // Only a mention (typed, picked, or from the pin button) selects a server for a message.
-  const target = host;
+  const target = host ?? contextHost;
   const canSend = !running && provider !== undefined && (target === null || verified) && prompt.trim().length > 0;
 
-  function pinServer(id: string) {
-    setPinnedId(id || null);
-    // Remembered across restarts. A failed save keeps the choice for this session.
-    preferencesSet({ pinnedHostId: id }).catch(() => undefined);
+  /** Pinned servers are remembered across restarts; a failed save keeps the choice for now. */
+  function rememberPin(id: string | null) {
+    preferencesSet({ pinnedHostId: id ?? '' }).catch(() => undefined);
+  }
+
+  /** Choosing a server by hand pins it, so switching terminals does not change it. */
+  function chooseContext(id: string | null) {
+    setContextMenu(false);
+    setContextId(id);
+    setPinned(id !== null);
+    rememberPin(id);
+    textareaRef.current?.focus();
+  }
+
+  function togglePin() {
+    if (pinned) {
+      setPinned(false);
+      rememberPin(null);
+      // Back to following the terminal in focus.
+      if (activeHost) setContextId(activeHost.id);
+    } else if (contextId) {
+      setPinned(true);
+      rememberPin(contextId);
+    }
   }
 
   const updateTurn = (id: number, change: (t: Turn) => Turn) =>
@@ -355,7 +416,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
     const server = target;
     setTurns((prev) => [...prev, turn]);
     setPrompt('');
-    // A mention applies to this message only. The pinned server stays.
+    // A mention applies to this message only. The chat's server stays.
     setDraftMention(null);
     setHost(null);
     setMention(null);
@@ -401,54 +462,27 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
 
   return (
     <section aria-label="AI Agent" className="chat">
-      <header className="chat-head">
-        <SparkIcon size={18} style={{ color: 'var(--accent)' }} />
-        <h1>AI Agent</h1>
+      <header className="panel-head">
+        <h2>AI Agent</h2>
         <span className="grow" />
-        <select
-          aria-label="Pinned server"
-          className="server-select"
-          title="Server for the pin button. Messages run on a server only when mentioned with @."
-          value={pinnedTarget?.id ?? ''}
-          onChange={(e) => pinServer(e.target.value)}
-        >
-          <option value="">Plain chat · no server</option>
-          {targets.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.kind === 'local' ? 'This computer' : t.label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Provider"
-          value={providerId}
-          onChange={(e) => chooseProvider(e.target.value)}
-          disabled={running}
-        >
-          {providers.length === 0 && <option value="">No providers configured</option>}
-          {providers.length > 0 && providerId === '' && (
-            <option value="" disabled>
-              Choose a provider
-            </option>
-          )}
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} · {p.modelId}
-              {p.toolCalling.status === 'verified' ? '' : ' (chat only)'}
-            </option>
-          ))}
-        </select>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={verifyAudit}>
-          <ShieldIcon size={14} /> Verify audit log
-        </button>
         <button
           type="button"
-          className="btn btn-sm"
+          className="icon-btn"
+          aria-label="New chat"
+          title="New chat"
           onClick={() => setTurns([])}
           disabled={running || turns.length === 0}
         >
-          <PlusIcon size={14} /> New chat
+          <PlusIcon size={15} />
         </button>
+        <button type="button" className="icon-btn" aria-label="Verify audit log" title="Verify audit log" onClick={verifyAudit}>
+          <ShieldIcon size={14} />
+        </button>
+        {onClose && (
+          <button type="button" className="icon-btn" aria-label="Close chat" title="Close chat (Ctrl+Shift+L to open)" onClick={onClose}>
+            <CloseIcon size={14} />
+          </button>
+        )}
       </header>
 
       <div className="chat-scroll" ref={scrollRef}>
@@ -467,9 +501,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             </span>
             <h2>How can I help?</h2>
             <p>
-              Ask anything to discuss it. To work on a server, mention it with <kbd>@</kbd>, or use the
-              pin button for the server chosen in the header. Read-only checks run on their own; any other
-              command waits for your approval.
+              {contextHost
+                ? `Ask about ${contextHost.label}, or just discuss. Commands run only when an answer needs them; anything beyond a read-only check waits for your approval.`
+                : 'Ask anything to discuss it. Open a terminal or choose a server below to work on it; @ asks about another host for one message.'}
             </p>
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
@@ -483,7 +517,6 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                   }}
                 >
                   {s.title}
-                  <small>{s.detail}</small>
                 </button>
               ))}
             </div>
@@ -502,7 +535,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                   <div className="ai-body">
                     <div className="ai-meta">
                       <span>Selai</span>
-                      {turn.hostLabel && (
+                      {turn.hostLabel && turn.items.some((i) => i.kind === 'tool' || i.kind === 'approval') && (
                         <span className="host-tag" title="Commands in this reply ran on this host">
                           <TerminalIcon size={11} /> {turn.hostLabel}
                         </span>
@@ -547,8 +580,13 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             <span className="grow">
               {providers.length === 0
                 ? 'Add an AI provider first.'
-                : 'Working on a server needs a provider whose tool calling test passed. Run Test on the Providers page, or unpin the server to just chat.'}
+                : 'Working on a server needs a provider whose tool calling test passed.'}
             </span>
+            {providers.length > 0 && host === null && contextHost && (
+              <button type="button" className="btn btn-sm" onClick={() => chooseContext(null)}>
+                Chat without server
+              </button>
+            )}
             {onOpenProviders && (
               <button type="button" className="btn btn-sm" onClick={onOpenProviders}>
                 Open Providers
@@ -579,7 +617,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => pickHost(h)}
                   >
-                    <HostAvatar label={h.label} size={14} />
+                    <TargetAvatar host={h} />
                     <span>
                       {h.label}
                       <small>{h.kind === 'local' ? 'This machine · local shell' : `${h.username}@${h.hostname}`}</small>
@@ -589,19 +627,10 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
               ))}
             </ul>
           )}
-          <textarea
-            ref={textareaRef}
-            aria-label="Request"
-            value={prompt}
-            onChange={(e) => onPromptChange(e.target.value)}
-            onKeyDown={onPromptKeyDown}
-            rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
-            placeholder={target ? `What should I do on ${target.label}?` : 'Message Selai…'}
-          />
-          <div className="composer-bar">
+          <div className="context-row">
             {host ? (
-              <span className="target-chip" title={`${host.username}@${host.hostname}`}>
-                <TerminalIcon size={13} />
+              <span className="target-chip" data-kind="mention" title={`${host.username}@${host.hostname}`}>
+                <AtIcon size={12} />
                 {host.label}
                 <small>this message</small>
                 <button type="button" aria-label={`Remove ${host.label}`} onClick={clearTarget}>
@@ -609,20 +638,110 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                 </button>
               </span>
             ) : null}
-            {pinnedTarget && !host && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm icon-only"
-                aria-label={`Send to ${pinnedTarget.label}`}
-                title={`Send to ${pinnedTarget.label}`}
-                onClick={mentionPinned}
+            {contextHost ? (
+              <span
+                className="target-chip"
+                data-muted={host ? 'true' : undefined}
+                title={host ? `This message goes to ${host.label} instead` : `${contextHost.username}@${contextHost.hostname}`}
               >
-                <PinIcon size={14} />
-              </button>
+                <button
+                  type="button"
+                  className="chip-main"
+                  aria-label={`Chat server: ${contextHost.label}. Change`}
+                  aria-haspopup="menu"
+                  aria-expanded={contextMenu}
+                  onClick={() => setContextMenu((o) => !o)}
+                >
+                  <TerminalIcon size={12} />
+                  {contextHost.label}
+                </button>
+                <button
+                  type="button"
+                  className="chip-pin"
+                  aria-pressed={pinned}
+                  aria-label={pinned ? `Unpin ${contextHost.label}` : `Pin ${contextHost.label}`}
+                  title={pinned ? 'Pinned: stays when you switch terminals. Click to follow the terminal again.' : 'Follows the terminal in focus. Click to keep this server.'}
+                  onClick={togglePin}
+                >
+                  <PinIcon size={12} />
+                </button>
+                <button type="button" aria-label={`Chat without ${contextHost.label}`} title="Chat without a server" onClick={() => chooseContext(null)}>
+                  <CloseIcon size={11} />
+                </button>
+              </span>
+            ) : (
+              !host && (
+                <button
+                  type="button"
+                  className="target-chip"
+                  data-empty="true"
+                  aria-haspopup="menu"
+                  aria-expanded={contextMenu}
+                  onClick={() => setContextMenu((o) => !o)}
+                >
+                  <PlusIcon size={12} /> Server
+                </button>
+              )
             )}
-            <button type="button" className="btn btn-ghost btn-sm" onClick={insertAt}>
-              <AtIcon size={14} /> {host ? 'Mention another' : 'Mention host'}
+            {contextMenu && (
+              <ul className="mention-pop context-pop" role="menu" aria-label="Chat server">
+                <li className="head">Chat server</li>
+                <li>
+                  <button type="button" role="menuitemradio" aria-checked={contextHost === null} onClick={() => chooseContext(null)}>
+                    <SparkIcon size={14} />
+                    <span>
+                      No server
+                      <small>plain chat, nothing runs</small>
+                    </span>
+                  </button>
+                </li>
+                {targets.map((t) => (
+                  <li key={t.id}>
+                    <button type="button" role="menuitemradio" aria-checked={contextHost?.id === t.id} onClick={() => chooseContext(t.id)}>
+                      <TargetAvatar host={t} />
+                      <span>
+                        {t.label}
+                        <small>{t.kind === 'local' ? 'local shell' : `${t.username}@${t.hostname}`}</small>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <textarea
+            ref={textareaRef}
+            aria-label="Request"
+            value={prompt}
+            onChange={(e) => onPromptChange(e.target.value)}
+            onKeyDown={onPromptKeyDown}
+            rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
+            placeholder={target ? `Ask about ${target.label}, or anything…` : 'Message Selai…'}
+          />
+          <div className="composer-bar">
+            <button type="button" className="icon-btn" aria-label="Mention a host" title="Ask about another host for this message (@)" onClick={insertAt}>
+              <AtIcon size={14} />
             </button>
+            <select
+              aria-label="Provider"
+              className="model-select"
+              value={providerId}
+              onChange={(e) => chooseProvider(e.target.value)}
+              disabled={running}
+            >
+              {providers.length === 0 && <option value="">No providers</option>}
+              {providers.length > 0 && providerId === '' && (
+                <option value="" disabled>
+                  Choose a provider
+                </option>
+              )}
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.modelId}
+                  {p.toolCalling.status === 'verified' ? '' : ' (chat only)'}
+                </option>
+              ))}
+            </select>
             <span className="grow" />
             {running ? (
               <button type="button" className="btn btn-danger send-btn" aria-label="Stop" title="Stop" onClick={stop} disabled={!runningTask}>
@@ -643,9 +762,11 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
           </div>
         </div>
         <p className="composer-note">
-          {target
-            ? `Runs on ${target.label} for this message. Commands other than read-only checks wait for your approval.`
-            : 'Plain chat: nothing runs on any server. Mention a server with @ to work on it.'}
+          {host
+            ? `This message goes to ${host.label}. Changes wait for your approval.`
+            : contextHost
+              ? `Working on ${contextHost.label}: commands run only when needed, and changes wait for your approval.`
+              : 'Plain chat: nothing runs on any server.'}
         </p>
       </div>
 
@@ -671,6 +792,15 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
         />
       )}
     </section>
+  );
+}
+
+function TargetAvatar({ host }: { host: HostView }) {
+  if (host.kind !== 'local') return <HostAvatar label={host.label} size={13} />;
+  return (
+    <span className="avatar local-avatar">
+      <TerminalIcon size={13} />
+    </span>
   );
 }
 

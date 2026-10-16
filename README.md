@@ -49,11 +49,17 @@ for it (or uses the saved one, or the SSH login password of a password host). It
 goes only to sudo on that host; the AI never sees it. This works for hosts that
 sign in with a password and with a key.
 
-"This computer" is built in: open a local terminal from Hosts or the Terminal
-view, or mention `@This computer` in the AI Agent to work on your own machine with
-the same approvals.
+"This computer" is built in: open a local terminal from the host list, or use it
+as the chat's server to work on your own machine with the same approvals.
 
-The interface is dark by default, with light and system themes in the sidebar.
+The window is laid out like a code editor: the host explorer on the left
+(Ctrl+Shift+E), terminals and the History and Providers pages as tabs in the
+middle, and the AI chat on the right (Ctrl+Shift+L). The chat works on the server
+of the terminal in focus, so you don't mention it in every message. Pin it to
+keep it when you switch terminals, pick another server or "No server" from its
+chip, or mention `@host` to send one message elsewhere. The AI runs a command
+only when the answer depends on the server; it answers a plain question without
+running anything. The theme (dark, light, system) is in the status bar.
 
 ## Install
 
