@@ -32,10 +32,10 @@ import {
   PlusIcon,
   SendIcon,
   ShieldIcon,
-  AssistantIcon,
   StopIcon,
   TerminalIcon,
 } from '../ui/icons';
+import { SelaiLogo } from '../ui/SelaiLogo';
 import { applyEvent, isTerminal, setApprovalState, type TranscriptItem } from './agentTranscript';
 import { PROVIDERS_CHANGED } from './ProvidersPanel';
 
@@ -463,7 +463,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   return (
     <section aria-label="AI Agent" className="chat">
       <header className="panel-head">
-        <AssistantIcon size={16} />
+        <SelaiLogo size={22} />
         <h2>Assistant</h2>
         <span className="grow" />
         <button
@@ -498,7 +498,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
         {turns.length === 0 ? (
           <div className="chat-empty">
             <span className="empty-icon">
-              <AssistantIcon size={26} />
+              <SelaiLogo size={44} />
             </span>
             <h2>What are you working on?</h2>
             <p>
@@ -531,18 +531,17 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                   <div className="bubble">{highlight(turn.prompt, turn.mentionText)}</div>
                 </li>
                 <li className="turn-ai">
-                  <span className="ai-avatar">
-                    <AssistantIcon size={15} />
+                  <span className="ai-avatar" role="img" aria-label="Selai assistant">
+                    <SelaiLogo size={26} />
                   </span>
                   <div className="ai-body">
-                    <div className="ai-meta">
-                      <span>Selai</span>
-                      {turn.hostLabel && turn.items.some((i) => i.kind === 'tool' || i.kind === 'approval') && (
+                    {turn.hostLabel && turn.items.some((i) => i.kind === 'tool' || i.kind === 'approval') && (
+                      <div className="ai-meta">
                         <span className="host-tag" title="Commands in this reply ran on this host">
                           <TerminalIcon size={11} /> {turn.hostLabel}
                         </span>
-                      )}
-                    </div>
+                      </div>
+                    )}
                     {turn.items.map((item, i) => (
                       <TranscriptRow key={i} item={item} items={turn.items} onDecide={decide} />
                     ))}
@@ -691,7 +690,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                 <li className="head">Chat server</li>
                 <li>
                   <button type="button" role="menuitemradio" aria-checked={contextHost === null} onClick={() => chooseContext(null)}>
-                    <AssistantIcon size={14} />
+                    <SelaiLogo size={18} />
                     <span>
                       No server
                       <small>plain chat, nothing runs</small>
@@ -719,7 +718,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
             onChange={(e) => onPromptChange(e.target.value)}
             onKeyDown={onPromptKeyDown}
             rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
-            placeholder={target ? `Ask about ${target.label}, or anything…` : 'Message Selai…'}
+            placeholder={target ? `Ask about ${target.label}, or anything…` : 'Ask anything…'}
           />
           <div className="composer-bar">
             <button type="button" className="icon-btn" aria-label="Mention a host" title="Ask about another host for this message (@)" onClick={insertAt}>

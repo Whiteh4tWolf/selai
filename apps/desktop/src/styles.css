@@ -200,12 +200,6 @@ body.resizing * {
   flex: 1;
 }
 
-.brand-mark {
-  width: 24px;
-  height: 24px;
-  flex: none;
-}
-
 .activity-btn {
   position: relative;
   display: flex;
@@ -1487,17 +1481,15 @@ details.advanced > .form-section {
 
 .turn-ai {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
 }
 
 .ai-avatar {
-  display: none;
+  display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--surface-3);
-  color: var(--accent);
+  width: 26px;
+  height: 26px;
 }
 
 .ai-body {
@@ -1605,7 +1597,7 @@ details.advanced > .form-section {
 }
 
 .chat-empty .empty-icon {
-  display: none;
+  background: none;
 }
 
 .chat-empty h2 {
@@ -2727,10 +2719,6 @@ option {
 .workspace-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 19px;
-  font-weight: 600;
-  letter-spacing: -0.05em;
 }
 
 .workspace-divider {

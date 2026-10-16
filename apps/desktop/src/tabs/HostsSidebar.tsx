@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { describeError, HOSTS_CHANGED, hostArchive, hostList, localHost, type HostView } from '../ipc';
 import { HostAvatar } from '../ui/HostAvatar';
-import { ArchiveIcon, ChevronIcon, EditIcon, PlusIcon, RefreshIcon, SearchIcon, AssistantIcon, TerminalIcon } from '../ui/icons';
+import { ArchiveIcon, ChevronIcon, EditIcon, PlusIcon, RefreshIcon, SearchIcon, TerminalIcon } from '../ui/icons';
+import { SelaiLogo } from '../ui/SelaiLogo';
 import { HostForm } from './HostForm';
 import type { SessionStatus } from './TerminalTab';
 
@@ -239,7 +240,7 @@ function HostRow({
       <span className="tree-tools">
         {onAskAi && (
           <button type="button" className="icon-btn" aria-label={`Use ${host.label} in chat`} title="Use in chat" onClick={() => onAskAi(host)}>
-            <AssistantIcon size={13} />
+            <SelaiLogo size={18} />
           </button>
         )}
         {onEdit && (

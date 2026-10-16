@@ -5,7 +5,8 @@ import { HostsSidebar } from './tabs/HostsSidebar';
 import { ProvidersPanel } from './tabs/ProvidersPanel';
 import { appInfo, describeError, localHost, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
-import { ClockIcon, CloseIcon, PlugIcon, PlusIcon, ServerIcon, AssistantIcon, TerminalIcon } from './ui/icons';
+import { ClockIcon, CloseIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon } from './ui/icons';
+import { SelaiLogo } from './ui/SelaiLogo';
 
 // xterm.js is large; load it only when a terminal is first needed.
 const TerminalStack = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalStack })));
@@ -279,9 +280,8 @@ export function App() {
   return (
     <div className="workbench">
       <header className="workspace-head">
-        <div className="workspace-brand">
-          <img className="brand-mark" src="/selai-mark.svg" alt="" />
-          <span>selai</span>
+        <div className="workspace-brand" role="img" aria-label="Selai">
+          <SelaiLogo size={28} />
         </div>
         <span className="workspace-divider" aria-hidden="true" />
         <span className="workspace-title">Workspace</span>
@@ -298,7 +298,7 @@ export function App() {
           {activity('History', <ClockIcon size={20} />, active?.kind === 'history', () => openPage('history'))}
           {activity('Providers', <PlugIcon size={20} />, active?.kind === 'providers', () => openPage('providers'))}
           <span className="grow" />
-          {activity('Assistant', <AssistantIcon size={20} />, chatOpen, () => setChatOpen((o) => !o), 'Ctrl+Shift+L')}
+          {activity('Assistant', <SelaiLogo size={26} />, chatOpen, () => setChatOpen((o) => !o), 'Ctrl+Shift+L')}
         </nav>
 
         <aside className="sidebar" hidden={!sidebarOpen} style={{ width: side.width }}>
@@ -454,7 +454,7 @@ function Welcome({ onLocal, onHosts, onChat, onProviders }: {
           </li>
           <li>
             <button type="button" onClick={onChat}>
-              <span className="welcome-action-icon"><AssistantIcon size={19} /></span>
+              <span className="welcome-action-icon"><SelaiLogo size={24} /></span>
               <span className="welcome-action-copy">
                 <strong>Ask the AI</strong>
                 <small>Investigate an issue or think through a change.</small>
