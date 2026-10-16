@@ -17,6 +17,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 2,
         sql: include_str!("../migrations/0002_invariants.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("../migrations/0003_history.sql"),
+    },
 ];
 
 /// Applies every migration newer than the database's recorded version.

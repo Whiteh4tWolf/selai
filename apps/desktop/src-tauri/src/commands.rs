@@ -13,6 +13,9 @@ use crate::{
         ProviderTestView, ProviderView, StorageStatus, TemplateView, TerminalEvent, TrustMode,
         TrustView,
     },
+    history_service::{
+        AiPreferences, AiPreferencesInput, ExportResult, HistoryFilterInput, PurgeResult, TaskView,
+    },
     service::{EventSink, Services},
     AppState,
 };
@@ -210,4 +213,61 @@ pub async fn provider_test(
     kind: String,
 ) -> Result<ProviderTestView, CommandError> {
     services(&state)?.provider_test(&id, &kind).await
+}
+
+#[tauri::command]
+pub fn history_query(
+    state: State<'_, AppState>,
+    host_id: String,
+    filter: Option<HistoryFilterInput>,
+    cursor: Option<String>,
+) -> Result<Page<ExecutionView>, CommandError> {
+    services(&state)?.history_query(&host_id, &filter.unwrap_or_default(), cursor)
+}
+
+#[tauri::command]
+pub fn history_tasks(
+    state: State<'_, AppState>,
+    host_id: String,
+    cursor: Option<String>,
+) -> Result<Page<TaskView>, CommandError> {
+    services(&state)?.history_tasks(&host_id, cursor)
+}
+
+#[tauri::command]
+pub fn task_timeline(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Vec<ExecutionView>, CommandError> {
+    services(&state)?.task_timeline(&task_id)
+}
+
+#[tauri::command]
+pub fn history_export(
+    state: State<'_, AppState>,
+    host_id: String,
+    filter: Option<HistoryFilterInput>,
+) -> Result<ExportResult, CommandError> {
+    services(&state)?.history_export(&host_id, &filter.unwrap_or_default())
+}
+
+#[tauri::command]
+pub fn history_purge_output(
+    state: State<'_, AppState>,
+    host_id: String,
+) -> Result<PurgeResult, CommandError> {
+    services(&state)?.history_purge_output(&host_id)
+}
+
+#[tauri::command]
+pub fn preferences_get(state: State<'_, AppState>) -> Result<AiPreferences, CommandError> {
+    services(&state)?.preferences_get()
+}
+
+#[tauri::command]
+pub fn preferences_set(
+    state: State<'_, AppState>,
+    input: AiPreferencesInput,
+) -> Result<AiPreferences, CommandError> {
+    services(&state)?.preferences_set(input)
 }

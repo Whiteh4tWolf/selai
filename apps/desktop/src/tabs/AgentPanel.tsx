@@ -7,6 +7,8 @@ import {
   describeError,
   historyList,
   hostList,
+  preferencesGet,
+  preferencesSet,
   providerList,
   type ExecutionView,
   type HostView,
@@ -39,12 +41,16 @@ export function AgentPanel() {
 
   useEffect(() => {
     let active = true;
-    providerList()
-      .then((page) => {
+    // The remembered provider wins when it is still verified; otherwise the first
+    // verified one. A missing preference is not an error.
+    Promise.all([providerList(), Promise.resolve().then(preferencesGet).catch(() => null)])
+      .then(([page, prefs]) => {
         if (!active) return;
         setProviders(page.items);
-        const verified = page.items.find((p) => p.toolCalling.status === 'verified');
-        setProviderId((current) => current || verified?.id || '');
+        const usable = (id: string | null | undefined) =>
+          page.items.find((p) => p.id === id && p.toolCalling.status === 'verified')?.id;
+        const firstVerified = page.items.find((p) => p.toolCalling.status === 'verified')?.id;
+        setProviderId((current) => current || usable(prefs?.lastProviderId) || firstVerified || '');
       })
       .catch((err: unknown) => active && setError(describeError(err)));
     return () => {
@@ -113,6 +119,13 @@ export function AgentPanel() {
     setHost({ hostId: h.id, label: h.label });
     setPrompt((p) => p.replace(MENTION, '$1'));
     setMention(null);
+  }
+
+  function chooseProvider(id: string) {
+    setProviderId(id);
+    // Remember the choice for the next start. A failed save is not shown; the
+    // selection still applies to this session.
+    preferencesSet({ lastProviderId: id }).catch(() => undefined);
   }
 
   const verified = providers.find((p) => p.id === providerId)?.toolCalling.status === 'verified';
@@ -229,7 +242,7 @@ export function AgentPanel() {
 
         <label>
           Provider
-          <select value={providerId} onChange={(e) => setProviderId(e.target.value)} disabled={running}>
+          <select value={providerId} onChange={(e) => chooseProvider(e.target.value)} disabled={running}>
             {providers.length === 0 && <option value="">No providers configured</option>}
             {providers.map((p) => (
               <option key={p.id} value={p.id} disabled={p.toolCalling.status !== 'verified'}>

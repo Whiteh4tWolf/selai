@@ -14,8 +14,10 @@ use selai_policy::{
 };
 use selai_secrets::SecretValue;
 use selai_ssh::{ExecEnd, ExecOutput, SshError};
-use selai_storage::{ApprovalDecision, ExecutionOutcome, NewApproval, NewExecution, NewTask};
-use serde_json::json;
+use selai_storage::{
+    ApprovalDecision, ExecutionOutcome, NewApproval, NewExecution, NewTask, StorageError,
+};
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -179,6 +181,7 @@ where
     ];
     let tools = tool_definitions();
     let mut steps: u32 = 0;
+    let mut seq: u32 = 0;
 
     loop {
         if cancel.is_cancelled() {
@@ -221,6 +224,24 @@ where
             Ok(o) => o,
             Err(e) => return model_failure(&ctx, &e),
         };
+        let state = if outcome.tool_calls.is_empty() {
+            "completed"
+        } else {
+            "tool_calls"
+        };
+        if let Err(e) = checkpoint(
+            &ctx,
+            &mut seq,
+            "model_turn",
+            state,
+            json!({ "tool_calls": outcome.tool_calls.len() }),
+        ) {
+            return fail(
+                &ctx,
+                "AUDIT_WRITE_FAILED",
+                &format!("the checkpoint could not be recorded: {e}"),
+            );
+        }
 
         if outcome.tool_calls.is_empty() {
             return complete(&ctx, outcome.text);
@@ -247,12 +268,28 @@ where
                 .await
             };
             match reply {
-                Ok(r) => messages.push(Message::ToolResult {
-                    call_id: call.call_id.clone(),
-                    name: call.name.clone(),
-                    content: r.content,
-                    is_error: r.is_error,
-                }),
+                Ok(r) => {
+                    let state = if r.is_error { "error" } else { "completed" };
+                    if let Err(e) = checkpoint(
+                        &ctx,
+                        &mut seq,
+                        "tool_result",
+                        state,
+                        json!({ "tool": call.name, "is_error": r.is_error }),
+                    ) {
+                        return fail(
+                            &ctx,
+                            "AUDIT_WRITE_FAILED",
+                            &format!("the checkpoint could not be recorded: {e}"),
+                        );
+                    }
+                    messages.push(Message::ToolResult {
+                        call_id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        content: r.content,
+                        is_error: r.is_error,
+                    });
+                }
                 Err(Stop::Cancelled) => return cancelled(&ctx),
                 Err(Stop::Fatal { code, message }) => return fail(&ctx, &code, &message),
             }
@@ -717,6 +754,19 @@ fn cancelled<S: AgentStore, E: RemoteExecutor, W: ApprovalWaiter>(
         error_code: None,
         final_text: String::new(),
     }
+}
+
+/// Records one step of the task in order. Metadata carries summaries only.
+fn checkpoint<S: AgentStore, E: RemoteExecutor, W: ApprovalWaiter>(
+    ctx: &Ctx<'_, S, E, W>,
+    seq: &mut u32,
+    kind: &str,
+    state: &str,
+    metadata: Value,
+) -> Result<(), StorageError> {
+    *seq += 1;
+    ctx.store
+        .checkpoint(ctx.spec.task, *seq, kind, state, &metadata, now_ms())
 }
 
 fn fail<S: AgentStore, E: RemoteExecutor, W: ApprovalWaiter>(

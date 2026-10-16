@@ -41,6 +41,17 @@ pub trait AgentStore: Send + Sync {
         payload: &Value,
         now_ms: i64,
     ) -> Result<(), StorageError>;
+    /// Writes one checkpoint. A failure stops the task: progress that cannot be
+    /// recorded is not made.
+    fn checkpoint(
+        &self,
+        task: TaskId,
+        sequence_no: u32,
+        kind: &str,
+        state: &str,
+        metadata: &Value,
+        now_ms: i64,
+    ) -> Result<(), StorageError>;
 }
 
 /// `AgentStore` over the local SQLite database. Locks are held only for one call.
@@ -116,5 +127,18 @@ impl AgentStore for DbStore {
     ) -> Result<(), StorageError> {
         self.lock()?
             .append_audit_event(event_type, task, execution, payload, now_ms)
+    }
+
+    fn checkpoint(
+        &self,
+        task: TaskId,
+        sequence_no: u32,
+        kind: &str,
+        state: &str,
+        metadata: &Value,
+        now_ms: i64,
+    ) -> Result<(), StorageError> {
+        self.lock()?
+            .record_step(task, sequence_no, kind, state, metadata, now_ms)
     }
 }

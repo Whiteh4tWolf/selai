@@ -62,6 +62,8 @@ pub struct Services {
     pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) llm: Arc<selai_llm::LlmClient>,
     pub(crate) agent: Arc<crate::agent_service::AgentRegistry>,
+    /// Where history exports are written. `None` for an in-memory database.
+    pub(crate) export_dir: Option<std::path::PathBuf>,
     probes: Mutex<HashMap<HostId, CachedProbe>>,
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
     reconcile: ReconcileReport,
@@ -75,7 +77,12 @@ impl Services {
         let reconcile = db
             .reconcile_after_restart(now_ms())
             .map_err(storage_error)?;
-        Self::with_database(db, secrets, reconcile)
+        let mut services = Self::with_database(db, secrets, reconcile)?;
+        services.export_dir = crate::history_service::export_dir_for(path);
+        // A failed retention sweep must not stop the app from opening. It runs again
+        // at the next start.
+        let _ = services.apply_retention(now_ms());
+        Ok(services)
     }
 
     pub fn in_memory(secrets: Arc<dyn SecretStore>) -> Result<Self, CommandError> {
@@ -98,6 +105,7 @@ impl Services {
             secrets,
             llm: Arc::new(llm),
             agent: Arc::new(crate::agent_service::AgentRegistry::default()),
+            export_dir: None,
             probes: Mutex::new(HashMap::new()),
             terminals: Arc::new(Mutex::new(HashMap::new())),
             reconcile,

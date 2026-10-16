@@ -97,7 +97,7 @@ fn scalar(db: &Database, sql: &str) -> String {
 #[test]
 fn fresh_database_is_at_latest_version() {
     let db = db();
-    assert_eq!(db.schema_version().expect("version"), 2);
+    assert_eq!(db.schema_version().expect("version"), 3);
     let tables: i64 = db
         .conn()
         .query_row(
@@ -137,7 +137,7 @@ fn file_database_uses_wal_and_survives_reopen() {
         insert_host(&db, "00000000-0000-4000-8000-000000000001", "web").expect("insert");
     }
     let db = Database::open(&path).expect("reopen is a no-op migration");
-    assert_eq!(db.schema_version().expect("version"), 2);
+    assert_eq!(db.schema_version().expect("version"), 3);
     assert_eq!(scalar(&db, "PRAGMA foreign_keys"), "1");
     assert_eq!(scalar(&db, "SELECT label FROM hosts"), "web");
 }
@@ -213,7 +213,7 @@ fn newer_schema_is_refused_not_downgraded() {
         err,
         StorageError::SchemaTooNew {
             found: 99,
-            supported: 2
+            supported: 3
         }
     ));
 }
@@ -483,7 +483,7 @@ fn restart_interrupts_live_work_without_replay() {
     let report = db.reconcile_after_restart(T0 + 10).expect("reconcile");
     assert_eq!(report.tasks_interrupted, 1);
     assert_eq!(report.executions_interrupted, 2);
-    assert_eq!(report.approvals_cancelled, 1);
+    assert_eq!(report.approvals_closed, 1);
 
     assert_eq!(
         scalar(
@@ -550,4 +550,32 @@ fn reconcile_leaves_terminal_history_untouched() {
         ),
         (T0 + 5).to_string()
     );
+}
+
+#[test]
+fn existing_v2_database_upgrades_in_place_and_keeps_its_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("v2.sqlite3");
+    {
+        // A database created by the previous release: migrations 1 and 2 only.
+        let mut conn = rusqlite::Connection::open(&path).expect("open");
+        conn.pragma_update(None, "foreign_keys", true).expect("fk");
+        migrate::apply(&mut conn, &migrate::MIGRATIONS[..2], T0).expect("v2");
+        conn.execute(
+            "INSERT INTO hosts(id, label, hostname, username, auth_method, created_at_ms, updated_at_ms)
+             VALUES ('00000000-0000-4000-8000-000000000001', 'legacy', 'host.example', 'ops', 'password', ?1, ?1)",
+            params![T0],
+        )
+        .expect("host row");
+    }
+
+    let db = Database::open(&path).expect("upgrade on open");
+    assert_eq!(db.schema_version().expect("version"), 3);
+    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM hosts"), "1");
+    assert_eq!(scalar(&db, "SELECT label FROM hosts"), "legacy");
+    let indexes = scalar(
+        &db,
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_commands_host_state'",
+    );
+    assert_eq!(indexes, "1");
 }

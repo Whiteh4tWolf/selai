@@ -277,7 +277,7 @@ fn event_view(event: TaskEvent) -> TaskEventView {
     }
 }
 
-fn execution_view(e: selai_storage::ExecutionRecord) -> ExecutionView {
+pub(crate) fn execution_view(e: selai_storage::ExecutionRecord) -> ExecutionView {
     ExecutionView {
         id: e.id.to_string(),
         task_id: e.task.to_string(),

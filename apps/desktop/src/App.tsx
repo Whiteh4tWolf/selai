@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AiTab } from './tabs/AiTab';
+import { HistoryTab } from './tabs/HistoryTab';
 import { ConnectionsTab } from './tabs/ConnectionsTab';
 import { appInfo, describeError, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { TerminalSessionTab } from './tabs/TerminalTab';
@@ -7,12 +8,13 @@ import type { TerminalSessionTab } from './tabs/TerminalTab';
 // xterm.js is large; load it only when a terminal is first needed.
 const TerminalTab = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalTab })));
 
-type TabId = 'connections' | 'terminal' | 'ai';
+type TabId = 'connections' | 'terminal' | 'ai' | 'history';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'connections', label: 'Connections' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'ai', label: 'AI' },
+  { id: 'history', label: 'AI history' },
 ];
 
 let nextTabNumber = 0;
@@ -100,6 +102,9 @@ export function App() {
         </div>
         <div role="tabpanel" id="panel-ai" aria-labelledby="tab-ai" hidden={tab !== 'ai'}>
           <AiTab />
+        </div>
+        <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" hidden={tab !== 'history'}>
+          <HistoryTab />
         </div>
       </main>
 

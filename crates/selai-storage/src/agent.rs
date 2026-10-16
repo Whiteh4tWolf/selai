@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::{Database, StorageError};
 
-fn now_tx(conn: &mut rusqlite::Connection) -> Result<Transaction<'_>, StorageError> {
+pub(crate) fn now_tx(conn: &mut rusqlite::Connection) -> Result<Transaction<'_>, StorageError> {
     Ok(conn.transaction_with_behavior(TransactionBehavior::Immediate)?)
 }
 
@@ -30,7 +30,7 @@ fn corrupt(message: &str) -> rusqlite::Error {
 }
 
 /// Appends one audit event inside `tx`, extending the hash chain.
-fn append_audit(
+pub(crate) fn append_audit(
     tx: &Transaction<'_>,
     event_type: &str,
     task: Option<TaskId>,
@@ -166,12 +166,12 @@ pub enum ApprovalDecision {
     Deny,
 }
 
-const EXECUTION_COLUMNS: &str =
+pub(crate) const EXECUTION_COLUMNS: &str =
     "id, task_id, host_id, model_id_snapshot, tool_name, command_redacted,
     command_sha256, state, policy_decision, exit_code, error_code, stdout_preview, stderr_preview,
     output_truncated, created_at_ms, started_at_ms, finished_at_ms";
 
-fn row_to_execution(row: &Row<'_>) -> rusqlite::Result<ExecutionRecord> {
+pub(crate) fn row_to_execution(row: &Row<'_>) -> rusqlite::Result<ExecutionRecord> {
     let state: String = row.get(7)?;
     let id: String = row.get(0)?;
     let task: String = row.get(1)?;

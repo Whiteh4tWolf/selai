@@ -112,8 +112,8 @@ export function storageStatus(): Promise<StorageStatus> {
   return invoke<StorageStatus>('storage_status');
 }
 
-export function hostList(query?: string): Promise<Page<HostView>> {
-  return invoke<Page<HostView>>('host_list', { query: query ?? null });
+export function hostList(query?: string, includeArchived = false): Promise<Page<HostView>> {
+  return invoke<Page<HostView>>('host_list', { query: query ?? null, includeArchived });
 }
 
 export function hostSave(input: HostInput): Promise<HostView> {
@@ -311,4 +311,71 @@ export function historyList(hostId: string, cursor?: string): Promise<Page<Execu
 
 export function auditVerify(): Promise<AuditVerifyView> {
   return invoke<AuditVerifyView>('audit_verify');
+}
+
+// ---- AI history and preferences (M4) ----------------------------------------
+
+export interface HistoryFilter {
+  states: string[];
+  sinceMs?: number | null;
+  untilMs?: number | null;
+}
+
+export interface TaskView {
+  id: string;
+  hostId: string;
+  state: string;
+  modelId: string;
+  errorCode: string | null;
+  createdAtMs: number;
+  finishedAtMs: number | null;
+}
+
+export interface ExportResult {
+  path: string;
+  executions: number;
+  truncatedRows: boolean;
+  extraRedactions: number;
+  disclosure: string;
+}
+
+export interface PurgeResult {
+  executions: number;
+}
+
+export interface AiPreferences {
+  lastProviderId: string | null;
+  outputRetentionDays: number;
+}
+
+export function historyQuery(
+  hostId: string,
+  filter: HistoryFilter,
+  cursor?: string,
+): Promise<Page<ExecutionView>> {
+  return invoke<Page<ExecutionView>>('history_query', { hostId, filter, cursor: cursor ?? null });
+}
+
+export function historyTasks(hostId: string, cursor?: string): Promise<Page<TaskView>> {
+  return invoke<Page<TaskView>>('history_tasks', { hostId, cursor: cursor ?? null });
+}
+
+export function taskTimeline(taskId: string): Promise<ExecutionView[]> {
+  return invoke<ExecutionView[]>('task_timeline', { taskId });
+}
+
+export function historyExport(hostId: string, filter: HistoryFilter): Promise<ExportResult> {
+  return invoke<ExportResult>('history_export', { hostId, filter });
+}
+
+export function historyPurgeOutput(hostId: string): Promise<PurgeResult> {
+  return invoke<PurgeResult>('history_purge_output', { hostId });
+}
+
+export function preferencesGet(): Promise<AiPreferences> {
+  return invoke<AiPreferences>('preferences_get');
+}
+
+export function preferencesSet(input: Partial<AiPreferences>): Promise<AiPreferences> {
+  return invoke<AiPreferences>('preferences_set', { input });
 }

@@ -4,6 +4,7 @@
 mod agent;
 mod db;
 mod error;
+mod history;
 mod hosts;
 mod migrate;
 mod providers;
@@ -18,6 +19,7 @@ pub use agent::{
 };
 pub use db::Database;
 pub use error::StorageError;
+pub use history::{HistoryFilter, PurgeScope};
 pub use hosts::{GroupRecord, HostRecord, PinOutcome, PinnedKey};
 pub use migrate::{Migration, MIGRATIONS};
 pub use providers::ProviderRecord;

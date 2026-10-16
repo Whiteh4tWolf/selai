@@ -4,6 +4,7 @@
 pub mod agent_service;
 pub mod commands;
 pub mod dto;
+pub mod history_service;
 pub mod provider_service;
 pub mod service;
 
@@ -71,6 +72,13 @@ pub fn run() {
             commands::approval_decide,
             commands::history_list,
             commands::audit_verify,
+            commands::history_query,
+            commands::history_tasks,
+            commands::task_timeline,
+            commands::history_export,
+            commands::history_purge_output,
+            commands::preferences_get,
+            commands::preferences_set,
         ])
         .run(tauri::generate_context!());
 

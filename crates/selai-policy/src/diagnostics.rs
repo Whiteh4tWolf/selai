@@ -171,3 +171,70 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod injection_tests {
+    use super::*;
+
+    /// Shell operators, substitutions, path traversal, whitespace and control
+    /// characters in a service name. Each must be refused before any command is
+    /// built, so no input can reach the shell.
+    const HOSTILE_SERVICES: &[&str] = &[
+        "nginx; rm -rf /",
+        "nginx && id",
+        "nginx || id",
+        "nginx | sh",
+        "nginx > /etc/passwd",
+        "nginx < /etc/shadow",
+        "$(id)",
+        "`id`",
+        "../../etc/shadow",
+        "/etc/shadow",
+        "nginx\nid",
+        "nginx\0id",
+        "nginx id",
+        "nginx'",
+        "nginx\"",
+        "nginx\\",
+        "nginx&",
+        "${HOME}",
+    ];
+
+    #[test]
+    fn hostile_service_names_are_refused_for_every_operation() {
+        for service in HOSTILE_SERVICES {
+            for operation in ["service_status", "recent_service_logs"] {
+                assert!(
+                    DiagnosticRequest::parse(operation, Some(service), Some(20)).is_err(),
+                    "{operation} accepted {service:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hostile_operations_and_argument_mixes_are_refused() {
+        // Unknown operation names, including shell-looking ones.
+        for operation in ["uptime; id", "disk_usage && id", "$(id)", "", "UPTIME"] {
+            assert!(
+                DiagnosticRequest::parse(operation, None, None).is_err(),
+                "{operation:?}"
+            );
+        }
+        // A service argument on an operation that takes none.
+        assert!(DiagnosticRequest::parse("uptime", Some("nginx"), None).is_err());
+        // A line count outside the bounds.
+        assert!(DiagnosticRequest::parse("recent_service_logs", Some("nginx"), Some(0)).is_err());
+        assert!(
+            DiagnosticRequest::parse("recent_service_logs", Some("nginx"), Some(100_000)).is_err()
+        );
+    }
+
+    #[test]
+    fn plain_service_names_still_work() {
+        assert!(DiagnosticRequest::parse("service_status", Some("nginx"), None).is_ok());
+        assert!(
+            DiagnosticRequest::parse("recent_service_logs", Some("ssh.service"), Some(50)).is_ok()
+        );
+    }
+}
