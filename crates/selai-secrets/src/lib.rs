@@ -22,6 +22,9 @@ pub const SERVICE: &str = "selai";
 pub enum SshSecretKind {
     Password,
     KeyPassphrase,
+    /// The password `sudo` asks for on that host, saved only when the operator
+    /// chose "Remember for this host".
+    SudoPassword,
 }
 
 impl SshSecretKind {
@@ -29,6 +32,7 @@ impl SshSecretKind {
         match self {
             Self::Password => "password",
             Self::KeyPassphrase => "key_passphrase",
+            Self::SudoPassword => "sudo_password",
         }
     }
 }

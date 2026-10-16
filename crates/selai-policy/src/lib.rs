@@ -49,7 +49,8 @@ impl Decision {
 /// Rules, in order:
 /// 1. A request for any host other than the task's bound host is denied.
 /// 2. Fixed diagnostics run without approval.
-/// 3. Free-form commands always need approval (no trust grants in v1).
+/// 3. Free-form commands always need approval (no trust grants in v1), and so
+///    do root commands, which are free-form commands run through `sudo`.
 pub fn evaluate(scope: &TaskScope, request: &ToolRequest) -> Decision {
     if request.host() != scope.host {
         return Decision::Deny(ErrorCode::TaskScopeInvalid);

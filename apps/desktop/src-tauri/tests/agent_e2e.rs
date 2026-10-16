@@ -119,7 +119,7 @@ async fn approved_command_runs_only_after_the_operator_approves() {
     assert!(!marker.exists(), "nothing runs before approval");
 
     h.services
-        .approval_decide(&approval_id, true)
+        .approval_decide(&approval_id, true, None)
         .expect("approve");
     let seen = until(&mut rx, is_terminal).await;
 
@@ -156,7 +156,7 @@ async fn denied_command_never_runs() {
     };
 
     h.services
-        .approval_decide(&approval_id, false)
+        .approval_decide(&approval_id, false, None)
         .expect("deny");
     let seen = until(&mut rx, is_terminal).await;
 

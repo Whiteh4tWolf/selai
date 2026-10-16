@@ -184,10 +184,22 @@ pub fn provider_input(base: &str) -> ProviderInput {
 /// Saves a password host, trusts its probed key, saves a provider and verifies
 /// its tool calling. Returns both ids.
 pub async fn ready(h: &Harness, sshd: &Sshd, model: &MockServer) -> (String, String) {
-    let view = h
-        .services
-        .host_save(password_host("production-web", sshd.port))
-        .expect("save host");
+    ready_with(h, model, password_host("production-web", sshd.port)).await
+}
+
+/// A host that signs in with the test user's unencrypted private key.
+pub fn key_host(label: &str, port: u16) -> HostInput {
+    HostInput {
+        auth_method: "private_key".to_owned(),
+        private_key_path: Some(material().user_key.display().to_string()),
+        password: None,
+        ..password_host(label, port)
+    }
+}
+
+/// Saves and trusts `host`, and saves a provider whose tool calling verified.
+pub async fn ready_with(h: &Harness, model: &MockServer, host: HostInput) -> (String, String) {
+    let view = h.services.host_save(host).expect("save host");
     let probe = h.services.host_probe(&view.id).await.expect("probe");
     h.services
         .host_trust(

@@ -5,7 +5,8 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use selai_domain::{ApprovalId, ExecutionId};
-use selai_ssh::{ExecOutput, SshError};
+use selai_secrets::SecretValue;
+use selai_ssh::{ExecOutput, SshError, SudoStatus};
 use selai_storage::ApprovalDecision;
 use tokio_util::sync::CancellationToken;
 
@@ -14,6 +15,23 @@ pub trait RemoteExecutor: Send + Sync {
     fn run(
         &self,
         command: &str,
+        timeout: Duration,
+        max_bytes_per_stream: usize,
+        cancel: &CancellationToken,
+    ) -> impl Future<Output = Result<ExecOutput, SshError>> + Send;
+
+    /// Whether `sudo` on the task's host needs a password. Runs nothing as root.
+    fn sudo_status(
+        &self,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<SudoStatus, SshError>> + Send;
+
+    /// Runs `command` as root through `sudo`. The password, when given, goes to
+    /// sudo's prompt only and never into the command text or the output.
+    fn run_as_root(
+        &self,
+        command: &str,
+        password: Option<&SecretValue>,
         timeout: Duration,
         max_bytes_per_stream: usize,
         cancel: &CancellationToken,
@@ -37,6 +55,12 @@ pub trait ApprovalWaiter: Send + Sync {
         timeout: Duration,
         cancel: &CancellationToken,
     ) -> impl Future<Output = WaitOutcome> + Send;
+
+    /// The sudo password the operator gave with this approval, if any. Taking
+    /// it removes it, so it is used for one command only.
+    fn take_sudo_password(&self, _approval: ApprovalId) -> Option<SecretValue> {
+        None
+    }
 }
 
 /// What the operator sees while a task runs.
@@ -60,6 +84,8 @@ pub enum TaskEvent {
         execution: ExecutionId,
         command: String,
         expires_at_ms: i64,
+        /// Set for a root command: what the host's sudo needs.
+        sudo: Option<SudoStatus>,
     },
     ToolFinished {
         execution: ExecutionId,

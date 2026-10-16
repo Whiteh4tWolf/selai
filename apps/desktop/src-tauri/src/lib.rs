@@ -73,6 +73,8 @@ pub fn run() {
             commands::agent_cancel,
             commands::chat_send,
             commands::approval_decide,
+            commands::sudo_options,
+            commands::host_forget_sudo_password,
             commands::history_list,
             commands::audit_verify,
             commands::history_query,

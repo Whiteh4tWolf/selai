@@ -12,9 +12,11 @@ mod exec;
 mod host_key;
 mod session;
 mod shell;
+pub mod sudo;
 
 pub use error::SshError;
 pub use exec::{ExecEnd, ExecOutput};
 pub use host_key::{probe_host_key, ObservedHostKey, PinnedHostKey};
 pub use session::{connect, Auth, ConnectOptions, Endpoint, Session};
 pub use shell::{Shell, ShellEvent};
+pub use sudo::SudoStatus;

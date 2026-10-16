@@ -9,7 +9,12 @@ use std::time::Duration;
 use russh::{ChannelMsg, Sig};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Session, SshError};
+use selai_secrets::SecretValue;
+
+use crate::{
+    sudo::{strip_prompt, sudo_plan, PromptWatch, StdinAction, SudoStatus, SUDO_PROBE},
+    Session, SshError,
+};
 
 /// Extended-data type used by OpenSSH for stderr.
 const STDERR_EXT: u32 = 1;
@@ -50,6 +55,54 @@ impl Session {
         max_bytes_per_stream: usize,
         cancel: &CancellationToken,
     ) -> Result<ExecOutput, SshError> {
+        self.exec_inner(command, None, timeout, max_bytes_per_stream, cancel)
+            .await
+    }
+
+    /// Asks the host whether `sudo` needs a password. Runs nothing as root.
+    pub async fn sudo_status(&self, timeout: Duration) -> Result<SudoStatus, SshError> {
+        let out = self
+            .exec_inner(SUDO_PROBE, None, timeout, 4096, &CancellationToken::new())
+            .await?;
+        Ok(SudoStatus::from_probe(
+            out.exit_status,
+            &String::from_utf8_lossy(&out.stderr),
+        ))
+    }
+
+    /// Runs `inner` as root through `sudo` (see [`crate::sudo`]). With a password,
+    /// it is written to stdin only after sudo prints this run's unique prompt.
+    /// Without one, sudo must not prompt and fails instead.
+    pub async fn exec_as_root(
+        &self,
+        inner: &str,
+        password: Option<&SecretValue>,
+        timeout: Duration,
+        max_bytes_per_stream: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ExecOutput, SshError> {
+        let plan = sudo_plan(inner, password.is_some());
+        let feed = match (&plan.prompt, password) {
+            (Some(prompt), Some(secret)) => Some((PromptWatch::new(prompt), secret)),
+            _ => None,
+        };
+        let mut out = self
+            .exec_inner(&plan.command, feed, timeout, max_bytes_per_stream, cancel)
+            .await?;
+        if let Some(prompt) = &plan.prompt {
+            out.stderr = strip_prompt(&out.stderr, prompt);
+        }
+        Ok(out)
+    }
+
+    async fn exec_inner(
+        &self,
+        command: &str,
+        mut feed: Option<(PromptWatch, &SecretValue)>,
+        timeout: Duration,
+        max_bytes_per_stream: usize,
+        cancel: &CancellationToken,
+    ) -> Result<ExecOutput, SshError> {
         let mut channel = self.handle.channel_open_session().await?;
         channel.exec(true, command.as_bytes().to_vec()).await?;
 
@@ -77,9 +130,26 @@ impl Session {
                 }
                 msg = channel.wait() => match msg {
                     Some(ChannelMsg::Data { data }) => {
+                        if let Some((watch, _)) = feed.as_mut() {
+                            if watch.on_stdout(&data) == StdinAction::Close {
+                                let _ = channel.eof().await;
+                            }
+                        }
                         append_capped(&mut out.stdout, &mut out.stdout_truncated, &data, max_bytes_per_stream);
                     }
                     Some(ChannelMsg::ExtendedData { data, ext }) if ext == STDERR_EXT => {
+                        if let Some((watch, secret)) = feed.as_mut() {
+                            if watch.on_stderr(&data) == StdinAction::SendPasswordAndClose {
+                                let mut line = secret.expose_for_transport().to_vec();
+                                line.push(b'\n');
+                                let sent = channel.data(&line[..]).await;
+                                line.fill(0);
+                                let _ = channel.eof().await;
+                                if sent.is_err() {
+                                    return Err(SshError::ChannelClosed);
+                                }
+                            }
+                        }
                         append_capped(&mut out.stderr, &mut out.stderr_truncated, &data, max_bytes_per_stream);
                     }
                     Some(ChannelMsg::ExitStatus { exit_status }) => {

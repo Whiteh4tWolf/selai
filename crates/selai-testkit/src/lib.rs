@@ -127,6 +127,28 @@ fn ensure_account() {
     }
 }
 
+/// Lets the test user run anything through `sudo` with its password (no
+/// `NOPASSWD`), so the sudo flow is tested against the real program. Written
+/// once per process and left in place, like the test account itself.
+pub fn allow_sudo_with_password() {
+    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        let _ = material();
+        let path = "/etc/sudoers.d/selai-test";
+        std::fs::write(path, format!("{USER} ALL=(root) ALL\n")).expect("write sudoers rule");
+        let chmod = Command::new("chmod")
+            .args(["0440", path])
+            .status()
+            .expect("chmod");
+        assert!(chmod.success(), "chmod sudoers rule failed");
+        let check = Command::new("visudo")
+            .args(["-c", "-f", path])
+            .status()
+            .expect("visudo");
+        assert!(check.success(), "sudoers rule is invalid");
+    });
+}
+
 fn run_with_stdin(program: &str, input: &str) {
     use std::io::Write;
     let mut child = Command::new(program)

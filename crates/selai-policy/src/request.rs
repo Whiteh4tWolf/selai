@@ -26,6 +26,9 @@ impl ModelCallError {
 pub struct CommandRequest {
     command: String,
     timeout_secs: u32,
+    /// Run through `sudo`, wrapped by local code. The model never writes the
+    /// sudo invocation and never sees a password.
+    as_root: bool,
 }
 
 impl CommandRequest {
@@ -47,7 +50,18 @@ impl CommandRequest {
         Ok(Self {
             command: command.to_owned(),
             timeout_secs,
+            as_root: false,
         })
+    }
+
+    /// The same command, to be run as root.
+    pub fn as_root(mut self) -> Self {
+        self.as_root = true;
+        self
+    }
+
+    pub fn runs_as_root(&self) -> bool {
+        self.as_root
     }
 
     pub fn command(&self) -> &str {
@@ -87,12 +101,29 @@ impl ToolRequest {
         }
     }
 
-    /// The exact text that will run on the remote host.
+    /// The command as stored, shown and approved. A root command reads
+    /// `sudo <command>`, so an approval for the plain command can never match it.
     pub fn command_text(&self) -> String {
+        match self {
+            Self::Diagnostic { request, .. } => diagnostic_command(request),
+            Self::Command { request, .. } if request.runs_as_root() => {
+                format!("sudo {}", request.command())
+            }
+            Self::Command { request, .. } => request.command().to_owned(),
+        }
+    }
+
+    /// The text handed to the shell. For a root command this is the inner
+    /// command; the executor adds the sudo wrapper itself.
+    pub fn shell_command(&self) -> String {
         match self {
             Self::Diagnostic { request, .. } => diagnostic_command(request),
             Self::Command { request, .. } => request.command().to_owned(),
         }
+    }
+
+    pub fn runs_as_root(&self) -> bool {
+        matches!(self, Self::Command { request, .. } if request.runs_as_root())
     }
 
     /// SHA-256 of the command text, lowercase hex. Approval binds to this value.
@@ -152,7 +183,7 @@ pub fn parse_model_call(
             Ok(ToolRequest::Diagnostic { host, request })
         }
         "ssh_run_command" => {
-            reject_unknown(object, &["command", "timeout_secs"])?;
+            reject_unknown(object, &["command", "timeout_secs", "as_root"])?;
             let command = object
                 .get("command")
                 .and_then(Value::as_str)
@@ -165,7 +196,14 @@ pub fn parse_model_call(
                     })?)
                     .map_err(|_| ModelCallError::invalid("timeout_secs is out of range"))?,
                 };
+            let as_root = match object.get("as_root") {
+                None | Some(Value::Null) => false,
+                Some(v) => v
+                    .as_bool()
+                    .ok_or_else(|| ModelCallError::invalid("as_root must be true or false"))?,
+            };
             let request = CommandRequest::parse(command, timeout)?;
+            let request = if as_root { request.as_root() } else { request };
             Ok(ToolRequest::Command { host, request })
         }
         _ => Err(ModelCallError::invalid("unknown tool")),
@@ -237,5 +275,46 @@ mod tests {
         assert!(CommandRequest::parse(&"x".repeat(MAX_COMMAND_BYTES + 1), 5).is_err());
         assert!(CommandRequest::parse("id", 0).is_err());
         assert!(CommandRequest::parse("id", 61).is_err());
+    }
+
+    #[test]
+    fn a_root_command_is_bound_to_its_own_digest_and_runs_the_inner_text() {
+        let host = HostId::new();
+        let plain = parse_model_call(
+            "ssh_run_command",
+            &json!({"command": "systemctl restart nginx"}),
+            host,
+        )
+        .expect("plain");
+        let root = parse_model_call(
+            "ssh_run_command",
+            &json!({"command": "systemctl restart nginx", "as_root": true}),
+            host,
+        )
+        .expect("root");
+        assert!(!plain.runs_as_root());
+        assert!(root.runs_as_root());
+        assert_eq!(root.command_text(), "sudo systemctl restart nginx");
+        assert_eq!(root.shell_command(), "systemctl restart nginx");
+        assert_ne!(
+            plain.digest(),
+            root.digest(),
+            "approving one must not approve the other"
+        );
+        assert!(parse_model_call(
+            "ssh_run_command",
+            &json!({"command": "id", "as_root": "yes"}),
+            host
+        )
+        .is_err());
+        assert!(
+            parse_model_call(
+                "ssh_run_diagnostic",
+                &json!({"operation": "uptime", "as_root": true}),
+                host
+            )
+            .is_err(),
+            "diagnostics never run as root"
+        );
     }
 }

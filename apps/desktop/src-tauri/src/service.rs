@@ -267,6 +267,9 @@ impl Services {
         self.secrets
             .delete(&SecretKey::ssh(id, SshSecretKind::KeyPassphrase))
             .map_err(secret_error)?;
+        self.secrets
+            .delete(&SecretKey::ssh(id, SshSecretKind::SudoPassword))
+            .map_err(secret_error)?;
         self.lock_db()?
             .set_credential_configured(id, false, now_ms())
             .map_err(storage_error)?;

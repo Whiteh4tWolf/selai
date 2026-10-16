@@ -11,13 +11,14 @@ use selai_agent::{
     run_task, ApprovalWaiter, DbStore, EventSink, Limits, RemoteExecutor, TaskEvent, TaskSpec,
     WaitOutcome,
 };
+use selai_domain::AuthMethod;
 use selai_domain::{
     ApprovalId, ErrorCode, HostId, Page, PageRequest, ProviderId, SelaiError, TaskId,
 };
-use selai_secrets::SecretKey;
-use selai_ssh::{connect, ConnectOptions, Endpoint, ExecOutput, Session, SshError};
+use selai_secrets::{SecretKey, SecretValue, SshSecretKind};
+use selai_ssh::{connect, ConnectOptions, Endpoint, ExecOutput, Session, SshError, SudoStatus};
 use selai_storage::{ApprovalDecision, Database};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -45,6 +46,9 @@ struct Approvals {
 pub struct AgentRegistry {
     tokens: Mutex<HashMap<TaskId, CancellationToken>>,
     approvals: Mutex<Approvals>,
+    /// Sudo passwords given with an approval, held in memory until the task
+    /// takes them for that one command.
+    sudo_passwords: Mutex<HashMap<ApprovalId, SecretValue>>,
 }
 
 impl AgentRegistry {
@@ -69,6 +73,16 @@ impl AgentRegistry {
             .and_then(|map| map.get(&task).cloned())
             .map(|t| t.cancel())
             .is_some()
+    }
+
+    fn hold_sudo_password(&self, approval: ApprovalId, password: SecretValue) {
+        if let Ok(mut map) = self.sudo_passwords.lock() {
+            map.insert(approval, password);
+        }
+    }
+
+    fn take_sudo_password(&self, approval: ApprovalId) -> Option<SecretValue> {
+        self.sudo_passwords.lock().ok()?.remove(&approval)
     }
 
     fn deliver(&self, approval: ApprovalId, decision: ApprovalDecision) {
@@ -122,6 +136,10 @@ impl ApprovalWaiter for RegistryWaiter {
         }
         outcome
     }
+
+    fn take_sudo_password(&self, approval: ApprovalId) -> Option<SecretValue> {
+        self.registry.take_sudo_password(approval)
+    }
 }
 
 /// Runs commands on the task's own SSH session. Holds no credential.
@@ -146,7 +164,64 @@ impl RemoteExecutor for SessionExecutor {
                 .await
         }
     }
+
+    fn sudo_status(
+        &self,
+        timeout: Duration,
+    ) -> impl std::future::Future<Output = Result<SudoStatus, SshError>> + Send {
+        let session = Arc::clone(&self.session);
+        async move { session.sudo_status(timeout).await }
+    }
+
+    fn run_as_root(
+        &self,
+        command: &str,
+        password: Option<&SecretValue>,
+        timeout: Duration,
+        max_bytes_per_stream: usize,
+        cancel: &CancellationToken,
+    ) -> impl std::future::Future<Output = Result<ExecOutput, SshError>> + Send {
+        let session = Arc::clone(&self.session);
+        let command = command.to_owned();
+        let password = password.map(|p| SecretValue::new(p.expose_for_transport().to_vec()));
+        let cancel = cancel.clone();
+        async move {
+            session
+                .exec_as_root(
+                    &command,
+                    password.as_ref(),
+                    timeout,
+                    max_bytes_per_stream,
+                    &cancel,
+                )
+                .await
+        }
+    }
 }
+
+/// How the operator answers sudo's password question for one approval.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SudoAnswerInput {
+    /// `typed`, `saved` or `login`.
+    pub source: String,
+    /// Write-only. Only with `typed`.
+    pub password: Option<String>,
+    /// With `typed`: also save it in the OS credential store for this host.
+    pub remember: Option<bool>,
+}
+
+/// Which sudo password sources exist for an approval's host. Never the values.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SudoOptionsView {
+    pub host_label: String,
+    pub saved_password: bool,
+    /// The host signs in with a saved SSH password, which may also be its sudo password.
+    pub login_password: bool,
+}
+
+const SUDO_PASSWORD_MAX_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(
@@ -173,6 +248,8 @@ pub enum TaskEventView {
         execution_id: String,
         command: String,
         expires_at_ms: i64,
+        /// For a root command: `no_password` or `password_required`.
+        sudo: Option<&'static str>,
     },
     ToolFinished {
         execution_id: String,
@@ -259,11 +336,13 @@ fn event_view(event: TaskEvent) -> TaskEventView {
             execution,
             command,
             expires_at_ms,
+            sudo,
         } => TaskEventView::ApprovalRequired {
             approval_id: approval.to_string(),
             execution_id: execution.to_string(),
             command,
             expires_at_ms,
+            sudo: sudo.map(SudoStatus::as_str),
         },
         TaskEvent::ToolFinished {
             execution,
@@ -421,7 +500,16 @@ impl Services {
 
     /// Records the operator's decision in the database first, then wakes the task.
     /// An expired or already-decided ticket is refused by the database.
-    pub fn approval_decide(&self, approval_id: &str, approve: bool) -> Result<(), CommandError> {
+    /// Records the operator's decision. For a root command the operator may give
+    /// a sudo password; it is checked and held in memory before the decision is
+    /// recorded, and the task takes it only after the database confirmed the
+    /// approval. It never reaches the model, the database or a log.
+    pub fn approval_decide(
+        &self,
+        approval_id: &str,
+        approve: bool,
+        sudo: Option<SudoAnswerInput>,
+    ) -> Result<(), CommandError> {
         let id: ApprovalId = approval_id
             .parse()
             .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid approval id"))?;
@@ -430,11 +518,131 @@ impl Services {
         } else {
             ApprovalDecision::Deny
         };
-        self.lock_db_pub()?
-            .decide_approval(id, decision, now_ms())
-            .map_err(|e| storage(&e))?;
+        let held = match (approve, sudo) {
+            (true, Some(answer)) => {
+                let password = self.resolve_sudo_password(id, &answer)?;
+                self.agent.hold_sudo_password(id, password);
+                true
+            }
+            _ => false,
+        };
+        let recorded = self.lock_db_pub().and_then(|mut db| {
+            db.decide_approval(id, decision, now_ms())
+                .map_err(|e| storage(&e))
+        });
+        if let Err(e) = recorded {
+            if held {
+                drop(self.agent.take_sudo_password(id));
+            }
+            return Err(e);
+        }
         self.agent.deliver(id, decision);
         Ok(())
+    }
+
+    /// Which password sources the approval card may offer.
+    pub fn sudo_options(&self, approval_id: &str) -> Result<SudoOptionsView, CommandError> {
+        let id: ApprovalId = approval_id
+            .parse()
+            .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid approval id"))?;
+        let host = self.approval_host(id)?;
+        let record = self
+            .lock_db_pub()?
+            .get_host(host)
+            .map_err(|e| storage(&e))?
+            .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "host not found"))?;
+        let saved = self
+            .secrets
+            .get(&SecretKey::ssh(host, SshSecretKind::SudoPassword))
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?
+            .is_some();
+        Ok(SudoOptionsView {
+            host_label: record.label.as_str().to_owned(),
+            saved_password: saved,
+            login_password: record.auth == AuthMethod::Password && record.credential_configured,
+        })
+    }
+
+    /// Deletes the sudo password saved for a host, if any.
+    pub fn host_forget_sudo_password(&self, host_id: &str) -> Result<(), CommandError> {
+        let host: HostId = host_id
+            .parse()
+            .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid host id"))?;
+        self.secrets
+            .delete(&SecretKey::ssh(host, SshSecretKind::SudoPassword))
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))
+    }
+
+    fn approval_host(&self, id: ApprovalId) -> Result<HostId, CommandError> {
+        Ok(self
+            .lock_db_pub()?
+            .get_approval(id)
+            .map_err(|e| storage(&e))?
+            .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "approval not found"))?
+            .host)
+    }
+
+    fn resolve_sudo_password(
+        &self,
+        approval: ApprovalId,
+        answer: &SudoAnswerInput,
+    ) -> Result<SecretValue, CommandError> {
+        let host = self.approval_host(approval)?;
+        let secret_error =
+            |e: selai_secrets::SecretError| CommandError::new(e.code(), e.to_string());
+        let missing = |what: &str| {
+            CommandError::new(
+                ErrorCode::SudoPasswordRequired,
+                format!("no {what} is saved for this host"),
+            )
+        };
+        match answer.source.as_str() {
+            "typed" => {
+                let text = answer.password.as_deref().unwrap_or("");
+                if text.is_empty()
+                    || text.len() > SUDO_PASSWORD_MAX_BYTES
+                    || text.contains(['\n', '\r', '\0'])
+                {
+                    return Err(CommandError::new(
+                        ErrorCode::InvalidInput,
+                        "the sudo password must be 1 to 1024 bytes on one line",
+                    ));
+                }
+                let secret = SecretValue::new(text);
+                if answer.remember == Some(true) {
+                    self.secrets
+                        .put(&SecretKey::ssh(host, SshSecretKind::SudoPassword), &secret)
+                        .map_err(secret_error)?;
+                }
+                Ok(secret)
+            }
+            "saved" => self
+                .secrets
+                .get(&SecretKey::ssh(host, SshSecretKind::SudoPassword))
+                .map_err(secret_error)?
+                .ok_or_else(|| missing("sudo password")),
+            "login" => {
+                let record = self
+                    .lock_db_pub()?
+                    .get_host(host)
+                    .map_err(|e| storage(&e))?
+                    .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "host not found"))?;
+                if record.auth != AuthMethod::Password {
+                    return Err(CommandError::new(
+                        ErrorCode::InvalidInput,
+                        "this host signs in with a key, so there is no login password to reuse",
+                    ));
+                }
+                self.secrets
+                    .get(&SecretKey::ssh(host, SshSecretKind::Password))
+                    .map_err(secret_error)?
+                    .ok_or_else(|| missing("SSH password"))
+            }
+            _ => Err(CommandError::new(
+                ErrorCode::InvalidInput,
+                "the sudo answer must be typed, saved or login",
+            )),
+        }
     }
 
     pub fn history_list(

@@ -22,7 +22,8 @@ use selai_domain::{
     ProviderProtocol, ProviderSettings, TaskId, TaskState, TerminalType, TimeoutSecs, Username,
 };
 use selai_llm::{ClientOptions, LlmClient};
-use selai_ssh::{ExecEnd, ExecOutput, SshError};
+use selai_secrets::SecretValue;
+use selai_ssh::{ExecEnd, ExecOutput, SshError, SudoStatus};
 use selai_storage::{ApprovalDecision, Database, StorageError};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -98,7 +99,14 @@ struct FakeExec {
     stdout: &'static str,
     end: Option<ExecEnd>,
     cancel_on_first: Option<CancellationToken>,
+    /// What the sudo probe reports. `None` means no password is needed.
+    sudo: Option<SudoStatus>,
+    /// Root runs: the inner command and the password sudo received.
+    root_calls: Mutex<Vec<(String, Option<String>)>>,
 }
+
+/// The password the fake sudo accepts.
+const SUDO_PASSWORD: &str = "hunter2-sudo";
 
 impl FakeExec {
     fn calls(&self) -> Vec<String> {
@@ -123,6 +131,68 @@ impl RemoteExecutor for FakeExec {
             }
             Ok(output(self.end.unwrap_or(ExecEnd::Completed), self.stdout))
         }
+    }
+
+    fn sudo_status(
+        &self,
+        _timeout: Duration,
+    ) -> impl Future<Output = Result<SudoStatus, SshError>> + Send {
+        let status = self.sudo.unwrap_or(SudoStatus::NoPassword);
+        async move { Ok(status) }
+    }
+
+    fn run_as_root(
+        &self,
+        command: &str,
+        password: Option<&SecretValue>,
+        _timeout: Duration,
+        _max_bytes: usize,
+        _cancel: &CancellationToken,
+    ) -> impl Future<Output = Result<ExecOutput, SshError>> + Send {
+        let command = command.to_owned();
+        let password =
+            password.map(|p| String::from_utf8_lossy(p.expose_for_transport()).into_owned());
+        let needs = self.sudo == Some(SudoStatus::PasswordRequired);
+        async move {
+            self.root_calls
+                .lock()
+                .expect("lock")
+                .push((command, password.clone()));
+            if needs && password.as_deref() != Some(SUDO_PASSWORD) {
+                let mut out = output(ExecEnd::Completed, "");
+                out.exit_status = Some(1);
+                out.stderr = b"Sorry, try again.\nsudo: 1 incorrect password attempt\n".to_vec();
+                return Ok(out);
+            }
+            // A careless command that echoes the password must not leak it.
+            let leak = format!("{} {}", self.stdout, password.unwrap_or_default());
+            Ok(output(ExecEnd::Completed, &leak))
+        }
+    }
+}
+
+/// Approves in the database like `FakeOperator`, and hands over a sudo password.
+struct SudoOperator {
+    inner: FakeOperator,
+    password: Mutex<Option<&'static str>>,
+}
+
+impl ApprovalWaiter for SudoOperator {
+    async fn wait(
+        &self,
+        approval: ApprovalId,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> WaitOutcome {
+        self.inner.wait(approval, timeout, cancel).await
+    }
+
+    fn take_sudo_password(&self, _approval: ApprovalId) -> Option<SecretValue> {
+        self.password
+            .lock()
+            .expect("lock")
+            .take()
+            .map(SecretValue::new)
     }
 }
 
@@ -1203,4 +1273,175 @@ async fn token_usage_is_summed_per_task_and_the_request_is_stored_redacted() {
         })
         .collect();
     assert_eq!(usage, vec![(Some(100), Some(10)), (Some(200), Some(20))]);
+}
+
+// ---- sudo -------------------------------------------------------------------
+
+fn sudo_world(
+    status: Option<SudoStatus>,
+    mode: Operator,
+    password: Option<&'static str>,
+) -> (World, FakeExec, SudoOperator) {
+    let w = world();
+    let exec = FakeExec {
+        stdout: "restarted",
+        sudo: status,
+        ..Default::default()
+    };
+    let op = SudoOperator {
+        inner: FakeOperator {
+            db: Arc::clone(&w.db),
+            mode,
+            asked: Mutex::new(0),
+        },
+        password: Mutex::new(password),
+    };
+    (w, exec, op)
+}
+
+async fn run_root_task(
+    w: &World,
+    exec: &FakeExec,
+    op: &SudoOperator,
+) -> (selai_agent::TaskOutcome, Vec<TaskEvent>) {
+    let (server, _) = model(vec![Turn::Tool(
+        "ssh_run_command",
+        json!({"command": "systemctl restart nginx", "as_root": true}),
+    )])
+    .await;
+    let (sink, events) = sink();
+    let outcome = run_task(
+        spec(w, &server.uri(), Limits::default()),
+        &store(w, false),
+        &client(),
+        exec,
+        op,
+        sink,
+        CancellationToken::new(),
+    )
+    .await;
+    let events = events.lock().expect("lock").clone();
+    (outcome, events)
+}
+
+fn last_row(w: &World) -> selai_storage::ExecutionRecord {
+    w.db.lock()
+        .expect("lock")
+        .host_command_history(w.host, &PageRequest::first(10))
+        .expect("history")
+        .items
+        .remove(0)
+}
+
+#[tokio::test]
+async fn a_root_command_runs_through_sudo_with_the_operators_password_only() {
+    let (w, exec, op) = sudo_world(
+        Some(SudoStatus::PasswordRequired),
+        Operator::ApproveInDb,
+        Some(SUDO_PASSWORD),
+    );
+    let (outcome, events) = run_root_task(&w, &exec, &op).await;
+    assert_eq!(outcome.state, TaskState::Completed);
+
+    assert!(exec.calls().is_empty(), "never run without sudo");
+    assert_eq!(
+        *exec.root_calls.lock().expect("lock"),
+        vec![(
+            "systemctl restart nginx".to_owned(),
+            Some(SUDO_PASSWORD.to_owned())
+        )]
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        TaskEvent::ApprovalRequired { command, sudo: Some(SudoStatus::PasswordRequired), .. }
+            if command == "sudo systemctl restart nginx"
+    )));
+
+    let row = last_row(&w);
+    assert_eq!(row.command_redacted, "sudo systemctl restart nginx");
+    assert_eq!(row.state, ExecStatus::Completed);
+    let preview = row.stdout_preview.unwrap_or_default();
+    assert!(preview.contains("restarted"));
+    assert!(
+        !preview.contains(SUDO_PASSWORD),
+        "the password is redacted: {preview}"
+    );
+    assert!(audit_types(&w).contains(&"sudo_used".to_owned()));
+    // The password is gone after one use.
+    assert!(op.take_sudo_password(ApprovalId::new()).is_none());
+}
+
+#[tokio::test]
+async fn a_host_where_sudo_is_not_allowed_is_never_asked_about() {
+    let (w, exec, op) = sudo_world(Some(SudoStatus::NotAllowed), Operator::ApproveInDb, None);
+    let (_, events) = run_root_task(&w, &exec, &op).await;
+    assert_eq!(op.inner.asked(), 0);
+    assert!(exec.root_calls.lock().expect("lock").is_empty());
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, TaskEvent::ApprovalRequired { .. })));
+    let row = last_row(&w);
+    assert_eq!(row.state, ExecStatus::Denied);
+    assert_eq!(row.error_code.as_deref(), Some("SUDO_NOT_ALLOWED"));
+}
+
+#[tokio::test]
+async fn an_approval_without_the_needed_password_runs_nothing() {
+    let (w, exec, op) = sudo_world(
+        Some(SudoStatus::PasswordRequired),
+        Operator::ApproveInDb,
+        None,
+    );
+    run_root_task(&w, &exec, &op).await;
+    assert!(exec.root_calls.lock().expect("lock").is_empty());
+    assert_eq!(
+        last_row(&w).error_code.as_deref(),
+        Some("SUDO_PASSWORD_REQUIRED")
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_sudo_password_is_reported_as_such() {
+    let (w, exec, op) = sudo_world(
+        Some(SudoStatus::PasswordRequired),
+        Operator::ApproveInDb,
+        Some("not-it"),
+    );
+    run_root_task(&w, &exec, &op).await;
+    let row = last_row(&w);
+    assert_eq!(row.state, ExecStatus::Failed);
+    assert_eq!(row.error_code.as_deref(), Some("SUDO_AUTH_FAILED"));
+}
+
+#[tokio::test]
+async fn nopasswd_hosts_run_root_commands_without_any_password() {
+    let (w, exec, op) = sudo_world(
+        Some(SudoStatus::NoPassword),
+        Operator::ApproveInDb,
+        Some("unused"),
+    );
+    run_root_task(&w, &exec, &op).await;
+    // The approval carried a password, but this host's sudo does not ask for
+    // one, so none is passed on.
+    assert_eq!(
+        *exec.root_calls.lock().expect("lock"),
+        vec![("systemctl restart nginx".to_owned(), None)]
+    );
+    assert_eq!(last_row(&w).state, ExecStatus::Completed);
+}
+
+#[tokio::test]
+async fn a_denied_root_command_drops_the_password_unused() {
+    let (w, exec, op) = sudo_world(
+        Some(SudoStatus::PasswordRequired),
+        Operator::DenyInDb,
+        Some(SUDO_PASSWORD),
+    );
+    run_root_task(&w, &exec, &op).await;
+    assert!(exec.root_calls.lock().expect("lock").is_empty());
+    assert!(
+        op.password.lock().expect("lock").is_none(),
+        "taken and dropped"
+    );
+    assert_eq!(last_row(&w).state, ExecStatus::Denied);
 }

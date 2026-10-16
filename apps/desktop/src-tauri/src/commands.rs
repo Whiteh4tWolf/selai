@@ -7,7 +7,9 @@ use selai_domain::Page;
 use tauri::{ipc::Channel, State};
 
 use crate::{
-    agent_service::{AgentEventView, AuditVerifyView, ExecutionView},
+    agent_service::{
+        AgentEventView, AuditVerifyView, ExecutionView, SudoAnswerInput, SudoOptionsView,
+    },
     chat_service::{ChatEventView, ChatMessageInput},
     dto::{
         AppInfo, CommandError, GroupView, HostInput, HostView, ModelsView, ProbeView,
@@ -213,8 +215,25 @@ pub fn approval_decide(
     state: State<'_, AppState>,
     approval_id: String,
     approve: bool,
+    sudo: Option<SudoAnswerInput>,
 ) -> Result<(), CommandError> {
-    services(&state)?.approval_decide(&approval_id, approve)
+    services(&state)?.approval_decide(&approval_id, approve, sudo)
+}
+
+#[tauri::command]
+pub fn sudo_options(
+    state: State<'_, AppState>,
+    approval_id: String,
+) -> Result<SudoOptionsView, CommandError> {
+    services(&state)?.sudo_options(&approval_id)
+}
+
+#[tauri::command]
+pub fn host_forget_sudo_password(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), CommandError> {
+    services(&state)?.host_forget_sudo_password(&id)
 }
 
 #[tauri::command]

@@ -29,7 +29,7 @@ async fn command_task(h: &Harness, host: &str, provider: &str, approve: bool) ->
         other => panic!("expected an approval, got {other:?}"),
     };
     h.services
-        .approval_decide(&approval, approve)
+        .approval_decide(&approval, approve, None)
         .expect("decide");
     until(&mut rx, |e| {
         matches!(e, TaskEventView::State { state, .. } if matches!(state.as_str(), "completed" | "failed" | "cancelled"))
