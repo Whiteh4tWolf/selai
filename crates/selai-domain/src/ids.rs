@@ -89,6 +89,7 @@ typed_id!(TaskId, "task");
 typed_id!(ExecutionId, "execution");
 typed_id!(ApprovalId, "approval");
 typed_id!(KnownKeyId, "known key");
+typed_id!(AuditEventId, "audit event");
 
 #[cfg(test)]
 mod tests {

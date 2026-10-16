@@ -1,6 +1,7 @@
 //! SQLite persistence for Selai: connection setup, migrations, startup
 //! reconciliation and error mapping. Secret material never reaches this crate.
 
+mod agent;
 mod db;
 mod error;
 mod hosts;
@@ -11,6 +12,10 @@ mod recovery;
 #[cfg(test)]
 mod tests;
 
+pub use agent::{
+    ApprovalDecision, ApprovalRecord, ExecutionOutcome, ExecutionRecord, NewApproval, NewExecution,
+    NewTask, TaskRecord,
+};
 pub use db::Database;
 pub use error::StorageError;
 pub use hosts::{GroupRecord, HostRecord, PinOutcome, PinnedKey};

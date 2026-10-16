@@ -14,9 +14,13 @@ observed. Do not include real credentials or private keys in a report.
 
 ## Scope of current release work
 
-Milestone M0 contains no SSH transport, no credential storage and no AI
-execution. Those areas are not yet implemented, so reports about them describe
-planned behavior and are handled as design feedback.
+SSH access, credential storage and the scoped agent (M1 to M3) are built and
+tested on Linux. macOS and Windows are not yet verified for SSH. The agent can
+run commands on a host only through the rules in ADR-0005: the host is fixed by
+the task, diagnostics are fixed commands, and every free-form command needs an
+approval that is checked again in the database before it runs. Reports about
+behaviour that is documented as planned (for example encrypted audit blobs, S-040)
+are handled as design feedback.
 
 ## Known limits (v1 design)
 
@@ -24,8 +28,10 @@ planned behavior and are handled as design feedback.
   `Authorization` or `x-api-key` header, to the base URL you configured. Redirects
   are not followed. Remote endpoints require https. Plain http is accepted only for
   loopback addresses.
-- Anything you send to a cloud model leaves this machine. That includes command
-  output in later milestones.
+- Anything you send to a cloud model leaves this machine. That includes the
+  agent's request, the text of its replies, and the output of each command it
+  runs (bounded and redacted, but not guaranteed free of sensitive data). The SSH
+  password, private key and provider key are never sent.
 
 - Local logs and the local audit chain are tamper-evident only against
   accidental change. A local administrator can rewrite them.

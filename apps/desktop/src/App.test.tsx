@@ -52,11 +52,11 @@ describe('App shell', () => {
     await waitFor(() => expect(screen.getByText(/schema v2, wal mode/)).toBeInTheDocument());
   });
 
-  it('switches to AI and says it is not available yet', () => {
+  it('switches to AI and shows the agent composer', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('tab', { name: 'AI' }));
     expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText(/The agent is not available yet/)).toBeVisible();
+    expect(screen.getByLabelText('Request')).toBeVisible();
   });
 
   it('reports a storage failure with its code instead of hiding it', async () => {

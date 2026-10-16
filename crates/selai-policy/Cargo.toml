@@ -1,0 +1,18 @@
+[package]
+name = "selai-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+selai-domain = { version = "0.1.0", path = "../selai-domain" }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = "1"

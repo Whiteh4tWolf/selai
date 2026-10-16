@@ -11,6 +11,7 @@ selai-domain = { version = "0.1.0", path = "../selai-domain" }
 selai-secrets = { version = "0.1.0", path = "../selai-secrets" }
 thiserror = "2"
 tokio = { version = "1.53.3", features = ["rt", "net", "time", "sync", "io-util", "macros"] }
+tokio-util = "0.7"
 
 [lints]
 workspace = true

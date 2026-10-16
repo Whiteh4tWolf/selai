@@ -17,8 +17,8 @@ pub use host::{
     KeyPath, Notes, TerminalType, Username,
 };
 pub use ids::{
-    ApprovalId, ConversationId, ExecutionId, HostGroupId, HostId, IdError, KnownKeyId, ProviderId,
-    TaskId,
+    ApprovalId, AuditEventId, ConversationId, ExecutionId, HostGroupId, HostId, IdError,
+    KnownKeyId, ProviderId, TaskId,
 };
 pub use label::{HostLabel, LabelError, Port, PortError};
 pub use page::{Page, PageRequest};

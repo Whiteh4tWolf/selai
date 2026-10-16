@@ -1,6 +1,7 @@
 //! Tauri composition root. Owns the IPC surface and the service instance.
 //! Authorization lives in `service` and the Rust crates, never in the webview.
 
+pub mod agent_service;
 pub mod commands;
 pub mod dto;
 pub mod provider_service;
@@ -65,6 +66,11 @@ pub fn run() {
             commands::provider_save,
             commands::provider_delete,
             commands::provider_test,
+            commands::agent_start,
+            commands::agent_cancel,
+            commands::approval_decide,
+            commands::history_list,
+            commands::audit_verify,
         ])
         .run(tauri::generate_context!());
 

@@ -56,7 +56,7 @@ pub struct ConnectOptions {
 
 /// An authenticated transport. Terminal and exec channels are opened on it.
 pub struct Session {
-    handle: client::Handle<PinVerifier>,
+    pub(crate) handle: client::Handle<PinVerifier>,
     endpoint: Endpoint,
 }
 

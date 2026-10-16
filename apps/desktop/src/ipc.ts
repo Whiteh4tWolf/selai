@@ -245,3 +245,70 @@ export function providerDelete(id: string): Promise<void> {
 export function providerTest(id: string, kind: 'connectivity' | 'tool_calling'): Promise<ProviderTestView> {
   return invoke<ProviderTestView>('provider_test', { id, kind });
 }
+
+// ---- agent (M3) -------------------------------------------------------------
+
+/** One event of a task. Mirrors `agent_service::TaskEventView` in Rust. */
+export type TaskEvent =
+  | { type: 'state'; state: string; errorCode: string | null }
+  | { type: 'textDelta'; text: string }
+  | { type: 'toolProposed'; executionId: string; tool: string; command: string; hostLabel: string }
+  | { type: 'approvalRequired'; approvalId: string; executionId: string; command: string; expiresAtMs: number }
+  | { type: 'toolFinished'; executionId: string; state: string; exitCode: number | null; errorCode: string | null }
+  | { type: 'completed'; text: string }
+  | { type: 'failed'; code: string; message: string };
+
+export type AgentEvent = TaskEvent & { taskId: string };
+
+export interface ExecutionView {
+  id: string;
+  taskId: string;
+  hostId: string;
+  modelId: string;
+  tool: string;
+  commandRedacted: string;
+  commandSha256: string;
+  state: string;
+  policyDecision: string | null;
+  exitCode: number | null;
+  errorCode: string | null;
+  stdoutPreview: string | null;
+  stderrPreview: string | null;
+  outputTruncated: boolean;
+  createdAtMs: number;
+  startedAtMs: number | null;
+  finishedAtMs: number | null;
+}
+
+export interface AuditVerifyView {
+  ok: boolean;
+  eventsChecked: number;
+  brokenAtSeq: number | null;
+}
+
+export function agentStart(
+  hostId: string,
+  providerId: string,
+  prompt: string,
+  onEvent: (event: AgentEvent) => void,
+): Promise<string> {
+  const channel = new Channel<AgentEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>('agent_start', { hostId, providerId, prompt, onEvent: channel });
+}
+
+export function agentCancel(taskId: string): Promise<boolean> {
+  return invoke<boolean>('agent_cancel', { taskId });
+}
+
+export function approvalDecide(approvalId: string, approve: boolean): Promise<void> {
+  return invoke<void>('approval_decide', { approvalId, approve });
+}
+
+export function historyList(hostId: string, cursor?: string): Promise<Page<ExecutionView>> {
+  return invoke<Page<ExecutionView>>('history_list', { hostId, cursor: cursor ?? null });
+}
+
+export function auditVerify(): Promise<AuditVerifyView> {
+  return invoke<AuditVerifyView>('audit_verify');
+}

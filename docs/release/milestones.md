@@ -83,6 +83,48 @@ against a live endpoint.
 - `cargo deny check advisories licenses bans sources`: pass. Added
   CDLA-Permissive-2.0 for the Mozilla CA bundle (reason in `deny.toml`).
 
-## M3 to M5
+## M3 — Scoped AI agent (`v1.0.0-alpha.2` candidate)
+
+| Task | Status | Evidence | Gaps |
+|---|---|---|---|
+| S-030 Mention picker and host binding | done | Chip stores the host id and a label snapshot; the model never chooses the host (`selai-agent/src/tools.rs` has no host argument). Picker: arrow keys, Enter and click are tested (`AgentPanel.test.tsx`); Escape is not. Archived host refused (`agent_e2e.rs`). The host is bound by id, so a rename cannot retarget a running task by design, but no test covers a rename. | The picker accepts one host per request (multi-target refused). Free text with an `@name` that was not picked is sent as plain text and binds no host. |
+| S-031 Policy and approval | done | `selai-policy` (12): diagnostics map to fixed commands (`df -hP`, `uptime`, ...), free-form commands always need approval, out-of-scope host denied. Approval tickets are bound to task, host and command digest, and expire. Runtime tests (`selai-agent/tests/runtime.rs`, 14): tampered command, changed host and expired ticket all refuse. `agent_e2e.rs`: approve runs the exact command, deny never runs it, cancel while waiting never runs it. | There are no policy roles; there is one policy. The UI disables Approve once an approval expires only when the card re-renders; the database refuses the decision either way. |
+| S-032 Audit before execution | done | `selai-audit` (11): redaction and sha256 hash chain. `selai-storage/tests/agent.rs` (6): execution row and audit event written in one transaction before any SSH I/O. `agent_e2e.rs`: five diagnostics each recorded, chain verifies, history survives a restart. Model payloads checked for the SSH password and the provider key. | Blob encryption of full output is deferred to S-040. Only bounded, redacted previews are stored. |
+| S-033 Agent runtime and SSH bridge | done on Linux | `selai-ssh` exec (in `ssh_integration.rs`, 17 SSH tests in total), output capped per stream, cancellation. `agent_e2e.rs` (7) runs against real OpenSSH and a mock provider that must pass tool calling first. | No checkpoint rows in `agent_steps`. No automatic reconnect. No trust grants. Only Linux was run. |
+
+### M3 milestone gate
+
+The gate is: in the app, type `@production-web check disk usage`, see the
+result from the real host, approve a free-form command and see its result, and
+find the command in that host's history after a restart.
+
+Checked by the desktop end-to-end suite (`apps/desktop/src-tauri/tests/agent_e2e.rs`)
+against a real `sshd` and a mock provider: the disk check runs on the bound host
+and is recorded; the approved command runs only after approval; the denied and
+cancelled commands never run; history and audit survive a restart.
+
+**Not checked in a real window in this session.** The React panel is covered by
+component tests with mocked IPC (`AgentPanel.test.tsx`, 7 tests; transcript reducer, 6), not by driving
+the running application. **Not verified against any live provider.** The
+`live` tests stay ignored until keys are supplied. macOS and Windows were not run.
+
+Bug found and fixed while building M3: an approval click that arrived before the
+task began waiting was dropped, and the approval then expired. The registry now
+keeps an early decision for the next wait (`agent_service.rs`, tests). Found
+during review, not by a failing test.
+
+### Test evidence (last run)
+
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: clean.
+- `scripts/ci/with-keyring.sh cargo test --workspace --locked` (as root, so sshd
+  runs): all passed. Per target: domain 29, selai-llm 9 unit + 21 adapter + 6
+  probe, policy 12, audit 11, agent runtime 14, storage 22 unit + 15 hosts + 6
+  providers + 6 agent, SSH 17, secrets 1 keyring + 4 contract, desktop unit 5,
+  desktop end-to-end: service 10, provider 10, agent 7. Ignored: 3 live provider
+  tests.
+- Frontend: typecheck, lint, 27 tests, `vite build`: pass.
+- `cargo deny check`: advisories, bans, licenses, sources ok.
+
+## M4 and M5
 
 Not started. See `SELAI_EXECUTION_BACKLOG.md`.

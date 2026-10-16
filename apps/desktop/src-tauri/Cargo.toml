@@ -15,8 +15,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+selai-agent = { version = "0.1.0", path = "../../../crates/selai-agent" }
+selai-audit = { version = "0.1.0", path = "../../../crates/selai-audit" }
 selai-domain = { version = "0.1.0", path = "../../../crates/selai-domain" }
 selai-llm = { version = "0.1.0", path = "../../../crates/selai-llm" }
+selai-policy = { version = "0.1.0", path = "../../../crates/selai-policy" }
 selai-secrets = { version = "0.1.0", path = "../../../crates/selai-secrets" }
 selai-ssh = { version = "0.1.0", path = "../../../crates/selai-ssh" }
 selai-storage = { version = "0.1.0", path = "../../../crates/selai-storage" }

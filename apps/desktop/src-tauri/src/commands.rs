@@ -7,6 +7,7 @@ use selai_domain::Page;
 use tauri::{ipc::Channel, State};
 
 use crate::{
+    agent_service::{AgentEventView, AuditVerifyView, ExecutionView},
     dto::{
         AppInfo, CommandError, GroupView, HostInput, HostView, ProbeView, ProviderInput,
         ProviderTestView, ProviderView, StorageStatus, TemplateView, TerminalEvent, TrustMode,
@@ -154,6 +155,52 @@ pub fn provider_save(
 #[tauri::command]
 pub fn provider_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
     services(&state)?.provider_delete(&id)
+}
+
+#[tauri::command]
+pub async fn agent_start(
+    state: State<'_, AppState>,
+    host_id: String,
+    provider_id: String,
+    prompt: String,
+    on_event: Channel<AgentEventView>,
+) -> Result<String, CommandError> {
+    let sink: Arc<dyn Fn(AgentEventView) + Send + Sync> = Arc::new(move |event| {
+        // A closed channel means the window went away; the task keeps running
+        // until it finishes or is cancelled, and its audit trail is still written.
+        let _ = on_event.send(event);
+    });
+    services(&state)?
+        .agent_start(&host_id, &provider_id, &prompt, sink)
+        .await
+}
+
+#[tauri::command]
+pub fn agent_cancel(state: State<'_, AppState>, task_id: String) -> Result<bool, CommandError> {
+    services(&state)?.agent_cancel(&task_id)
+}
+
+#[tauri::command]
+pub fn approval_decide(
+    state: State<'_, AppState>,
+    approval_id: String,
+    approve: bool,
+) -> Result<(), CommandError> {
+    services(&state)?.approval_decide(&approval_id, approve)
+}
+
+#[tauri::command]
+pub fn history_list(
+    state: State<'_, AppState>,
+    host_id: String,
+    cursor: Option<String>,
+) -> Result<Page<ExecutionView>, CommandError> {
+    services(&state)?.history_list(&host_id, cursor)
+}
+
+#[tauri::command]
+pub fn audit_verify(state: State<'_, AppState>) -> Result<AuditVerifyView, CommandError> {
+    services(&state)?.audit_verify()
 }
 
 #[tauri::command]

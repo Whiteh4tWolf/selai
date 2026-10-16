@@ -51,7 +51,7 @@ fn settings_from_input(input: &ProviderInput) -> Result<ProviderSettings, Comman
 }
 
 /// Rebuilds settings from a stored row, through the same validation as input.
-fn settings_from_record(rec: &ProviderRecord) -> Result<ProviderSettings, CommandError> {
+pub(crate) fn settings_from_record(rec: &ProviderRecord) -> Result<ProviderSettings, CommandError> {
     Ok(ProviderSettings {
         name: ProviderName::parse(&rec.name).map_err(invalid)?,
         protocol: rec.protocol,
@@ -62,7 +62,7 @@ fn settings_from_record(rec: &ProviderRecord) -> Result<ProviderSettings, Comman
     })
 }
 
-fn tool_calling_view(rec: &ProviderRecord) -> ToolCallingView {
+pub(crate) fn tool_calling_view(rec: &ProviderRecord) -> ToolCallingView {
     let current = format!(
         "{}|{}|{}",
         rec.protocol.as_str(),

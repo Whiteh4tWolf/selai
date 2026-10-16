@@ -4373,12 +4373,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "selai-agent"
+version = "0.1.0"
+dependencies = [
+ "selai-audit",
+ "selai-domain",
+ "selai-llm",
+ "selai-policy",
+ "selai-secrets",
+ "selai-ssh",
+ "selai-storage",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "wiremock",
+]
+
+[[package]]
+name = "selai-audit"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "selai-domain",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "selai-desktop"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "selai-agent",
+ "selai-audit",
  "selai-domain",
  "selai-llm",
+ "selai-policy",
  "selai-secrets",
  "selai-ssh",
  "selai-storage",
@@ -4421,6 +4454,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "selai-policy"
+version = "0.1.0"
+dependencies = [
+ "selai-domain",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "selai-secrets"
 version = "0.1.0"
 dependencies = [
@@ -4440,6 +4483,7 @@ dependencies = [
  "selai-testkit",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -4447,6 +4491,7 @@ name = "selai-storage"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
+ "selai-audit",
  "selai-domain",
  "serde_json",
  "tempfile",

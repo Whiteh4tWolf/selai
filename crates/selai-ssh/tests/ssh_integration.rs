@@ -315,3 +315,103 @@ async fn rsa_private_key_is_refused_before_authentication() {
         "no authentication may be attempted with RSA"
     );
 }
+
+#[tokio::test]
+async fn exec_keeps_streams_apart_and_reports_the_exit_status() {
+    use selai_ssh::ExecEnd;
+    use tokio_util::sync::CancellationToken;
+    let sshd = Sshd::start();
+    let m = material();
+    let session = connect(password_opts(&sshd, vec![host_pin()], &m.password))
+        .await
+        .expect("connect");
+    let out = session
+        .exec(
+            "printf out; printf err >&2; exit 7",
+            LIMIT,
+            64 * 1024,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("exec");
+    assert_eq!(out.stdout, b"out");
+    assert_eq!(out.stderr, b"err");
+    assert_eq!(out.exit_status, Some(7));
+    assert_eq!(out.end, ExecEnd::Completed);
+    assert!(!out.stdout_truncated && !out.stderr_truncated);
+}
+
+#[tokio::test]
+async fn exec_output_is_capped_and_marked_truncated() {
+    use tokio_util::sync::CancellationToken;
+    let sshd = Sshd::start();
+    let m = material();
+    let session = connect(password_opts(&sshd, vec![host_pin()], &m.password))
+        .await
+        .expect("connect");
+    let out = session
+        .exec(
+            "head -c 200000 /dev/zero | tr '\\0' a",
+            LIMIT,
+            65_536,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("exec");
+    assert_eq!(out.stdout.len(), 65_536);
+    assert!(
+        out.stdout_truncated,
+        "truncation must be visible to the caller"
+    );
+}
+
+#[tokio::test]
+async fn exec_timeout_closes_the_channel_and_says_so() {
+    use selai_ssh::ExecEnd;
+    use tokio_util::sync::CancellationToken;
+    let sshd = Sshd::start();
+    let m = material();
+    let session = connect(password_opts(&sshd, vec![host_pin()], &m.password))
+        .await
+        .expect("connect");
+    let started = std::time::Instant::now();
+    let out = session
+        .exec(
+            "sleep 30",
+            Duration::from_secs(1),
+            65_536,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("exec");
+    assert_eq!(out.end, ExecEnd::TimedOut);
+    assert_eq!(
+        out.exit_status, None,
+        "no exit status is invented for a timed-out command"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+#[tokio::test]
+async fn exec_cancellation_stops_waiting_immediately() {
+    use selai_ssh::ExecEnd;
+    use tokio_util::sync::CancellationToken;
+    let sshd = Sshd::start();
+    let m = material();
+    let session = connect(password_opts(&sshd, vec![host_pin()], &m.password))
+        .await
+        .expect("connect");
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        trigger.cancel();
+    });
+    let started = std::time::Instant::now();
+    let out = session
+        .exec("sleep 30", LIMIT, 65_536, &cancel)
+        .await
+        .expect("exec");
+    assert_eq!(out.end, ExecEnd::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}

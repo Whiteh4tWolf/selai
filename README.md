@@ -5,9 +5,10 @@ saves SSH hosts, mentions one with `@host`, and the agent runs diagnostics or
 approved commands on that host. The model never receives SSH credentials, and
 every AI command attempt is recorded per host.
 
-**Status: M1 (working SSH client) done on Linux; M2 (AI providers) built and
-tested against mock servers, not yet verified against a live provider.** Working
-on Linux:
+**Status: M1 (working SSH client) and M3 (scoped AI agent) done on Linux; M2 (AI
+providers) tested against mock servers, not yet verified against a live
+provider. M3's React panel is tested with mocked IPC, not yet run in a real
+window.** Working on Linux:
 
 - Host profiles: create, edit, archive, filter. Labels are unique and
   case-insensitive. Secrets are kept in the OS credential store, never in the
@@ -23,10 +24,12 @@ on Linux:
 - Startup reconciliation: work that was live at the last shutdown is marked
   `interrupted` and is never re-run.
 
-Provider profiles can be configured and tested for tool calling (M2). Not yet
-built: the `@host` agent and command approval (M3),
-the per-host AI history UI (M4), and installers (M5). The AI tab is a
-placeholder.
+Provider profiles can be configured and tested for tool calling (M2). The AI tab
+has an `@host` request box that runs one task on the chosen host. Diagnostics
+run without approval; free-form commands wait for an approval, and the model
+cannot choose the host (M3). Each command is recorded in that host's history,
+and the audit chain can be verified. Not yet built: a richer per-host AI history
+view (M4) and installers (M5).
 
 ## Build and test
 

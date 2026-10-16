@@ -61,6 +61,7 @@ pub struct Services {
     pub(crate) db: Arc<Mutex<Database>>,
     pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) llm: Arc<selai_llm::LlmClient>,
+    pub(crate) agent: Arc<crate::agent_service::AgentRegistry>,
     probes: Mutex<HashMap<HostId, CachedProbe>>,
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
     reconcile: ReconcileReport,
@@ -96,6 +97,7 @@ impl Services {
             db: Arc::new(Mutex::new(db)),
             secrets,
             llm: Arc::new(llm),
+            agent: Arc::new(crate::agent_service::AgentRegistry::default()),
             probes: Mutex::new(HashMap::new()),
             terminals: Arc::new(Mutex::new(HashMap::new())),
             reconcile,
@@ -491,7 +493,7 @@ impl Services {
             .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "no such terminal session"))
     }
 
-    fn active_host_and_pins(
+    pub(crate) fn active_host_and_pins(
         &self,
         id: HostId,
     ) -> Result<(selai_storage::HostRecord, Vec<PinnedHostKey>), CommandError> {
@@ -519,7 +521,7 @@ impl Services {
         Ok((host, pins))
     }
 
-    fn load_auth(
+    pub(crate) fn load_auth(
         &self,
         id: HostId,
         host: &selai_storage::HostRecord,
