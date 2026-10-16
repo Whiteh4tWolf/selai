@@ -4,14 +4,20 @@ import * as ipc from '../ipc';
 import { TerminalPane } from './TerminalPane';
 
 const written: unknown[] = [];
+const terminals: { options: { cursorBlink: boolean }; focus: ReturnType<typeof vi.fn> }[] = [];
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
+    options = { cursorBlink: true };
     cols = 80;
     rows = 24;
+    constructor(options: { cursorBlink: boolean }) {
+      this.options.cursorBlink = options.cursorBlink;
+      terminals.push(this);
+    }
     loadAddon() {}
     open() {}
-    focus() {}
+    focus = vi.fn();
     write(data: unknown) {
       written.push(data);
     }
@@ -43,6 +49,7 @@ const host = {
 
 beforeEach(() => {
   written.length = 0;
+  terminals.length = 0;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -142,5 +149,17 @@ describe('TerminalPane', () => {
     await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument());
     unmount();
     expect(disconnect).toHaveBeenCalledWith('session-9');
+  });
+
+  it('stops cursor blinking and does not steal focus while hidden', async () => {
+    vi.spyOn(ipc, 'terminalConnect').mockResolvedValue('session-hidden');
+    const { rerender } = render(<TerminalPane host={host} hidden />);
+    await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument());
+    expect(terminals[0]?.options.cursorBlink).toBe(false);
+    expect(terminals[0]?.focus).not.toHaveBeenCalled();
+
+    rerender(<TerminalPane host={host} hidden={false} />);
+    expect(terminals[0]?.options.cursorBlink).toBe(true);
+    expect(terminals[0]?.focus).toHaveBeenCalledTimes(1);
   });
 });

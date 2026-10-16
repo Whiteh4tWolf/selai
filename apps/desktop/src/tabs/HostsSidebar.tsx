@@ -39,9 +39,9 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
     };
   }, []);
 
-  const refresh = useCallback(async (filter: string) => {
+  const refresh = useCallback(async () => {
     try {
-      const items = await collectPages((cursor) => hostList(filter || undefined, false, cursor));
+      const items = await collectPages((cursor) => hostList(undefined, false, cursor));
       setHosts(items);
       setError(null);
     } catch (err) {
@@ -52,8 +52,8 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
   }, []);
 
   useEffect(() => {
-    void refresh(query);
-  }, [query, refresh]);
+    void refresh();
+  }, [refresh]);
 
   useEffect(() => {
     if (!editRequest) return;
@@ -77,13 +77,14 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
     try {
       await hostArchive(host.id);
       window.dispatchEvent(new Event(HOSTS_CHANGED));
-      await refresh(query);
+      await refresh();
     } catch (err) {
       setError(describeError(err));
     }
   }
 
   const q = query.trim().toLowerCase();
+  const visibleHosts = q ? hosts.filter((host) => host.label.toLowerCase().includes(q)) : hosts;
   const showLocal = local !== null && (q === '' || local.label.toLowerCase().includes(q) || 'local'.includes(q));
 
   return (
@@ -100,7 +101,7 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
         <button type="button" className="icon-btn" aria-label="New host" title="New host" onClick={() => setEditing('new')}>
           <PlusIcon size={15} />
         </button>
-        <button type="button" className="icon-btn" aria-label="Refresh hosts" title="Refresh" onClick={() => void refresh(query)}>
+        <button type="button" className="icon-btn" aria-label="Refresh hosts" title="Refresh" onClick={() => void refresh()}>
           <RefreshIcon size={14} />
         </button>
       </header>
@@ -155,11 +156,11 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
         >
           <ChevronIcon size={12} />
           SSH hosts
-          {hosts.length > 0 && <span className="tree-count">{hosts.length}</span>}
+          {visibleHosts.length > 0 && <span className="tree-count">{visibleHosts.length}</span>}
         </button>
         {open.ssh && (
           <ul className="tree-list">
-            {hosts.map((host) => (
+            {visibleHosts.map((host) => (
               <HostRow
                 key={host.id}
                 host={host}
@@ -174,7 +175,7 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
             ))}
           </ul>
         )}
-        {loaded && hosts.length === 0 && !error && open.ssh && (
+        {loaded && visibleHosts.length === 0 && !error && open.ssh && (
           <div className="tree-empty">
             {q ? (
               <p>No host matches “{query}”.</p>
@@ -197,7 +198,7 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
           onSaved={async (saved, connect) => {
             setEditing(null);
             window.dispatchEvent(new Event(HOSTS_CHANGED));
-            await refresh(query);
+            await refresh();
             if (connect) onConnect(saved);
           }}
         />
@@ -207,7 +208,7 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
           onClose={() => setImporting(false)}
           onImported={async () => {
             window.dispatchEvent(new Event(HOSTS_CHANGED));
-            await refresh(query);
+            await refresh();
           }}
         />
       )}

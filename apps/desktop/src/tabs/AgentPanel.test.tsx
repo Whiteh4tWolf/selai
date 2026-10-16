@@ -92,7 +92,8 @@ describe('AgentPanel', () => {
     const textarea = screen.getByLabelText('Request');
     fireEvent.change(textarea, { target: { value: 'restart @Production W' } });
     fireEvent.click(await screen.findByRole('button', { name: /Production Web/ }));
-    expect(list).toHaveBeenLastCalledWith('Production W');
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledWith(undefined, false, undefined);
     expect(textarea).toHaveValue('restart @Production Web ');
     expect(screen.queryByRole('list', { name: 'Matching hosts' })).not.toBeInTheDocument();
 
@@ -202,6 +203,24 @@ describe('AgentPanel', () => {
     expect(line).toHaveTextContent('Randf -hPexit 0');
     // The mention applied to that message only.
     expect(screen.queryByLabelText('Remove production-web')).not.toBeInTheDocument();
+  });
+
+  it('batches streamed text but flushes it before a command event', async () => {
+    const agent = mockAgent();
+    const textarea = await pickProductionWeb();
+    await sendRequest(textarea, 'check disk usage');
+    await waitFor(() => expect(agent.start).toHaveBeenCalled());
+
+    agent.play({ taskId: 't1', type: 'textDelta', text: 'Disk ' });
+    agent.play({ taskId: 't1', type: 'textDelta', text: 'usage' });
+    expect(screen.queryByText('Disk usage')).not.toBeInTheDocument();
+
+    agent.play({ taskId: 't1', type: 'toolProposed', executionId: 'e1', tool: 'ssh.run_diagnostic', command: 'df -hP', hostLabel: 'production-web' });
+    expect(await screen.findByText('Disk usage')).toBeInTheDocument();
+    expect(screen.getByLabelText('Command')).toHaveTextContent('df -hP');
+
+    agent.play({ taskId: 't1', type: 'textDelta', text: 'Done.' });
+    expect(await screen.findByText('Done.')).toBeInTheDocument();
   });
 
   it('shows the exact command and sends the operator decision for an approval', async () => {

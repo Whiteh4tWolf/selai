@@ -5,6 +5,7 @@ import * as ipc from './ipc';
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
+    options = { cursorBlink: true };
     cols = 80;
     rows = 24;
     loadAddon() {}

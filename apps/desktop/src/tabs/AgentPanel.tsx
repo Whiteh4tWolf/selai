@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   agentCancel,
   agentStart,
@@ -19,6 +19,7 @@ import {
   type SudoOptions,
   type HostView,
   type ProviderView,
+  type TaskEvent,
 } from '../ipc';
 import { HostAvatar } from '../ui/HostAvatar';
 import { collectPages } from '../ui/collectPages';
@@ -40,18 +41,13 @@ import { SelaiLogo } from '../ui/SelaiLogo';
 import { applyEvent, isTerminal, setApprovalState, type TranscriptItem } from './agentTranscript';
 import { PROVIDERS_CHANGED } from './ProvidersPanel';
 
-/** "This computer" when it matches `query`, then the matching SSH hosts. */
-async function targetSearch(query: string): Promise<HostView[]> {
-  const q = query.trim().toLowerCase();
+/** Load targets once; the @ picker filters this list without an IPC call per key. */
+async function loadTargets(): Promise<HostView[]> {
   const [local, hosts] = await Promise.all([
     localHost().catch(() => null),
-    collectPages((cursor) => cursor
-      ? hostList(query.trim() || undefined, false, cursor)
-      : hostList(query.trim() || undefined)),
+    collectPages((cursor) => hostList(undefined, false, cursor)),
   ]);
-  const localMatches =
-    local !== null && (!q || local.label.toLowerCase().includes(q) || 'local'.startsWith(q));
-  return [...(localMatches ? [local] : []), ...hosts.filter((h) => !h.archived)];
+  return [...(local ? [local] : []), ...hosts.filter((h) => !h.archived)];
 }
 
 /** The "@query" being typed at the end of the request. Labels may hold spaces. */
@@ -109,7 +105,6 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   const [draftMention, setDraftMention] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
   const [mention, setMention] = useState<string | null>(null);
-  const [matches, setMatches] = useState<HostView[]>([]);
   const [active, setActive] = useState(0);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +112,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   const [keyPrompt, setKeyPrompt] = useState<{ turn: Turn; host: HostView; problem: HostKeyProblem } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingText = useRef(new Map<number, string>());
+  const textFlushTimer = useRef<number | null>(null);
 
   const running = turns.some((t) => t.running);
   const runningTask = turns.find((t) => t.running)?.taskId ?? null;
@@ -156,12 +153,12 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
 
   useEffect(() => {
     let active = true;
-    const loadTargets = () =>
-      targetSearch('')
+    const refreshTargets = () =>
+      loadTargets()
         .then((list) => active && setTargets(list))
         .catch(() => undefined);
-    loadTargets();
-    window.addEventListener(HOSTS_CHANGED, loadTargets);
+    refreshTargets();
+    window.addEventListener(HOSTS_CHANGED, refreshTargets);
     preferencesGet()
       .then((prefs) => {
         if (!active || !prefs.pinnedHostId) return;
@@ -171,24 +168,14 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
       .catch(() => undefined);
     return () => {
       active = false;
-      window.removeEventListener(HOSTS_CHANGED, loadTargets);
+      window.removeEventListener(HOSTS_CHANGED, refreshTargets);
     };
   }, []);
 
-  useEffect(() => {
-    if (mention === null) return;
-    let active = true;
-    targetSearch(mention)
-      .then((targets) => {
-        if (!active) return;
-        setMatches(targets);
-        setActive(0);
-      })
-      .catch(() => active && setMatches([]));
-    return () => {
-      active = false;
-    };
-  }, [mention]);
+  const mentionQuery = mention?.trim().toLowerCase();
+  const matches = mentionQuery === undefined ? [] : targets.filter((target) =>
+    target.label.toLowerCase().includes(mentionQuery) ||
+    (target.kind === 'local' && 'local'.startsWith(mentionQuery)));
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -244,6 +231,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
       return;
     }
     setMention(m[2] ?? '');
+    setActive(0);
   }
 
   function pickHost(h: HostView) {
@@ -344,18 +332,56 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   }
 
   const updateTurn = (id: number, change: (t: Turn) => Turn) =>
-    setTurns((prev) => prev.map((t) => (t.id === id ? change(t) : t)));
+    setTurns((prev) => {
+      const index = prev.findIndex((t) => t.id === id);
+      if (index < 0) return prev;
+      const next = change(prev[index]!);
+      if (next === prev[index]) return prev;
+      const updated = prev.slice();
+      updated[index] = next;
+      return updated;
+    });
+
+  // Model providers can stream many tiny tokens per second. Render text at most
+  // once per short interval, but flush it before approvals and terminal events.
+  function flushText() {
+    if (textFlushTimer.current !== null) window.clearTimeout(textFlushTimer.current);
+    textFlushTimer.current = null;
+    if (!pendingText.current.size) return;
+    const pending = pendingText.current;
+    pendingText.current = new Map();
+    setTurns((prev) => prev.map((turn) => {
+      const text = pending.get(turn.id);
+      return text ? { ...turn, items: applyEvent(turn.items, { type: 'textDelta', text }) } : turn;
+    }));
+  }
+
+  function displayEvent(id: number, event: TaskEvent) {
+    if (event.type === 'textDelta') {
+      pendingText.current.set(id, (pendingText.current.get(id) ?? '') + event.text);
+      if (pendingText.current.get(id)!.length >= 32_768) flushText();
+      else if (textFlushTimer.current === null) textFlushTimer.current = window.setTimeout(flushText, 32);
+      return;
+    }
+    flushText();
+    updateTurn(id, (turn) => {
+      const items = applyEvent(turn.items, event);
+      const running = turn.running && !isTerminal(event);
+      return items === turn.items && running === turn.running ? turn : { ...turn, items, running };
+    });
+  }
+
+  useEffect(() => () => {
+    if (textFlushTimer.current !== null) window.clearTimeout(textFlushTimer.current);
+    pendingText.current.clear();
+  }, []);
 
   async function startTurn(turn: Turn, target: HostView) {
     updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [] }));
     try {
       // The new message has no reply yet, so it is not part of its own history.
       const id = await agentStart(target.id, providerId, turn.prompt, conversation(), (event) => {
-        updateTurn(turn.id, (t) => ({
-          ...t,
-          items: applyEvent(t.items, event),
-          running: t.running && !isTerminal(event),
-        }));
+        displayEvent(turn.id, event);
       });
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
     } catch (err) {
@@ -388,11 +414,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     try {
       const id = await chatSend(providerId, [...history, { role: 'user', content: turn.prompt }], (event) => {
         const asTask = event.type === 'completed' ? ({ type: 'completed', text: '' } as const) : event;
-        updateTurn(turn.id, (t) => ({
-          ...t,
-          items: applyEvent(t.items, asTask),
-          running: t.running && !isTerminal(asTask),
-        }));
+        displayEvent(turn.id, asTask);
       });
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
     } catch (err) {
@@ -437,7 +459,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     }
   }
 
-  async function decide(approvalId: string, approve: boolean, sudo?: SudoAnswer) {
+  const decide = useCallback(async (approvalId: string, approve: boolean, sudo?: SudoAnswer) => {
     const update = (state: 'sending' | 'approved' | 'denied' | 'pending', why: string | null = null) =>
       setTurns((prev) => prev.map((t) => ({ ...t, items: setApprovalState(t.items, approvalId, state, why) })));
     update('sending');
@@ -448,7 +470,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
       // The database refused it (expired or already decided). Show why.
       update('pending', describeError(err));
     }
-  }
+  }, []);
 
   async function verifyAudit() {
     try {
@@ -528,46 +550,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
           </div>
         ) : (
           <ol className="thread" aria-label="Transcript">
-            {turns.map((turn) => (
-              <Fragment key={turn.id}>
-                <li className="turn-user">
-                  <div className="bubble">{highlight(turn.prompt, turn.mentionText)}</div>
-                </li>
-                <li className="turn-ai">
-                  <span className="ai-avatar" role="img" aria-label="Selai assistant">
-                    <SelaiLogo size={26} />
-                  </span>
-                  <div className="ai-body">
-                    {turn.hostLabel && turn.items.some((i) => i.kind === 'tool' || i.kind === 'approval') && (
-                      <div className="ai-meta">
-                        <span className="host-tag" title="Commands in this reply ran on this host">
-                          <TerminalIcon size={11} /> {turn.hostLabel}
-                        </span>
-                      </div>
-                    )}
-                    {turn.items.map((item, i) => (
-                      <TranscriptRow key={i} item={item} items={turn.items} onDecide={decide} />
-                    ))}
-                    {turn.running &&
-                      !turn.items.some((i) => i.kind === 'text') &&
-                      !turn.items.some((i) => i.kind === 'approval' && i.state === 'pending') && (
-                      <span className="typing" aria-label="Working">
-                        <span />
-                        <span />
-                        <span />
-                      </span>
-                    )}
-                    {turn.notice && <p className="status-line">{turn.notice}</p>}
-                    {turn.error && (
-                      <p role="alert" className="banner" data-tone="danger">
-                        <AlertIcon />
-                        <span className="grow">{turn.error}</span>
-                      </p>
-                    )}
-                  </div>
-                </li>
-              </Fragment>
-            ))}
+            {turns.map((turn) => <TurnEntry key={turn.id} turn={turn} onDecide={decide} />)}
           </ol>
         )}
       </div>
@@ -799,6 +782,54 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     </section>
   );
 }
+
+/** Completed turns keep their identity, so typing or streaming a later turn does
+ *  not parse and render all earlier Markdown again. */
+const TurnEntry = memo(function TurnEntry({ turn, onDecide }: {
+  turn: Turn;
+  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer) => void;
+}) {
+  return (
+    <Fragment>
+      <li className="turn-user">
+        <div className="bubble">{highlight(turn.prompt, turn.mentionText)}</div>
+      </li>
+      <li className="turn-ai">
+        <span className="ai-avatar" role="img" aria-label="Selai assistant">
+          <SelaiLogo size={26} />
+        </span>
+        <div className="ai-body">
+          {turn.hostLabel && turn.items.some((i) => i.kind === 'tool' || i.kind === 'approval') && (
+            <div className="ai-meta">
+              <span className="host-tag" title="Commands in this reply ran on this host">
+                <TerminalIcon size={11} /> {turn.hostLabel}
+              </span>
+            </div>
+          )}
+          {turn.items.map((item, i) => (
+            <TranscriptRow key={i} item={item} items={turn.items} onDecide={onDecide} />
+          ))}
+          {turn.running &&
+            !turn.items.some((i) => i.kind === 'text') &&
+            !turn.items.some((i) => i.kind === 'approval' && i.state === 'pending') && (
+              <span className="typing" aria-label="Working">
+                <span />
+                <span />
+                <span />
+              </span>
+            )}
+          {turn.notice && <p className="status-line">{turn.notice}</p>}
+          {turn.error && (
+            <p role="alert" className="banner" data-tone="danger">
+              <AlertIcon />
+              <span className="grow">{turn.error}</span>
+            </p>
+          )}
+        </div>
+      </li>
+    </Fragment>
+  );
+});
 
 function TargetAvatar({ host }: { host: HostView }) {
   if (host.kind !== 'local') return <HostAvatar label={host.label} size={13} />;

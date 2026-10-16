@@ -76,6 +76,18 @@ function Resizer({
   direction: 1 | -1;
 }) {
   const drag = useRef<{ x: number; start: number; now: number } | null>(null);
+  const frame = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (frame.current !== null) window.cancelAnimationFrame(frame.current);
+    document.body.classList.remove('resizing');
+  }, []);
+  const finishDrag = () => {
+    if (frame.current !== null) window.cancelAnimationFrame(frame.current);
+    frame.current = null;
+    if (drag.current) commit(setWidth(drag.current.now));
+    drag.current = null;
+    document.body.classList.remove('resizing');
+  };
   return (
     <div
       role="separator"
@@ -91,13 +103,15 @@ function Resizer({
       }}
       onPointerMove={(e) => {
         const d = drag.current;
-        if (d) d.now = setWidth(d.start + direction * (e.clientX - d.x));
+        if (!d) return;
+        d.now = d.start + direction * (e.clientX - d.x);
+        if (frame.current === null) frame.current = window.requestAnimationFrame(() => {
+          frame.current = null;
+          if (drag.current) drag.current.now = setWidth(drag.current.now);
+        });
       }}
-      onPointerUp={() => {
-        if (drag.current) commit(drag.current.now);
-        drag.current = null;
-        document.body.classList.remove('resizing');
-      }}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
       onKeyDown={(e) => {
         const step = e.key === 'ArrowRight' ? 16 : e.key === 'ArrowLeft' ? -16 : 0;
         if (!step) return;

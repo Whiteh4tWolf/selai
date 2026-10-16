@@ -71,6 +71,8 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
   const [status, setStatus] = useState<SessionStatus>('connecting');
   const [failure, setFailure] = useState<CommandError | null>(null);
   const [keyProblem, setKeyProblem] = useState<HostKeyProblem | null>(null);
@@ -88,8 +90,8 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
     const container = containerRef.current;
     if (!container) return;
     const term = new Terminal({
-      cursorBlink: true,
-      scrollback: 10000,
+      cursorBlink: !hidden,
+      scrollback: 5000,
       fontFamily: "'JetBrains Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace",
       fontSize: 13.5,
       lineHeight: 1.25,
@@ -171,7 +173,7 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
         sessionRef.current = id;
         setStatus('connected');
         fitRef.current?.fit();
-        term.focus();
+        if (!hiddenRef.current) term.focus();
       })
       .catch((err: unknown) => {
         if (disposed) return;
@@ -194,6 +196,7 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
 
   // A pane that was hidden has no size; fit it again when it is shown.
   useEffect(() => {
+    if (termRef.current) termRef.current.options.cursorBlink = !hidden;
     if (!hidden) {
       fitRef.current?.fit();
       if (status === 'connected') termRef.current?.focus();

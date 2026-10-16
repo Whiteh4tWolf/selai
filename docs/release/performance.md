@@ -3,6 +3,26 @@
 Numbers in this file were measured by `apps/desktop/src-tauri/tests/perf_pty.rs`.
 Nothing here is estimated or copied from another machine.
 
+## Frontend review (2026-10-16)
+
+These are source-level changes, **not new CPU or RAM measurements**:
+
+- The host explorer and `@` picker filter an already loaded host list. Typing no
+  longer requests every page from SQLite for each character.
+- AI text deltas are collected for up to 32 ms or 32 KiB before a React update.
+  Approval, command, failure, and completion events flush preceding text first.
+  Completed turns are memoized, avoiding repeated Markdown parsing as a new
+  reply streams or the operator types.
+- Hidden terminal tabs stop cursor blinking. Terminal scrollback is limited to
+  5,000 lines per tab. Panel dragging schedules at most one layout update per
+  animation frame.
+
+The measurements below predate these changes. A full desktop CPU/RAM comparison
+still needs the native app and webview running on the same machine before and
+after the change. The terminal event path still has no UI acknowledgement or
+backpressure; a producer that outruns the webview can grow queued output in
+memory. This remains the main unbounded-RAM risk under sustained output.
+
 ## Machine
 
 - Sandbox VM: 4 vCPU Intel Xeon @ 2.10 GHz, 16 GiB RAM, Linux 6.18 (kernel string
