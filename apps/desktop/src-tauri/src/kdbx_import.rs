@@ -90,14 +90,16 @@ fn is_ssh_uri(value: &str) -> bool {
 }
 
 fn is_in_recycle_bin(entry: &keepass::db::EntryRef<'_>) -> bool {
-    let mut group = Some(entry.parent());
-    while let Some(current) = group {
-        if current.name.eq_ignore_ascii_case("Recycle Bin") {
-            return true;
-        }
-        group = current.parent();
-    }
-    false
+    group_or_ancestor_is_recycle_bin(&entry.parent())
+}
+
+/// Walks up the group chain. Recursion keeps each parent alive for its own call;
+/// a loop that reassigns a borrowed parent does not compile.
+fn group_or_ancestor_is_recycle_bin(group: &keepass::db::GroupRef<'_>) -> bool {
+    group.name.eq_ignore_ascii_case("Recycle Bin")
+        || group
+            .parent()
+            .is_some_and(|parent| group_or_ancestor_is_recycle_bin(&parent))
 }
 
 #[cfg(test)]
