@@ -3,15 +3,12 @@ import { describeError, HOSTS_CHANGED, hostArchive, hostList, localHost, type Ho
 import { HostAvatar } from '../ui/HostAvatar';
 import { collectPages } from '../ui/collectPages';
 import { ArchiveIcon, ChevronIcon, EditIcon, ImportIcon, PlusIcon, RefreshIcon, SearchIcon, TerminalIcon } from '../ui/icons';
-import { SelaiLogo } from '../ui/SelaiLogo';
 import { HostForm } from './HostForm';
 import { HostImport } from './HostImport';
 import type { SessionStatus } from './TerminalTab';
 
 interface Props {
   onConnect: (host: HostView) => void;
-  /** Makes this host the chat's server. */
-  onAskAi?: (host: HostView) => void;
   /** Status of the open terminal for each host, if any. */
   sessions?: Record<string, SessionStatus>;
   /** Another view asked to edit this host, for example after a failed login. */
@@ -19,7 +16,7 @@ interface Props {
 }
 
 /** The host explorer in the left sidebar: this computer and the saved SSH hosts. */
-export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }: Props) {
+export function HostsSidebar({ onConnect, sessions = {}, editRequest }: Props) {
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<HostView | 'new' | null>(null);
@@ -141,7 +138,6 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
                   sub="local shell"
                   status={sessions[local.id]}
                   onConnect={onConnect}
-                  onAskAi={onAskAi}
                 />
               </ul>
             )}
@@ -168,7 +164,6 @@ export function HostsSidebar({ onConnect, onAskAi, sessions = {}, editRequest }:
                 warn={!host.credentialConfigured && host.authMethod === 'password' ? 'No password saved' : undefined}
                 status={sessions[host.id]}
                 onConnect={onConnect}
-                onAskAi={onAskAi}
                 onEdit={() => setEditing(host)}
                 onArchive={() => void archive(host)}
               />
@@ -222,7 +217,6 @@ function HostRow({
   warn,
   status,
   onConnect,
-  onAskAi,
   onEdit,
   onArchive,
 }: {
@@ -231,7 +225,6 @@ function HostRow({
   warn?: string;
   status?: SessionStatus;
   onConnect: (host: HostView) => void;
-  onAskAi?: (host: HostView) => void;
   onEdit?: () => void;
   onArchive?: () => void;
 }) {
@@ -257,11 +250,6 @@ function HostRow({
       {warn && <span className="dot" data-status="hostkey" aria-label={warn} />}
       {status && <span className="dot" data-status={status === 'connected' ? 'ok' : status} aria-label={`Terminal ${status}`} />}
       <span className="tree-tools">
-        {onAskAi && (
-          <button type="button" className="icon-btn" aria-label={`Use ${host.label} in chat`} title="Use in chat" onClick={() => onAskAi(host)}>
-            <SelaiLogo size={18} />
-          </button>
-        )}
         {onEdit && (
           <button type="button" className="icon-btn" aria-label={`Edit ${host.label}`} title="Edit" onClick={onEdit}>
             <EditIcon size={13} />

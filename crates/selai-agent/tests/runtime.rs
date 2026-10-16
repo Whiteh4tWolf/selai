@@ -99,6 +99,7 @@ struct FakeExec {
     stdout: &'static str,
     end: Option<ExecEnd>,
     cancel_on_first: Option<CancellationToken>,
+    drain_on_first: Option<CancellationToken>,
     /// What the sudo probe reports. `None` means no password is needed.
     sudo: Option<SudoStatus>,
     /// Root runs: the inner command and the password sudo received.
@@ -128,6 +129,9 @@ impl RemoteExecutor for FakeExec {
             if let Some(token) = &self.cancel_on_first {
                 token.cancel();
                 return Ok(output(ExecEnd::Cancelled, ""));
+            }
+            if let Some(token) = &self.drain_on_first {
+                token.cancel();
             }
             Ok(output(self.end.unwrap_or(ExecEnd::Completed), self.stdout))
         }
@@ -421,6 +425,7 @@ fn client() -> LlmClient {
 
 fn spec(w: &World, base: &str, limits: Limits) -> TaskSpec {
     TaskSpec {
+        drain: CancellationToken::new(),
         task: TaskId::new(),
         host: w.host,
         host_label: w.host_label.clone(),
@@ -749,6 +754,52 @@ async fn cancelling_stops_the_next_tool_call() {
     .await;
     assert_eq!(outcome.state, TaskState::Cancelled);
     assert_eq!(exec.calls().len(), 1, "no call after cancellation");
+}
+
+#[tokio::test]
+async fn vault_drain_preserves_current_result_and_stops_the_next_command() {
+    let w = world();
+    let (server, _) = model(vec![
+        Turn::Tool("ssh_run_diagnostic", json!({"operation":"uptime"})),
+        Turn::Tool("ssh_run_diagnostic", json!({"operation":"disk_usage"})),
+    ])
+    .await;
+    let mut task = spec(&w, &server.uri(), Limits::default());
+    task.drain = CancellationToken::new();
+    let executor = FakeExec {
+        drain_on_first: Some(task.drain.clone()),
+        stdout: "finished current command",
+        ..Default::default()
+    };
+    let operator = FakeOperator {
+        db: Arc::clone(&w.db),
+        mode: Operator::ApproveInDb,
+        asked: Mutex::new(0),
+    };
+    let (events, _) = sink();
+    let outcome = run_task(
+        task,
+        &store(&w, false),
+        &client(),
+        &executor,
+        &operator,
+        events,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(outcome.state, TaskState::Cancelled);
+    assert_eq!(executor.calls(), vec!["uptime".to_owned()]);
+    let history =
+        w.db.lock()
+            .unwrap()
+            .host_command_history(w.host, &PageRequest::default())
+            .unwrap();
+    assert_eq!(history.items.len(), 1);
+    assert_eq!(history.items[0].state, ExecStatus::Completed);
+    assert_eq!(
+        history.items[0].stdout_preview.as_deref(),
+        Some("finished current command")
+    );
 }
 
 #[tokio::test]

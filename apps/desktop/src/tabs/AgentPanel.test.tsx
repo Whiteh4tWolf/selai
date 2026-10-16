@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ipc from '../ipc';
 import { AgentPanel } from './AgentPanel';
 import { PROVIDERS_CHANGED } from './ProvidersPanel';
+import { flushVaultViews } from '../vault';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -106,7 +107,8 @@ describe('AgentPanel', () => {
       emit?.({ type: 'completed' });
     });
     fireEvent.change(screen.getByLabelText('Session title'), { target: { value: 'SSH troubleshooting' } });
-    await waitFor(() => expect(ipc.chatSessionSave).toHaveBeenCalled(), { timeout: 2000 });
+    await act(async () => { await flushVaultViews(); });
+    expect(ipc.chatSessionSave).toHaveBeenCalled();
     const saved = vi.mocked(ipc.chatSessionSave).mock.calls.at(-1)![0];
     expect(saved.title).toBe('SSH troubleshooting');
     expect(JSON.parse(saved.transcript).turns[0].items).toContainEqual({ kind: 'text', text: 'Keepalive checks whether the connection is alive.' });

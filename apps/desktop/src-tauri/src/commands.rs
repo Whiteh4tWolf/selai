@@ -25,8 +25,208 @@ use crate::{
     AppState,
 };
 
-fn services(state: &State<'_, AppState>) -> Result<Arc<Services>, CommandError> {
-    state.services().cloned()
+fn services(
+    state: &State<'_, AppState>,
+) -> Result<crate::vault_service::ServiceLease, CommandError> {
+    state.services()
+}
+
+#[tauri::command]
+pub async fn vault_status(
+    state: State<'_, AppState>,
+) -> Result<crate::vault_service::VaultStatus, CommandError> {
+    let manager = state.vault()?;
+    tauri::async_runtime::spawn_blocking(move || manager.status())
+        .await
+        .map_err(|_| CommandError::new(selai_domain::ErrorCode::Internal, "Vault status failed."))?
+}
+#[tauri::command]
+pub fn vault_flush_complete(state: State<'_, AppState>) -> Result<(), CommandError> {
+    state.vault()?.flush_complete()
+}
+#[tauri::command]
+pub fn vault_activity(state: State<'_, AppState>) -> Result<(), CommandError> {
+    state.vault()?.activity()
+}
+#[tauri::command]
+pub fn vault_lock(state: State<'_, AppState>, force: bool) -> Result<(), CommandError> {
+    let manager = state.vault()?;
+    tauri::async_runtime::spawn(async move {
+        let _ = manager.lock(force).await;
+    });
+    Ok(())
+}
+
+/// A native picker can remain open while the vault locks. Its worker captures
+/// no passphrase or data key; cancellation drops the caller's secret buffers.
+async fn vault_file_dialog(
+    manager: &Arc<crate::vault_service::VaultManager>,
+    title: &'static str,
+    extension: &'static str,
+    filename: Option<&'static str>,
+    gate: bool,
+) -> Result<Option<std::path::PathBuf>, CommandError> {
+    let drain = if gate {
+        Some(manager.services()?.agent.drain.clone())
+    } else {
+        None
+    };
+    let dialog = tauri::async_runtime::spawn_blocking(move || {
+        let picker = rfd::FileDialog::new()
+            .set_title(title)
+            .add_filter("Selai file", &[extension]);
+        match filename {
+            Some(name) => picker.set_file_name(name).save_file(),
+            None => picker.pick_file(),
+        }
+    });
+    let result = if let Some(token) = drain {
+        tokio::select! {biased;_=token.cancelled()=>return Err(CommandError::new(selai_domain::ErrorCode::SecretStoreLocked,"The vault locked. Choose the file again after unlocking.")),result=dialog=>result}
+    } else {
+        dialog.await
+    };
+    result.map_err(|_| CommandError::new(selai_domain::ErrorCode::Internal, "File picker failed."))
+}
+
+/// File paths come from native dialogs, never a webview-supplied path.
+#[tauri::command]
+pub async fn vault_action(
+    state: State<'_, AppState>,
+    action: String,
+    passphrase: Option<String>,
+    replacement: Option<String>,
+    minutes: Option<u32>,
+) -> Result<Option<String>, CommandError> {
+    let manager = state.vault()?;
+    let phrase = zeroize::Zeroizing::new(passphrase.unwrap_or_default());
+    let replacement = zeroize::Zeroizing::new(replacement.unwrap_or_default());
+    let mut source = None;
+    let mut destination = None;
+    match action.as_str() {
+        "saveRecovery" => {
+            destination = vault_file_dialog(
+                &manager,
+                "Save recovery key — keep it separate from your backup",
+                "txt",
+                Some("selai-recovery-key.txt"),
+                true,
+            )
+            .await?;
+            if destination.is_none() {
+                return Ok(None);
+            }
+        }
+        "backup" => {
+            destination = vault_file_dialog(
+                &manager,
+                "Save encrypted vault backup",
+                "selai",
+                Some("selai-backup.selai"),
+                true,
+            )
+            .await?;
+            if destination.is_none() {
+                return Ok(None);
+            }
+        }
+        "restore" | "restoreRecovery" => {
+            source = vault_file_dialog(
+                &manager,
+                "Restore encrypted vault backup",
+                "selai",
+                None,
+                false,
+            )
+            .await?;
+            if source.is_none() {
+                return Ok(None);
+            }
+        }
+        "exportArchive" => {
+            destination = vault_file_dialog(
+                &manager,
+                "Save encrypted legacy history export",
+                "selai-history",
+                Some("selai-legacy-history.selai-history"),
+                true,
+            )
+            .await?;
+            if destination.is_none() {
+                return Ok(None);
+            }
+        }
+        "decryptHistory" => {
+            source = vault_file_dialog(
+                &manager,
+                "Open encrypted history export",
+                "selai-history",
+                None,
+                true,
+            )
+            .await?;
+            if source.is_none() {
+                return Ok(None);
+            }
+            destination = vault_file_dialog(
+                &manager,
+                "Save decrypted history — this file is NOT encrypted",
+                "json",
+                Some("selai-history.json"),
+                true,
+            )
+            .await?;
+            if destination.is_none() {
+                return Ok(None);
+            }
+        }
+        _ => (),
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        match action.as_str() {
+            "saveRecovery"=>{
+                let Some(path)=destination else{return Ok(None)};
+                let _lease=manager.services()?;
+                manager.export_destination(&path)?;
+                if phrase.len()!=43 || !phrase.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'){return Err(CommandError::new(selai_domain::ErrorCode::InvalidInput,"Invalid recovery key."));}
+                let document=zeroize::Zeroizing::new(format!("Selai recovery key\n{}\nKeep this key separate from your encrypted backup.\n",phrase.as_str()));
+                selai_vault::write_export(&path,document.as_bytes()).map_err(|e|CommandError::new(selai_domain::ErrorCode::StorageIo,e.to_string()))?;
+                Ok(Some(path.display().to_string()))
+            },
+            "setup" => manager.initialize(phrase,&selai_secrets::KeyringStore::new()).map(Some),
+            "unlock" => manager.unlock(phrase).map(|_|None),
+            "recover" => manager.recover(phrase,replacement).map(Some),
+            "change" => manager.change(phrase,replacement).map(|_|None),
+            "rotateRecovery" => manager.rotate(phrase).map(Some),
+            "timeout" => manager.timeout(minutes.unwrap_or(15)).map(|_|None),
+            "cleanup" => manager.retry_cleanup().map(|ok|Some(if ok {"Cleanup complete"}else{"Some legacy files or credentials could not be removed. Close older Selai instances, then retry."}.into())),
+            "archives" => manager.archives().and_then(|names|serde_json::to_string(&names).map(Some).map_err(|e|CommandError::new(selai_domain::ErrorCode::Internal,e.to_string()))),
+            "exportArchive" => {
+                let Some(path)=destination else{return Ok(None)};
+                manager.export_archive(&replacement,&path).map(|_|Some(path.display().to_string()))
+            },
+            "backup" => {
+                let Some(path)=destination else{return Ok(None)};
+                manager.backup(phrase,&path).map(|_|Some(path.display().to_string()))
+            },
+            "restore" | "restoreRecovery" => {
+                let Some(path)=source else{return Ok(None)};
+                if action=="restoreRecovery"{manager.restore_recovery(phrase,replacement,&path).map(Some)}else{manager.restore(phrase,&path).map(|_|None)}
+            },
+            "decryptHistory" => {
+                let Some(path)=source else{return Ok(None)};
+                let Some(out)=destination else{return Ok(None)};
+                let _lease=manager.services()?;
+                manager.export_destination(&out)?;
+                let metadata=std::fs::metadata(&path).map_err(|e|CommandError::new(selai_domain::ErrorCode::StorageIo,e.to_string()))?;
+                if metadata.len()>64*1024*1024{return Err(CommandError::new(selai_domain::ErrorCode::InvalidInput,"History export is too large."));}
+                let bytes=std::fs::read(path).map_err(|e|CommandError::new(selai_domain::ErrorCode::StorageIo,e.to_string()))?;
+                let plain=selai_vault::Vault::open_document(&bytes,&phrase).map_err(|e|CommandError::new(selai_domain::ErrorCode::InvalidInput,e.to_string()))?;
+                selai_vault::write_export(&out,&plain).map_err(|e|CommandError::new(selai_domain::ErrorCode::StorageIo,e.to_string()))?;
+                Ok(Some(out.display().to_string()))
+            },
+            _=>Err(CommandError::new(selai_domain::ErrorCode::InvalidInput,"Unknown vault action."))
+        }
+    }).await.map_err(|_|CommandError::new(selai_domain::ErrorCode::Internal,"Vault operation failed."))?
 }
 
 #[tauri::command]
@@ -66,9 +266,11 @@ pub fn host_save(state: State<'_, AppState>, input: HostInput) -> Result<HostVie
 
 #[tauri::command]
 pub fn kdbx_preview(
+    state: State<'_, AppState>,
     file_base64: String,
     passphrase: String,
 ) -> Result<Vec<crate::kdbx_import::KdbxProfile>, CommandError> {
+    let _lease = services(&state)?;
     crate::kdbx_import::preview(&file_base64, passphrase)
         .map_err(|message| CommandError::new(selai_domain::ErrorCode::InvalidInput, message))
 }
@@ -80,7 +282,8 @@ pub fn host_archive(state: State<'_, AppState>, id: String) -> Result<(), Comman
 
 #[tauri::command]
 pub async fn host_probe(state: State<'_, AppState>, id: String) -> Result<ProbeView, CommandError> {
-    services(&state)?.host_probe(&id).await
+    let lease = services(&state)?;
+    lease.run(lease.host_probe(&id)).await
 }
 
 #[tauri::command]
@@ -119,8 +322,9 @@ pub async fn terminal_connect(
         // A closed channel means the window went away; the session ends on its own.
         let _ = on_event.send(event);
     });
-    services(&state)?
-        .terminal_connect(&host_id, cols, rows, sink)
+    let lease = services(&state)?;
+    lease
+        .run(lease.terminal_connect(&host_id, cols, rows, sink))
         .await
 }
 
@@ -130,7 +334,8 @@ pub async fn terminal_input(
     session_id: String,
     data: String,
 ) -> Result<(), CommandError> {
-    services(&state)?.terminal_input(&session_id, data).await
+    let lease = services(&state)?;
+    lease.run(lease.terminal_input(&session_id, data)).await
 }
 
 #[tauri::command]
@@ -140,8 +345,9 @@ pub async fn terminal_resize(
     cols: u32,
     rows: u32,
 ) -> Result<(), CommandError> {
-    services(&state)?
-        .terminal_resize(&session_id, cols, rows)
+    let lease = services(&state)?;
+    lease
+        .run(lease.terminal_resize(&session_id, cols, rows))
         .await
 }
 
@@ -150,7 +356,8 @@ pub async fn terminal_disconnect(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), CommandError> {
-    services(&state)?.terminal_disconnect(&session_id).await
+    let lease = services(&state)?;
+    lease.run(lease.terminal_disconnect(&session_id)).await
 }
 
 #[tauri::command]
@@ -179,7 +386,8 @@ pub async fn provider_models(
     state: State<'_, AppState>,
     input: ProviderModelsInput,
 ) -> Result<ModelsView, CommandError> {
-    services(&state)?.provider_models(input).await
+    let lease = services(&state)?;
+    lease.run(lease.provider_models(input)).await
 }
 
 #[tauri::command]
@@ -201,14 +409,15 @@ pub async fn agent_start(
         // until it finishes or is cancelled, and its audit trail is still written.
         let _ = on_event.send(event);
     });
-    services(&state)?
-        .agent_start(
+    let lease = services(&state)?;
+    lease
+        .run(lease.agent_start(
             &host_id,
             &provider_id,
             &prompt,
             &history.unwrap_or_default(),
             sink,
-        )
+        ))
         .await
 }
 
@@ -222,8 +431,9 @@ pub async fn chat_send(
     let sink: Arc<dyn Fn(ChatEventView) + Send + Sync> = Arc::new(move |event| {
         let _ = on_event.send(event);
     });
-    services(&state)?
-        .chat_send(&provider_id, &messages, sink)
+    let lease = services(&state)?;
+    lease
+        .run(lease.chat_send(&provider_id, &messages, sink))
         .await
 }
 
@@ -250,7 +460,7 @@ pub fn chat_session_save(
     state: State<'_, AppState>,
     input: ChatSessionInput,
 ) -> Result<(), CommandError> {
-    services(&state)?.chat_session_save(input)
+    state.vault()?.snapshot_services()?.chat_session_save(input)
 }
 
 #[tauri::command]
@@ -299,7 +509,8 @@ pub async fn provider_test(
     id: String,
     kind: String,
 ) -> Result<ProviderTestView, CommandError> {
-    services(&state)?.provider_test(&id, &kind).await
+    let lease = services(&state)?;
+    lease.run(lease.provider_test(&id, &kind)).await
 }
 
 #[tauri::command]

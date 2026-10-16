@@ -46,6 +46,7 @@ struct Approvals {
 /// Live tasks and approvals waiting for a decision.
 #[derive(Default)]
 pub struct AgentRegistry {
+    pub(crate) drain: CancellationToken,
     tokens: Mutex<HashMap<TaskId, CancellationToken>>,
     approvals: Mutex<Approvals>,
     /// Sudo passwords given with an approval, held in memory until the task
@@ -56,6 +57,9 @@ pub struct AgentRegistry {
 impl AgentRegistry {
     pub(crate) fn register_task(&self, task: TaskId) -> CancellationToken {
         let token = CancellationToken::new();
+        if self.drain.is_cancelled() {
+            token.cancel();
+        }
         if let Ok(mut map) = self.tokens.lock() {
             map.insert(task, token.clone());
         }
@@ -75,6 +79,32 @@ impl AgentRegistry {
             .and_then(|map| map.get(&task).cloned())
             .map(|t| t.cancel())
             .is_some()
+    }
+
+    pub(crate) fn active_count(&self) -> usize {
+        self.tokens
+            .lock()
+            .map(|tokens| tokens.len())
+            .unwrap_or(usize::MAX)
+    }
+
+    pub(crate) fn cancel_all(&self) {
+        self.drain.cancel();
+        if let Ok(tokens) = self.tokens.lock() {
+            for token in tokens.values() {
+                token.cancel();
+            }
+        }
+    }
+
+    pub(crate) fn clear_sensitive(&self) {
+        if let Ok(mut passwords) = self.sudo_passwords.lock() {
+            passwords.clear();
+        }
+        if let Ok(mut approvals) = self.approvals.lock() {
+            approvals.early.clear();
+            approvals.waiters.clear();
+        }
     }
 
     fn hold_sudo_password(&self, approval: ApprovalId, password: SecretValue) {
@@ -127,6 +157,7 @@ impl ApprovalWaiter for RegistryWaiter {
             rx
         };
         let outcome = tokio::select! {
+            () = self.registry.drain.cancelled() => WaitOutcome::Cancelled,
             () = cancel.cancelled() => WaitOutcome::Cancelled,
             r = tokio::time::timeout(timeout, rx) => match r {
                 Ok(Ok(decision)) => WaitOutcome::Decided(decision),
@@ -442,6 +473,7 @@ impl Services {
 
         let task = TaskId::new();
         let spec = TaskSpec {
+            drain: self.agent.drain.clone(),
             task,
             host,
             host_label: host_record.label.clone(),

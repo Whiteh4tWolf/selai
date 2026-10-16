@@ -1,6 +1,6 @@
 # ADR-0003: Credential store and secret lifecycle
 
-- **Status:** Accepted (M1)
+- **Status:** Superseded for production storage by [ADR-0006](0006-passphrase-vault.md). The OS store is now used only to migrate legacy credentials.
 - **Scope:** S-011. Also used by S-020 for provider API keys.
 
 ## Context

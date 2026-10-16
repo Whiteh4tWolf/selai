@@ -270,7 +270,7 @@ impl Services {
             CommandError::new(ErrorCode::StorageIo, "exports need a database file on disk")
         })?;
 
-        let mut db = self.lock_db_pub()?;
+        let db = self.lock_db_pub()?;
         let record = db
             .get_host(host)
             .map_err(|e| storage(&e))?
@@ -348,13 +348,24 @@ impl Services {
 
         fs::create_dir_all(&dir)
             .map_err(|e| CommandError::new(ErrorCode::StorageIo, e.to_string()))?;
-        let file = dir.join(format!("selai-history-{}-{now}.json", record.id));
+        let extension = if self.document_sealer.is_some() {
+            "selai-history"
+        } else {
+            "json"
+        };
+        let file = dir.join(format!("selai-history-{}-{now}.{extension}", record.id));
         let text = serde_json::to_string_pretty(&document)
             .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?;
-        fs::write(&file, text)
+        drop(db);
+        let text = zeroize::Zeroizing::new(text);
+        let bytes = match &self.document_sealer {
+            Some(seal) => seal(text.as_bytes())?,
+            None => text.as_bytes().to_vec(),
+        };
+        fs::write(&file, bytes)
             .map_err(|e| CommandError::new(ErrorCode::StorageIo, e.to_string()))?;
 
-        db.append_audit_event(
+        self.lock_db_pub()?.append_audit_event(
             "history_exported",
             None,
             None,

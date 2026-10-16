@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
 import { chatSessionGet, chatSessionList, chatSessionSave, describeError, type ChatSessionSummary } from '../ipc';
 import type { TranscriptItem } from './agentTranscript';
+import { registerVaultFlusher } from '../vault';
 
 export interface ChatTurn {
   id: string;
@@ -145,6 +146,12 @@ export function useChatSessions() {
       });
     chains.current.set(id, job);
   }, [mutate]);
+
+  useEffect(() => registerVaultFlusher(async () => {
+    Object.keys(recordsRef.current).forEach(flush);
+    await Promise.all([...chains.current.values()]);
+    if (failed.current.size) throw new Error('Session history could not be saved. Retry saving before locking.');
+  }), [flush]);
 
   useEffect(() => {
     mounted.current = true;

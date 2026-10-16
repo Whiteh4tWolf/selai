@@ -1198,7 +1198,7 @@ function SudoPassword({ approvalId, onChange }: { approvalId: string; onChange: 
                 answer('typed', password, e.target.checked);
               }}
             />
-            <span>Remember for this host (saved in the OS keychain)</span>
+            <span>Remember for this host (saved in the encrypted vault)</span>
           </label>
         </>
       )}

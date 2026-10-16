@@ -59,7 +59,7 @@ pub(crate) fn spawn_local_shell(
     mut input: mpsc::Receiver<TerminalInput>,
     sink: EventSink,
     on_end: Box<dyn FnOnce() + Send>,
-) -> Result<(), CommandError> {
+) -> Result<Arc<dyn Fn() + Send + Sync>, CommandError> {
     let pair = native_pty_system()
         .openpty(pty_size(cols, rows))
         .map_err(|e| failure("could not open a terminal", &e))?;
@@ -84,7 +84,13 @@ pub(crate) fn spawn_local_shell(
     // Shared so the waiter can close it when the shell exits: ConPTY only ends
     // the output stream once its master is closed.
     let master = Arc::new(Mutex::new(Some(pair.master)));
-    let mut killer = child.clone_killer();
+    let killer = Arc::new(Mutex::new(child.clone_killer()));
+    let stop: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        if let Ok(mut killer) = killer.lock() {
+            let _ = killer.kill();
+        }
+    });
+    let close = stop.clone();
 
     let resize_master = Arc::clone(&master);
     std::thread::spawn(move || {
@@ -106,12 +112,9 @@ pub(crate) fn spawn_local_shell(
                         }
                     }
                 }
-                TerminalInput::Close => {
-                    let _ = killer.kill();
-                    break;
-                }
             }
         }
+        close();
     });
 
     let (exited_tx, exited_rx) = std::sync::mpsc::channel::<Option<u32>>();
@@ -142,5 +145,5 @@ pub(crate) fn spawn_local_shell(
         on_end();
         sink(TerminalEvent::Closed { exit_status });
     });
-    Ok(())
+    Ok(stop)
 }

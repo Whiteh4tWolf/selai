@@ -1,8 +1,8 @@
-//! Secret storage for Selai (ADR-0003).
+//! Secret values and storage contracts for Selai (ADR-0006).
 //!
-//! Secrets live only in the operating-system credential store. This crate has
-//! no plaintext fallback: if the store is locked or unavailable, every call
-//! fails with a [`SecretError`] that the UI can explain.
+//! The production desktop uses an encrypted database implementation of
+//! SecretStore. KeyringStore remains for migration of older installations.
+//! There is no plaintext fallback when a store is locked or unavailable.
 
 mod keyring_store;
 mod memory;
@@ -25,6 +25,7 @@ pub enum SshSecretKind {
     /// The password `sudo` asks for on that host, saved only when the operator
     /// chose "Remember for this host".
     SudoPassword,
+    PrivateKey,
 }
 
 impl SshSecretKind {
@@ -33,6 +34,7 @@ impl SshSecretKind {
             Self::Password => "password",
             Self::KeyPassphrase => "key_passphrase",
             Self::SudoPassword => "sudo_password",
+            Self::PrivateKey => "private_key",
         }
     }
 }
@@ -45,6 +47,20 @@ pub struct SecretKey {
 }
 
 impl SecretKey {
+    pub fn from_account(account: &str) -> Option<Self> {
+        let parts: Vec<_> = account.split('/').collect();
+        let valid = match parts.as_slice() {
+            ["ssh", id, kind] => {
+                id.parse::<HostId>().is_ok()
+                    && ["password", "key_passphrase", "sudo_password", "private_key"].contains(kind)
+            }
+            ["provider", id, "api_key"] => id.parse::<ProviderId>().is_ok(),
+            _ => false,
+        };
+        valid.then(|| Self {
+            account: account.to_owned(),
+        })
+    }
     pub fn ssh(host: HostId, kind: SshSecretKind) -> Self {
         Self {
             account: format!("ssh/{host}/{}", kind.as_str()),

@@ -9,6 +9,7 @@ import { appInfo, describeError, localHost, storageStatus, type AppInfo, type Ho
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
 import { ClockIcon, CloseIcon, MaximizeIcon, MinimizeIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon } from './ui/icons';
 import { SelaiLogo } from './ui/SelaiLogo';
+import { VaultGate } from './VaultGate';
 
 // xterm.js is large; load it only when a terminal is first needed.
 const TerminalStack = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalStack })));
@@ -132,7 +133,9 @@ function Resizer({
   );
 }
 
-export function App() {
+export function App() { return <VaultGate><Workbench /></VaultGate>; }
+
+export function Workbench() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [storage, setStorage] = useState<{ ok: boolean; text: string }>({ ok: true, text: 'Checking database…' });
   const [tabs, setTabs] = useState<EditorTab[]>([]);
@@ -142,7 +145,6 @@ export function App() {
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const statusRef = useRef<Record<string, SessionStatus>>({});
   const [editRequest, setEditRequest] = useState<{ hostId: string; n: number } | null>(null);
-  const [chatRequest, setChatRequest] = useState<{ host: HostView; n: number } | null>(null);
   const [theme, setTheme] = useState<Theme>(storedTheme);
   const [terminalFontSize, setTerminalFontSize] = useState(storedTerminalFontSize);
   const [sidebarOpen, setSidebarOpen] = useState(() => stored('selai.sidebar') !== 'closed');
@@ -272,11 +274,6 @@ export function App() {
     setSidebarOpen(true);
   }
 
-  function askAi(host: HostView) {
-    setChatRequest((prev) => ({ host, n: (prev?.n ?? 0) + 1 }));
-    setChatOpen(true);
-  }
-
   function openLocal() {
     localHost()
       .then(openTerminal)
@@ -328,6 +325,8 @@ export function App() {
           <span className="dot" data-status={connectedSessions > 0 ? 'ok' : undefined} />
           {connectedSessions} connected
         </span>
+        <button type="button" className="btn btn-sm" title="Vault security settings" onClick={() => window.dispatchEvent(new Event('selai:security'))}>Security</button>
+        <button type="button" className="btn btn-sm" title="Lock vault" onClick={() => window.dispatchEvent(new Event('selai:lock'))}>Lock</button>
         <button
           type="button"
           className="assistant-toggle"
@@ -351,7 +350,7 @@ export function App() {
         </nav>
 
         <aside className="sidebar" hidden={!sidebarOpen} style={{ width: side.width }}>
-          <HostsSidebar onConnect={openTerminal} onAskAi={askAi} sessions={sessions} editRequest={editRequest} />
+          <HostsSidebar onConnect={openTerminal} sessions={sessions} editRequest={editRequest} />
         </aside>
         {sidebarOpen && <Resizer label="Resize sidebar" direction={1} {...side} />}
 
@@ -430,7 +429,6 @@ export function App() {
         <aside id="assistant-panel" className="chatbar" hidden={!chatOpen} style={{ width: chatWidth }}>
           <AgentPanel
             activeHost={focusedTerminal?.host ?? null}
-            contextRequest={chatRequest}
             onOpenProviders={() => {
               openPage('providers');
               if (window.innerWidth <= 1100) setChatOpen(false);
@@ -469,7 +467,7 @@ export function App() {
   );
 }
 
-function WindowControls() {
+export function WindowControls() {
   if (!isTauri()) return null;
   const appWindow = getCurrentWindow();
   return (

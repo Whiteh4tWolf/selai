@@ -339,7 +339,7 @@ export function ProvidersPanel() {
       {form && (
         <Drawer
           title={form.id ? `Edit ${form.name}` : 'Add provider'}
-          subtitle="The API key is stored in the OS keychain and never shown again."
+          subtitle="The API key is stored in your encrypted vault and never shown again."
           onClose={() => setForm(null)}
           footer={
             <>

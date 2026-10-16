@@ -41,6 +41,10 @@ pub enum Auth {
         path: PathBuf,
         passphrase: Option<SecretValue>,
     },
+    PrivateKeyData {
+        pem: SecretValue,
+        passphrase: Option<SecretValue>,
+    },
 }
 
 pub struct ConnectOptions {
@@ -127,7 +131,7 @@ async fn authenticate(
             let password = utf8(secret.expose_for_transport()).ok_or(SshError::AuthFailed)?;
             handle.authenticate_password(username, password).await?
         }
-        Auth::PrivateKey { path, passphrase } => {
+        Auth::PrivateKey { passphrase, .. } | Auth::PrivateKeyData { passphrase, .. } => {
             let passphrase = match passphrase {
                 Some(p) => Some(
                     utf8(p.expose_for_transport())
@@ -135,8 +139,16 @@ async fn authenticate(
                 ),
                 None => None,
             };
-            let key = russh::keys::load_secret_key(path, passphrase)
-                .map_err(|e| SshError::KeyLoad(e.to_string()))?;
+            let key = match auth {
+                Auth::PrivateKey { path, .. } => russh::keys::load_secret_key(path, passphrase),
+                Auth::PrivateKeyData { pem, .. } => russh::keys::decode_secret_key(
+                    utf8(pem.expose_for_transport())
+                        .ok_or_else(|| SshError::KeyLoad("Private key is not UTF-8".into()))?,
+                    passphrase,
+                ),
+                Auth::Password(_) => unreachable!(),
+            }
+            .map_err(|e| SshError::KeyLoad(e.to_string()))?;
             // RSA private-key operations are affected by RUSTSEC-2023-0071 and have
             // no fix yet. Refuse them before any authentication is attempted.
             if matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. }) {

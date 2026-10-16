@@ -7,7 +7,7 @@
 Selai brings SSH hosts, terminal tabs, an AI chat, and command history into one
 desktop app. You choose the machine the assistant may work on. Routine
 diagnostics use fixed commands; other commands need your approval before they
-run. SSH credentials stay in your operating system's credential store and are
+run. SSH credentials stay in your passphrase-protected local vault and are
 never included in requests to an AI provider.
 
 > **Version 0.1.0 is a preview.** The core SSH and agent flows have been tested
@@ -27,15 +27,16 @@ never included in requests to an AI provider.
 | **AI chat** | Discuss a question without a server, or bind a task to one or more SSH hosts or This computer. Mention hosts with `@` for one message to run independent tasks in parallel, follow the focused terminal, or pin a server in the chat. Each host has its own output and change approvals. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
 | **Command control** | Fixed diagnostic commands may run without a prompt. Every free-form command needs approval for the exact command and host. Denied, expired, and interrupted work is not replayed automatically. |
 | **Providers** | Configure OpenAI Responses, OpenAI Chat Completions and compatible endpoints, or Anthropic Messages. Check an API key, choose or enter a model ID, and test a real tool-call round trip. |
-| **History** | Review tasks and individual command attempts by host, their status and provider token counts. Filter the timeline, export redacted JSON, purge saved output previews, and verify the local audit chain. |
+| **History** | Search saved AI sessions by title, then open a session to review its requests and command executions across servers, including status, exit codes and stored output. Browse by host for older tasks, provider token counts, timeline filters, encrypted history exports and output retention. |
 | **Profile import** | Review and map CSV or plaintext JSON SSH profiles, select valid rows, and import them without replacing existing hosts. Use a shared CSV template for exports from other tools. |
 | **Workbench** | Use the host explorer, terminal and History/Providers tabs, and the assistant side by side. Toggle the right-hand Assistant panel from the header and drag its divider to give it more room. The window controls are integrated into the workbench header. Choose dark, light, or system theme. |
+| **Encrypted vault** | Protect credentials, managed private keys, host metadata, chat, and history with one passphrase. Use automatic locking, a separate recovery key, encrypted backup/restore, and encrypted history exports. |
 
 ### SSH hosts and terminals
 
 Create a profile with a label, address, port, username, and authentication
-method. Passwords and key passphrases are saved through the OS credential store;
-for key authentication, the private key is a local file path. Selai asks you to
+method. Passwords and key passphrases are saved inside the encrypted vault;
+for key authentication, select a local file whose contents Selai imports into the vault. The original file remains outside Selai and needs its own protection. Selai asks you to
 trust an unknown server key *before* sending credentials. It refuses a changed
 key until you inspect and explicitly replace the saved fingerprint.
 
@@ -96,8 +97,8 @@ review what a task may expose before using a cloud provider.
 Add a provider and its base URL, API key, and model. **Check API key** queries
 the endpoint for available models; you can also enter a model ID manually.
 **Test** checks connectivity and whether the selected model completes a tool
-call and receives a tool result. Provider keys are stored in the OS credential
-store. HTTPS is required for remote endpoints unless you explicitly enable
+call and receives a tool result. Provider keys are stored inside the encrypted
+vault. HTTPS is required for remote endpoints unless you explicitly enable
 plain HTTP for a trusted gateway; loopback HTTP is allowed.
 
 The provider receives chat messages and, during a server task, bounded and
@@ -109,7 +110,54 @@ OpenAI, Anthropic, or compatible service has been verified for this preview.
 
 Open **Hosts -> Import SSH profiles**. Select a `.csv`, plaintext `.json`, or password-protected `.kdbx` file, review the detected column mapping and preview, select rows, and import. The drawer provides a downloadable CSV template. It recognizes common host columns, Bitwarden login entries with `ssh://` or `sftp://` URIs, compatible host-list JSON such as Termius API Bridge-shaped host objects, and Passbolt exports. KDBX vaults are decrypted locally after entering the passphrase; only entries with `ssh://` or `sftp://` URLs are included. Selai skips non-SSH entries and existing labels or matching host/port/username combinations, and reports failures per row.
 
-The preview hides passwords. Imported passwords and key passphrases use the same OS credential-store path as a manually added host. Notes are excluded by default because host notes are stored in the local database. Private key contents and direct account connections are not supported; supply a path to an existing local key file instead. CSV/JSON imports are limited to **2 MB**, KDBX files to **10 MB**, and both to **500 profiles**. Import does not connect to a server or trust its host key. The source export remains wherever you saved it; handle a plaintext export as a file containing secrets. See the [format and vendor examples](docs/import-ssh-profiles.md).
+The preview hides passwords. Imported passwords and key passphrases use the same encrypted vault as a manually added host. Notes are excluded by default to avoid retaining unnecessary information. Importing inline private key contents and connecting directly to another manager are not supported; supply a path to a local key file and Selai imports its contents into the vault. CSV/JSON imports are limited to **2 MB**, KDBX files to **10 MB**, and both to **500 profiles**. Import does not connect to a server or trust its host key. The source export remains wherever you saved it; handle a plaintext export as a file containing secrets. See the [format and vendor examples](docs/import-ssh-profiles.md).
+
+### Vault setup, locking, and recovery
+
+On first start, choose and confirm a passphrase of at least **12 characters**.
+Paste is supported. Save the separately generated recovery key before opening
+the workspace. Neither the passphrase nor an unwrapped encryption key is saved
+in Credential Manager. Losing both your passphrase and recovery key means the
+vault cannot be recovered.
+
+For an existing installation, close every older Selai instance first. Setup
+migrates the old database, saved OS credentials, readable private key files,
+and JSON history exports. It verifies the encrypted database before committing
+the vault and removing migrated copies. Changed or inaccessible source files
+are kept; **Security** shows pending cleanup and offers a retry. Old exports
+remain accessible under **Security → Migrated history exports**. Missing private
+key files remain external references until you replace them with an available file.
+
+Unlock once each time Selai starts. **Lock** in the header closes terminal
+connections and stops admission of new commands. With active work you can let
+the current command finish, or cancel immediately. The workspace is hidden
+while work drains; it is reported locked only after the database closes and the
+vault key is dropped. A disconnected remote command may still run on its server;
+Selai never replays it automatically. Reopening chat history restores the latest
+session without executing its commands; terminal connections must be reopened.
+
+Auto-lock defaults to **15 minutes**; choose 5, 15, 30, or 60 minutes in
+**Security**. Keyboard, pointer, and scrolling input in Selai reset the timer;
+passive terminal output and AI replies do not. Windows session lock and
+suspend/resume notifications also request locking. Automatic OS session lock
+integration on Linux and macOS is not implemented in this release.
+
+**Security** also lets you change the passphrase, replace the recovery key, and
+save an encrypted `.selai` backup. Restore with the backup's passphrase or its
+recovery key through the setup screen in a fresh
+Selai data directory; existing vaults are not overwritten. Backups and history
+exports retain the passphrase/recovery key from when they were created. Changing
+the current passphrase does not invalidate older copies.
+
+History exports now use `.selai-history` and are encrypted by default. The
+explicit **Decrypt a history export** action saves readable JSON after you enter
+the export's passphrase and choose a destination outside Selai's app directory.
+Plaintext JSON and recovery-key downloads need separate protection.
+
+To restore on the same Windows computer, close Selai and preserve its current
+data folder (`%APPDATA%\dev.selai.desktop`) under another name before restarting.
+The new setup screen can restore a backup without replacing the preserved data.
+Keep the old folder until you have verified the restored hosts and history.
 
 ## Get started
 
@@ -150,6 +198,8 @@ between dark, light, and system theme.
 You need **Node.js 22**, **pnpm 10**, the stable Rust toolchain, and the native
 dependencies for Tauri 2 on your platform. On Linux, the CI workflow lists the
 system packages used for WebKitGTK, the keyring, and OpenSSH tests.
+SQLCipher and OpenSSL are built from source. Install Perl and a C toolchain;
+Windows additionally needs NASM, the Visual Studio C++ build tools, and the Windows SDK.
 
 ```sh
 cd apps/desktop

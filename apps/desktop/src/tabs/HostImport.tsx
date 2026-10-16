@@ -111,7 +111,7 @@ export function HostImport({ onClose, onImported }: Props) {
     let saved = 0;
     try {
       // Recheck all pages just before writing. Each host still goes through the
-      // existing Rust validation and OS keychain path in host_save.
+      // existing Rust validation and encrypted vault path in host_save.
       const fresh = prepareProfiles(table, mapping, await allHosts());
       for (const [index, candidate] of fresh.entries()) {
         if (!selected.has(index) || !candidate.input) continue;
@@ -159,7 +159,7 @@ export function HostImport({ onClose, onImported }: Props) {
     >
       <div className="form-section">
         <p className="muted">Choose a CSV or JSON export, or a password-protected KDBX file. Bitwarden SSH logins, Passbolt exports, and host lists using common column names are recognized. Other exports can use the Selai CSV template.</p>
-        <p className="muted">Only SSH/SFTP addresses are taken from password-manager URI fields. Passwords are hidden here and saved through the OS keychain. The export file is not retained by Selai.</p>
+        <p className="muted">Only SSH/SFTP addresses are taken from password-manager URI fields. Passwords are hidden here and saved in your encrypted vault. The source export file is not retained by Selai.</p>
         <a className="btn btn-sm" download="selai-ssh-profiles.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(TEMPLATE)}`}>Download CSV template</a>
         <label className="field">
           Profile export file

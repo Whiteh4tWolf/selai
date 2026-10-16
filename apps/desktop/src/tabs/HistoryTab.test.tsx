@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as ipc from '../ipc';
-import { HistoryTab } from './HistoryTab';
+import { HistoryTab, HostHistoryTab } from './HistoryTab';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -90,10 +90,10 @@ async function showCommands() {
   return screen.findByText('df -hP');
 }
 
-describe('HistoryTab', () => {
+describe('HostHistoryTab', () => {
   it('lists the chosen host history, including archived hosts', async () => {
     const query = mockHistory();
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
 
     expect(await showCommands()).toBeInTheDocument();
     expect(query).toHaveBeenCalledWith('h1', { states: [] , sinceMs: null, untilMs: null }, undefined);
@@ -102,12 +102,12 @@ describe('HistoryTab', () => {
 
   it('loads again when the tab is shown, so runs finished while hidden appear', async () => {
     const query = mockHistory();
-    const { rerender } = render(<HistoryTab visible={false} />);
+    const { rerender } = render(<HostHistoryTab visible={false} />);
     await waitFor(() => expect(ipc.hostList).toHaveBeenCalled());
     expect(query).not.toHaveBeenCalled();
     expect(ipc.historyTasks).not.toHaveBeenCalled();
 
-    rerender(<HistoryTab visible />);
+    rerender(<HostHistoryTab visible />);
     expect(await showCommands()).toBeInTheDocument();
     expect(query).toHaveBeenCalledTimes(1);
     expect(ipc.historyTasks).toHaveBeenCalledTimes(1);
@@ -115,7 +115,7 @@ describe('HistoryTab', () => {
 
   it('sends the chosen states when the filter is applied', async () => {
     const query = mockHistory();
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
     await showCommands();
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'denied' }));
@@ -136,7 +136,7 @@ describe('HistoryTab', () => {
       execution({ id: 'e1', commandRedacted: 'uptime' }),
       execution({ id: 'e2', commandRedacted: 'df -hP', state: 'denied' }),
     ]);
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
     fireEvent.click(await showCommands());
 
     expect(timeline).toHaveBeenCalledWith('t1');
@@ -153,9 +153,9 @@ describe('HistoryTab', () => {
       extraRedactions: 0,
       disclosure: 'x',
     });
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
     await screen.findByText('check disk usage on the web node');
-    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export encrypted' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent(
       'Exported 1000 row(s) to /data/exports/selai-history-h1-1.json. The export was cut at the row limit.',
@@ -166,7 +166,7 @@ describe('HistoryTab', () => {
     mockHistory();
     const purge = vi.spyOn(ipc, 'historyPurgeOutput').mockResolvedValue({ executions: 1 });
     vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
     await screen.findByText('check disk usage on the web node');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear stored output' }));
@@ -178,7 +178,7 @@ describe('HistoryTab', () => {
 
   it('opens on tasks with the request, token usage and a host summary', async () => {
     mockHistory();
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
 
     expect(await screen.findByText('check disk usage on the web node')).toBeInTheDocument();
     const summary = screen.getByRole('group', { name: 'Usage summary' });
@@ -192,7 +192,7 @@ describe('HistoryTab', () => {
 
   it('shows unknown token counts as unknown, not zero', async () => {
     mockHistory([execution()], [task({ inputTokens: null, outputTokens: null, promptPreview: null })]);
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
     const tasks = await screen.findByRole('list', { name: 'Tasks' });
     await waitFor(() => expect(tasks).toHaveTextContent('— in'));
     expect(tasks).toHaveTextContent('Request not recorded');
@@ -203,7 +203,7 @@ describe('HistoryTab', () => {
     const timeline = vi
       .spyOn(ipc, 'taskTimeline')
       .mockResolvedValue([execution({ commandRedacted: 'du -sh /var' })]);
-    render(<HistoryTab visible />);
+    render(<HostHistoryTab visible />);
     fireEvent.click(await screen.findByText('check disk usage on the web node'));
 
     expect(timeline).toHaveBeenCalledWith('t1');
@@ -211,5 +211,133 @@ describe('HistoryTab', () => {
     expect(usage).toHaveTextContent('Input12,345');
     expect(usage).toHaveTextContent('Total13,023');
     expect(await screen.findByText('du -sh /var')).toBeInTheDocument();
+  });
+});
+
+const session = { id: 's1', title: 'Investigate web cluster', createdAtMs: 1, updatedAtMs: 20 };
+
+function savedTurn(taskId: string | null, hostId = 'h1', overrides = {}) {
+  return { id: taskId ?? 'chat', hostId, hostLabel: hostId === 'h1' ? 'production-web' : 'staging-web',
+    taskId, taskPrompt: 'Check disk usage', prompt: 'Check disk usage', showPrompt: true,
+    mentionText: null, items: [], running: false, notice: null, error: null, ...overrides };
+}
+
+function mockSessions(turns = [savedTurn('t1')]) {
+  const list = vi.spyOn(ipc, 'chatSessionList').mockResolvedValue([
+    session, { ...session, id: 's2', title: 'Deploy database' },
+  ]);
+  const get = vi.spyOn(ipc, 'chatSessionGet').mockResolvedValue({ ...session,
+    transcript: JSON.stringify({ version: 1, turns }) });
+  const timeline = vi.spyOn(ipc, 'taskTimeline').mockResolvedValue([execution()]);
+  return { list, get, timeline };
+}
+
+describe('Session history', () => {
+  it('opens on searchable session titles and loads no transcripts or command records before selection', async () => {
+    const { get, timeline } = mockSessions();
+    render(<HistoryTab visible />);
+    expect(await screen.findByText(session.title)).toBeInTheDocument();
+    expect(screen.getByText('Deploy database')).toBeInTheDocument();
+    expect(get).not.toHaveBeenCalled();
+    expect(timeline).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search sessions' }), { target: { value: 'CLUSTER' } });
+    expect(screen.getByText(session.title)).toBeInTheDocument();
+    expect(screen.queryByText('Deploy database')).not.toBeInTheDocument();
+  });
+
+  it('shows audited commands from multiple servers inside their saved session and opens output details', async () => {
+    const { get, timeline } = mockSessions([savedTurn('t1'), savedTurn('t2', 'h2'), savedTurn('t1')]);
+    timeline.mockImplementation(async (id) => [execution({ id: `e-${id}`, taskId: id,
+      hostId: id === 't1' ? 'h1' : 'h2', commandRedacted: id === 't1' ? 'df -hP' : 'uptime' })]);
+    render(<HistoryTab visible />);
+    fireEvent.click(await screen.findByText(session.title));
+    expect(await screen.findByText('df -hP')).toBeInTheDocument();
+    expect(await screen.findByText('uptime')).toBeInTheDocument();
+    expect(screen.getByText('production-web')).toBeInTheDocument();
+    expect(screen.getByText('staging-web')).toBeInTheDocument();
+    expect(screen.getByText('2 servers')).toBeInTheDocument();
+    expect(timeline).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledWith('s1');
+    fireEvent.click(screen.getByText('df -hP'));
+    const details = await screen.findByRole('region', { name: 'Execution details' });
+    expect(within(details).getByText(/Filesystem\s+Size\s+Used/)).toBeInTheDocument();
+    expect(within(details).getByText('Exit code')).toBeInTheDocument();
+    expect(within(details).getByText('0')).toBeInTheDocument();
+  });
+
+  it('does not mistake a failed command lookup for an empty history and can retry it', async () => {
+    const { timeline } = mockSessions();
+    timeline.mockRejectedValueOnce(new Error('Database unavailable'));
+    render(<HistoryTab visible />);
+    fireEvent.click(await screen.findByText(session.title));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load commands');
+    expect(screen.queryByText('No command execution recorded for this request.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry commands' }));
+    expect(await screen.findByText('df -hP')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('pages requests and limits concurrent command lookups to four', async () => {
+    const { timeline } = mockSessions(Array.from({ length: 13 }, (_, index) => savedTurn(`t${index}`)));
+    let resolveBatch: (() => void)[] = [];
+    let active = 0;
+    let peak = 0;
+    timeline.mockImplementation(() => new Promise((resolve) => {
+      active++;
+      peak = Math.max(peak, active);
+      resolveBatch.push(() => { active--; resolve([]); });
+    }));
+    render(<HistoryTab visible />);
+    fireEvent.click(await screen.findByText(session.title));
+    await waitFor(() => expect(timeline).toHaveBeenCalledTimes(4));
+    for (let batch = 0; batch < 3; batch++) {
+      await act(async () => {
+        const complete = resolveBatch;
+        resolveBatch = [];
+        complete.forEach((resolve) => resolve());
+      });
+    }
+    expect(peak).toBe(4);
+    expect(timeline).toHaveBeenCalledTimes(12);
+    expect(screen.getAllByText('No command execution recorded for this request.')).toHaveLength(12);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more requests' }));
+    await waitFor(() => expect(timeline).toHaveBeenCalledTimes(13));
+    await act(async () => resolveBatch.forEach((resolve) => resolve()));
+    expect(screen.getAllByText('No command execution recorded for this request.')).toHaveLength(13);
+  });
+
+  it('reloads when shown and refreshes session commands after returning from a hidden tab', async () => {
+    const { list, get, timeline } = mockSessions();
+    const { rerender } = render(<HistoryTab visible={false} />);
+    expect(list).not.toHaveBeenCalled();
+    rerender(<HistoryTab visible />);
+    fireEvent.click(await screen.findByText(session.title));
+    expect(await screen.findByText('df -hP')).toBeInTheDocument();
+    rerender(<HistoryTab visible={false} />);
+    timeline.mockResolvedValue([execution({ commandRedacted: 'uptime' })]);
+    rerender(<HistoryTab visible />);
+    expect(await screen.findByText('uptime')).toBeInTheDocument();
+    expect(screen.queryByText('df -hP')).not.toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps older per-host audit records accessible and returns to sessions', async () => {
+    mockSessions();
+    mockHistory();
+    render(<HistoryTab visible />);
+    fireEvent.click(screen.getByRole('button', { name: 'Browse by host' }));
+    expect(await screen.findByText('check disk usage on the web node')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export encrypted' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All sessions' }));
+    expect(await screen.findByText(session.title)).toBeInTheDocument();
+  });
+
+  it('reports invalid transcripts without reading commands', async () => {
+    const { get, timeline } = mockSessions();
+    get.mockResolvedValue({ ...session, transcript: '{"version":999,"turns":[]}' });
+    render(<HistoryTab visible />);
+    fireEvent.click(await screen.findByText(session.title));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unsupported session history');
+    expect(timeline).not.toHaveBeenCalled();
   });
 });

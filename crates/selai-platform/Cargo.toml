@@ -1,0 +1,12 @@
+[package]
+name = "selai-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_System_Power", "Win32_UI_WindowsAndMessaging"] }
+
+# Only the Windows API adapter below may use FFI; application crates forbid it.
+[lints.rust]
+unsafe_code = "deny"

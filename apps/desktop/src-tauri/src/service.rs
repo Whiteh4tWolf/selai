@@ -1,7 +1,8 @@
 //! Application services behind the Tauri commands.
 //!
 //! This layer holds the rules the webview cannot override:
-//! - secrets go to the OS store before host metadata is committed;
+//! - secrets go to the active store before host metadata is committed;
+//!   production uses the encrypted vault (ADR-0006);
 //! - a host key is pinned only if the user confirmed the key from a recent probe;
 //! - a terminal session is bound to one host and never reused for another.
 //!
@@ -48,14 +49,16 @@ struct CachedProbe {
 pub(crate) enum TerminalInput {
     Data(Vec<u8>),
     Resize { cols: u32, rows: u32 },
-    Close,
 }
 
 #[derive(Clone)]
 struct TerminalHandle {
     host_id: HostId,
     input: mpsc::Sender<TerminalInput>,
+    stop: Arc<dyn Fn() + Send + Sync>,
 }
+
+pub(crate) type DocumentSealer = Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, CommandError> + Send + Sync>;
 
 pub struct Services {
     pub(crate) db: Arc<Mutex<Database>>,
@@ -66,6 +69,8 @@ pub struct Services {
     pub(crate) export_dir: Option<std::path::PathBuf>,
     probes: Mutex<HashMap<HostId, CachedProbe>>,
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
+    pub(crate) document_sealer: Option<DocumentSealer>,
+    pub(crate) vault_managed: bool,
     reconcile: ReconcileReport,
 }
 
@@ -98,16 +103,26 @@ impl Services {
         secrets: Arc<dyn SecretStore>,
         reconcile: ReconcileReport,
     ) -> Result<Self, CommandError> {
+        Self::with_shared_database(Arc::new(Mutex::new(db)), secrets, reconcile)
+    }
+
+    pub(crate) fn with_shared_database(
+        db: Arc<Mutex<Database>>,
+        secrets: Arc<dyn SecretStore>,
+        reconcile: ReconcileReport,
+    ) -> Result<Self, CommandError> {
         let llm = selai_llm::LlmClient::new(selai_llm::ClientOptions::default())
             .map_err(|e| CommandError::new(e.code, e.message))?;
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
+            db,
             secrets,
             llm: Arc::new(llm),
             agent: Arc::new(crate::agent_service::AgentRegistry::default()),
             export_dir: None,
             probes: Mutex::new(HashMap::new()),
             terminals: Arc::new(Mutex::new(HashMap::new())),
+            document_sealer: None,
+            vault_managed: false,
             reconcile,
         })
     }
@@ -117,6 +132,24 @@ impl Services {
     pub fn with_llm_client(mut self, client: selai_llm::LlmClient) -> Self {
         self.llm = Arc::new(client);
         self
+    }
+
+    pub(crate) fn terminal_count(&self) -> usize {
+        self.terminals
+            .lock()
+            .map(|map| map.len())
+            .unwrap_or(usize::MAX)
+    }
+
+    pub(crate) async fn close_terminals(&self) {
+        let handles: Vec<_> = self
+            .terminals
+            .lock()
+            .map(|map| map.values().map(|handle| handle.stop.clone()).collect())
+            .unwrap_or_default();
+        for stop in handles {
+            stop();
+        }
     }
 
     pub fn app_info() -> AppInfo {
@@ -167,10 +200,10 @@ impl Services {
             .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "host not found"))
     }
 
-    /// Creates or updates a host. Secrets are written to the OS store first;
+    /// Creates or updates a host. Secrets are written to the active store first;
     /// the host row is committed after, so a failed store write changes nothing.
     pub fn host_save(&self, input: HostInput) -> Result<HostView, CommandError> {
-        let settings = input.to_settings()?;
+        let mut settings = input.to_settings()?;
         let now = now_ms();
         let previous = match input.id.as_deref() {
             Some(raw) => {
@@ -193,11 +226,39 @@ impl Services {
         let id = previous.as_ref().map_or_else(HostId::new, |p| p.id);
         let auth_changed = previous.as_ref().is_some_and(|p| p.auth != settings.auth);
 
-        // 1. Stage secrets in the OS store.
+        // 1. Stage secrets in the active store (the vault in production).
         let mut configured = previous.as_ref().is_some_and(|p| p.credential_configured);
         let password_key = SecretKey::ssh(id, SshSecretKind::Password);
         let passphrase_key = SecretKey::ssh(id, SshSecretKind::KeyPassphrase);
         let mut written: Vec<SecretKey> = Vec::new();
+        if self.vault_managed && settings.auth == AuthMethod::PrivateKey {
+            let path = settings
+                .private_key_path
+                .as_ref()
+                .ok_or_else(|| {
+                    CommandError::new(ErrorCode::InvalidInput, "Choose a private key file.")
+                })?
+                .as_str();
+            let key = SecretKey::ssh(id, SshSecretKind::PrivateKey);
+            if path.starts_with("vault://") {
+                if path != format!("vault://{id}")
+                    || self.secrets.get(&key).map_err(secret_error)?.is_none()
+                {
+                    return Err(CommandError::new(
+                        ErrorCode::InvalidInput,
+                        "Managed private key was not found.",
+                    ));
+                }
+            } else {
+                let bytes = crate::vault_service::read_key_file(Path::new(path))?;
+                self.secrets
+                    .put(&key, &SecretValue::new(bytes.to_vec()))
+                    .map_err(secret_error)?;
+                written.push(key);
+                settings.private_key_path =
+                    Some(KeyPath::parse(&format!("vault://{id}")).map_err(invalid)?);
+            }
+        }
         match settings.auth {
             AuthMethod::Password => {
                 if let Some(pw) = non_empty(input.password.as_deref()) {
@@ -275,6 +336,9 @@ impl Services {
             .map_err(secret_error)?;
         self.secrets
             .delete(&SecretKey::ssh(id, SshSecretKind::SudoPassword))
+            .map_err(secret_error)?;
+        self.secrets
+            .delete(&SecretKey::ssh(id, SshSecretKind::PrivateKey))
             .map_err(secret_error)?;
         self.lock_db()?
             .set_credential_configured(id, false, now_ms())
@@ -457,11 +521,14 @@ impl Services {
 
         let session_id = HostId::new().to_string();
         let (tx, rx) = mpsc::channel(64);
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let stop = shutdown.clone();
         self.terminals.lock().map_err(|_| poisoned())?.insert(
             session_id.clone(),
             TerminalHandle {
                 host_id: id,
                 input: tx,
+                stop: Arc::new(move || stop.cancel()),
             },
         );
         let _ = self.lock_db()?.mark_connected(id, now_ms());
@@ -473,6 +540,7 @@ impl Services {
             rx,
             sink,
             Arc::clone(&self.terminals),
+            shutdown,
         ));
         Ok(session_id)
     }
@@ -487,16 +555,10 @@ impl Services {
     ) -> Result<String, CommandError> {
         let session_id = HostId::new().to_string();
         let (tx, rx) = mpsc::channel(64);
-        self.terminals.lock().map_err(|_| poisoned())?.insert(
-            session_id.clone(),
-            TerminalHandle {
-                host_id: id,
-                input: tx,
-            },
-        );
+        let mut map = self.terminals.lock().map_err(|_| poisoned())?;
         let terminals = Arc::clone(&self.terminals);
         let ended = session_id.clone();
-        let started = crate::local_terminal::spawn_local_shell(
+        let stop = crate::local_terminal::spawn_local_shell(
             cols,
             rows,
             rx,
@@ -506,13 +568,16 @@ impl Services {
                     map.remove(&ended);
                 }
             }),
+        )?;
+        map.insert(
+            session_id.clone(),
+            TerminalHandle {
+                host_id: id,
+                input: tx,
+                stop,
+            },
         );
-        if let Err(e) = started {
-            if let Ok(mut map) = self.terminals.lock() {
-                map.remove(&session_id);
-            }
-            return Err(e);
-        }
+        drop(map);
         let _ = self.lock_db()?.mark_connected(id, now_ms());
         Ok(session_id)
     }
@@ -555,7 +620,7 @@ impl Services {
 
     pub async fn terminal_disconnect(&self, session_id: &str) -> Result<(), CommandError> {
         let handle = self.terminal(session_id)?;
-        let _ = handle.input.send(TerminalInput::Close).await;
+        (handle.stop)();
         Ok(())
     }
 
@@ -659,6 +724,19 @@ impl Services {
                     .secrets
                     .get(&SecretKey::ssh(id, SshSecretKind::KeyPassphrase))
                     .map_err(secret_error)?;
+                if path.starts_with("vault://") {
+                    let pem = self
+                        .secrets
+                        .get(&SecretKey::ssh(id, SshSecretKind::PrivateKey))
+                        .map_err(secret_error)?
+                        .ok_or_else(|| {
+                            CommandError::new(
+                                ErrorCode::InvalidInput,
+                                "Managed private key is missing.",
+                            )
+                        })?;
+                    return Ok(Auth::PrivateKeyData { pem, passphrase });
+                }
                 Ok(Auth::PrivateKey {
                     path: path.into(),
                     passphrase,
@@ -677,44 +755,48 @@ async fn run_terminal(
     mut input: mpsc::Receiver<TerminalInput>,
     sink: EventSink,
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
+    shutdown: tokio_util::sync::CancellationToken,
 ) {
     let mut exit_status: Option<u32> = None;
-    loop {
-        tokio::select! {
-            command = input.recv() => match command {
-                Some(TerminalInput::Data(bytes)) => {
-                    if shell.write(&bytes).await.is_err() {
+    let pump = async {
+        loop {
+            tokio::select! {
+                command = input.recv() => match command {
+                    Some(TerminalInput::Data(bytes)) => {
+                        if shell.write(&bytes).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(TerminalInput::Resize { cols, rows }) => {
+                        let _ = shell.resize(cols, rows).await;
+                    }
+                    None => {
+                        let _ = shell.close().await;
                         break;
                     }
-                }
-                Some(TerminalInput::Resize { cols, rows }) => {
-                    let _ = shell.resize(cols, rows).await;
-                }
-                Some(TerminalInput::Close) | None => {
-                    let _ = shell.close().await;
-                    break;
-                }
-            },
-            event = shell.next_event() => match event {
-                ShellEvent::Data(bytes) => {
-                    sink(TerminalEvent::Data { data: B64.encode(bytes) });
-                }
-                ShellEvent::Exit { status } => {
-                    exit_status = Some(status);
-                    sink(TerminalEvent::Exit { status });
-                }
-                ShellEvent::Refused(message) => {
-                    sink(TerminalEvent::Error {
-                        code: ErrorCode::SshChannelClosed,
-                        message,
-                    });
-                }
-                ShellEvent::Closed => break,
-            },
+                },
+                event = shell.next_event() => match event {
+                    ShellEvent::Data(bytes) => {
+                        sink(TerminalEvent::Data { data: B64.encode(bytes) });
+                    }
+                    ShellEvent::Exit { status } => {
+                        exit_status = Some(status);
+                        sink(TerminalEvent::Exit { status });
+                    }
+                    ShellEvent::Refused(message) => {
+                        sink(TerminalEvent::Error {
+                            code: ErrorCode::SshChannelClosed,
+                            message,
+                        });
+                    }
+                    ShellEvent::Closed => break,
+                },
+            }
         }
-    }
+    };
+    tokio::select! {biased; _=shutdown.cancelled()=>{},_=pump=>{}}
     // The channel is already gone; a failed disconnect has no further effect.
-    let _ = session.disconnect().await;
+    let _ = tokio::time::timeout(Duration::from_secs(1), session.disconnect()).await;
     if let Ok(mut map) = terminals.lock() {
         map.remove(&session_id);
     }

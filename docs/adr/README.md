@@ -7,6 +7,7 @@
 | [0003](0003-credential-store.md) | Credential store and secret lifecycle | Accepted (M1) |
 | [0004](0004-provider-protocols.md) | Provider protocol adapters and tool-call verification | Accepted (M2) |
 | [0005](0005-policy-approval-audit.md) | Agent tools, policy, approval and audit | Accepted (M3) |
+| [0006](0006-passphrase-vault.md) | Passphrase vault, migration, locking, recovery and backups | Accepted |
 
 
 All ADRs in the backlog are now written.

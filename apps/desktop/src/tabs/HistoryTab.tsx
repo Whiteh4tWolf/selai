@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  chatSessionGet,
+  chatSessionList,
   describeError,
   historyExport,
   historyPurgeOutput,
@@ -11,6 +13,7 @@ import {
   preferencesGet,
   preferencesSet,
   taskTimeline,
+  type ChatSessionSummary,
   type ExecutionView,
   type ExportResult,
   type HistoryFilter,
@@ -22,8 +25,9 @@ import { formatCompact, formatCount, formatDuration, formatWhen, sumTokens } fro
 import { HostAvatar } from '../ui/HostAvatar';
 import { collectPages } from '../ui/collectPages';
 import { Drawer } from '../ui/Overlay';
-import { ClockIcon, TerminalIcon } from '../ui/icons';
+import { ChevronIcon, ClockIcon, RefreshIcon, SearchIcon, TerminalIcon } from '../ui/icons';
 import { SelaiLogo } from '../ui/SelaiLogo';
+import { restoreTranscript, type ChatTurn } from './useChatSessions';
 
 const STATES = ['completed', 'failed', 'denied', 'cancelled', 'interrupted', 'timed_out'] as const;
 
@@ -51,9 +55,224 @@ function stateText(state: string): string {
   return state.replace(/_/g, ' ');
 }
 
-/** `visible` comes from the app shell. The panel stays mounted while hidden, so it
- *  reloads each time it is shown and picks up runs that finished meanwhile. */
+/** Load metadata first; transcripts and audit records are read only on opening a session. */
 export function HistoryTab({ visible }: { visible: boolean }) {
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [selected, setSelected] = useState<ChatSessionSummary | null>(null);
+  const [byHost, setByHost] = useState(false);
+  const [query, setQuery] = useState('');
+  const [limit, setLimit] = useState(30);
+  const [refresh, setRefresh] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible || byHost) return;
+    let active = true;
+    setLoading(true);
+    setError(null);
+    chatSessionList()
+      .then((items) => active && setSessions(items))
+      .catch((err: unknown) => active && setError(describeError(err)))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [visible, byHost, refresh]);
+
+  if (byHost) return (
+    <div className="history-host-view">
+      <button type="button" className="btn btn-ghost btn-sm history-back" onClick={() => setByHost(false)}>
+        <ChevronIcon className="history-back-icon" size={14} /> All sessions
+      </button>
+      <HostHistoryTab visible={visible} />
+    </div>
+  );
+
+  if (selected) return (
+    <SessionHistory key={selected.id} session={selected} visible={visible} onBack={() => {
+      setSelected(null);
+      setRefresh((value) => value + 1);
+    }} />
+  );
+
+  const matching = sessions.filter((session) => session.title.toLowerCase().includes(query.trim().toLowerCase()));
+  return (
+    <section aria-label="Session history" className="page history-page">
+      <header className="page-head">
+        <div className="grow">
+          <h1>Session history</h1>
+          <p>Open an AI session to review its requests and the commands executed on each server.</p>
+        </div>
+        <button type="button" className="btn btn-sm" onClick={() => setByHost(true)}>Browse by host</button>
+      </header>
+      <div className="view-bar">
+        <label className="session-history-search">
+          <SearchIcon size={15} />
+          <input type="search" aria-label="Search sessions" placeholder="Search sessions by title" value={query}
+            onChange={(event) => { setQuery(event.target.value); setLimit(30); }} />
+        </label>
+        <span className="grow" />
+        <span className="muted">{matching.length} session{matching.length === 1 ? '' : 's'}</span>
+        <button type="button" className="icon-btn" aria-label="Refresh sessions" title="Refresh sessions"
+          disabled={loading} onClick={() => setRefresh((value) => value + 1)}><RefreshIcon size={15} /></button>
+      </div>
+      {error && <p role="alert" className="banner" data-tone="danger">{error}</p>}
+      {loading && <p role="status" className="history-loading"><span className="spinner" /> Loading sessions…</p>}
+      {!loading && !error && matching.length === 0 && <Empty text={query.trim()
+        ? 'No sessions match this title.' : 'Saved AI sessions appear here. Older command records are available in Browse by host.'} />}
+      <ul className="session-history-list" aria-label="Sessions" aria-busy={loading}>
+        {matching.slice(0, limit).map((session) => (
+          <li key={session.id}>
+            <button type="button" className="session-history-row" onClick={() => setSelected(session)}>
+              <span className="session-history-mark"><SelaiLogo size={23} /></span>
+              <span className="session-history-title"><strong>{session.title}</strong>
+                <span className="meta">Created {formatWhen(session.createdAtMs)}</span></span>
+              <span className="session-history-updated"><span>Last activity</span><time dateTime={new Date(session.updatedAtMs).toISOString()}>
+                {formatWhen(session.updatedAtMs)}</time></span>
+              <ChevronIcon className="history-forward-icon" size={16} />
+            </button>
+          </li>
+        ))}
+      </ul>
+      {matching.length > limit && <button type="button" className="btn" onClick={() => setLimit((value) => value + 30)}>Load more sessions</button>}
+    </section>
+  );
+}
+
+type CommandResult = { rows: ExecutionView[]; error?: undefined } | { rows?: undefined; error: string };
+const REQUESTS_PER_PAGE = 12;
+
+function SessionHistory({ session, visible, onBack }: { session: ChatSessionSummary; visible: boolean; onBack: () => void }) {
+  const [record, setRecord] = useState(session);
+  const [turns, setTurns] = useState<ChatTurn[] | null>(null);
+  const [limit, setLimit] = useState(REQUESTS_PER_PAGE);
+  const [results, setResults] = useState<Record<string, CommandResult>>({});
+  const cache = useRef(new Map<string, CommandResult>());
+  const transcriptReady = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
+  const [retry, setRetry] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<ExecutionView | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    let active = true;
+    transcriptReady.current = false;
+    setTurns(null);
+    setResults({});
+    cache.current.clear();
+    setLimit(REQUESTS_PER_PAGE);
+    setSelected(null);
+    setLoading(true);
+    setError(null);
+    chatSessionGet(session.id).then((saved) => {
+      if (!active) return;
+      const restored = restoreTranscript(saved.transcript);
+      const seen = new Set<string>();
+      transcriptReady.current = true;
+      // Multiple UI entries can reference the same task; show its commands once.
+      setTurns(restored.filter((turn) => {
+        if (!turn.taskId) return true;
+        if (seen.has(turn.taskId)) return false;
+        seen.add(turn.taskId);
+        return true;
+      }));
+      setRecord(saved);
+    }).catch((err: unknown) => active && setError(describeError(err)))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; transcriptReady.current = false; };
+  }, [visible, session.id, refresh]);
+
+  useEffect(() => {
+    if (!visible || !turns || !transcriptReady.current) return;
+    let active = true;
+    const ids = [...new Set(turns.slice(0, limit).flatMap((turn) => turn.taskId ? [turn.taskId] : []))]
+      .filter((id) => !cache.current.has(id));
+    // Bound IPC concurrency and render only one page of requests at a time.
+    void (async () => {
+      for (let offset = 0; offset < ids.length && active; offset += 4) {
+        const batch = await Promise.all(ids.slice(offset, offset + 4).map(async (id): Promise<[string, CommandResult]> => {
+          try { return [id, { rows: await taskTimeline(id) }]; }
+          catch (err) { return [id, { error: describeError(err) }]; }
+        }));
+        if (!active) return;
+        batch.forEach(([id, result]) => cache.current.set(id, result));
+        setResults(Object.fromEntries(cache.current));
+      }
+    })();
+    return () => { active = false; };
+  }, [visible, turns, limit, retry]);
+
+  const shown = turns?.slice(0, limit) ?? [];
+  const commands = Object.values(results).flatMap((result) => result.rows ?? []);
+  const pending = shown.some((turn) => turn.taskId && !results[turn.taskId]);
+  const hosts = new Set(turns?.flatMap((turn) => turn.hostId ? [turn.hostId] : []) ?? []);
+
+  return (
+    <section aria-label="Session commands" className="page history-page">
+      <button type="button" className="btn btn-ghost btn-sm history-back" onClick={onBack}>
+        <ChevronIcon className="history-back-icon" size={14} /> All sessions
+      </button>
+      <header className="page-head">
+        <span className="session-history-mark"><SelaiLogo size={26} /></span>
+        <div className="grow session-history-heading"><h1>{record.title}</h1>
+          <p>Created {formatWhen(record.createdAtMs)} · Last activity {formatWhen(record.updatedAtMs)}</p></div>
+        <button type="button" className="icon-btn" aria-label="Refresh session commands" title="Refresh session commands"
+          disabled={loading || pending} onClick={() => setRefresh((value) => value + 1)}><RefreshIcon size={15} /></button>
+      </header>
+      {error && <p role="alert" className="banner" data-tone="danger">{error}</p>}
+      {loading && <p role="status" className="history-loading"><span className="spinner" /> Loading session…</p>}
+      {turns && <>
+        <div className="session-history-summary">
+          <span>{turns.length} request{turns.length === 1 ? '' : 's'}</span><span>{hosts.size} server{hosts.size === 1 ? '' : 's'}</span>
+          <span>{commands.length} command{commands.length === 1 ? '' : 's'} loaded</span>
+        </div>
+        <h2 className="session-commands-title">Command history</h2>
+        {turns.length === 0 && <Empty text="This session has no requests or commands yet." />}
+        <ol className="session-request-list" aria-label="Session requests" aria-busy={pending}>
+          {shown.map((turn, index) => {
+            const result = turn.taskId ? results[turn.taskId] : undefined;
+            return (
+              <li key={turn.id} className="card session-request">
+                <header className="session-request-head"><span className="session-request-number">{index + 1}</span>
+                  <h3>{turn.taskPrompt || turn.prompt || 'AI request'}</h3>
+                  <span className="badge">{turn.hostLabel || 'Chat'}</span></header>
+                {turn.taskId && !result && <p role="status" className="history-loading"><span className="spinner" /> Loading command records…</p>}
+                {result?.error !== undefined && <div className="session-request-error">
+                  <p role="alert">Could not load commands: {result.error}</p>
+                  <button type="button" className="btn btn-sm" disabled={pending} onClick={() => {
+                    cache.current.delete(turn.taskId!);
+                    setResults((previous) => { const next = { ...previous }; delete next[turn.taskId!]; return next; });
+                    setRetry((value) => value + 1);
+                  }}>Retry commands</button>
+                </div>}
+                {(!turn.taskId || result?.rows?.length === 0) && <p className="session-request-empty">No command execution recorded for this request.</p>}
+                {result?.rows && result.rows.length > 0 && <ul className="session-command-list" aria-label={`Commands for request ${index + 1}`}>
+                  {result.rows.map((row) => <li key={row.id}>
+                    <button type="button" className="session-command" onClick={() => setSelected(row)}>
+                      <TerminalIcon size={15} /><span className="session-command-main"><code>{row.commandRedacted}</code>
+                        <span className="meta">{formatWhen(row.createdAtMs)} · {row.modelId}{row.exitCode !== null ? ` · exit ${row.exitCode}` : ''}</span></span>
+                      <span className="badge" data-tone={stateTone(row.state)}>{stateText(row.state)}</span>
+                      <ChevronIcon className="history-forward-icon" size={14} />
+                    </button>
+                  </li>)}
+                </ul>}
+              </li>
+            );
+          })}
+        </ol>
+        {turns.length > limit && <button type="button" className="btn" disabled={pending}
+          onClick={() => setLimit((value) => value + REQUESTS_PER_PAGE)}>Load more requests</button>}
+      </>}
+      {selected && <Drawer title="Execution" subtitle={formatWhen(selected.createdAtMs)} onClose={() => setSelected(null)}>
+        <section aria-label="Execution details"><ExecutionDetails execution={selected} /></section>
+      </Drawer>}
+    </section>
+  );
+}
+
+/** Host audit remains available for older tasks, exports and output retention. */
+export function HostHistoryTab({ visible }: { visible: boolean }) {
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [hostId, setHostId] = useState('');
   const [view, setView] = useState<View>('tasks');
@@ -250,7 +469,7 @@ export function HistoryTab({ visible }: { visible: boolean }) {
         </div>
         <span className="grow" />
         <button type="button" className="btn btn-sm" onClick={exportHistory} disabled={!hostId}>
-          Export JSON
+          Export encrypted
         </button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={purge} disabled={!hostId}>
           Clear stored output

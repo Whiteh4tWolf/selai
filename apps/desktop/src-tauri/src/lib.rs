@@ -12,48 +12,62 @@ pub mod local_exec;
 mod local_terminal;
 pub mod provider_service;
 pub mod service;
+pub mod vault_service;
 
 use std::sync::Arc;
 
 use dto::CommandError;
 use selai_domain::ErrorCode;
-use selai_secrets::KeyringStore;
-use service::Services;
 use tauri::Manager;
-
-const DB_FILE: &str = "selai.sqlite3";
 
 /// Startup outcome. A failure is kept so the UI can show its code and message
 /// instead of the app exiting without explanation.
 pub struct AppState {
-    services: Result<Arc<Services>, CommandError>,
+    vault: Result<Arc<vault_service::VaultManager>, CommandError>,
 }
 
 impl AppState {
-    pub fn services(&self) -> Result<&Arc<Services>, CommandError> {
-        self.services.as_ref().map_err(Clone::clone)
+    pub fn services(&self) -> Result<vault_service::ServiceLease, CommandError> {
+        self.vault()?.services()
     }
-}
-
-fn open_services(dir: &std::path::Path) -> Result<Arc<Services>, CommandError> {
-    std::fs::create_dir_all(dir)
-        .map_err(|err| CommandError::new(ErrorCode::StorageIo, err.to_string()))?;
-    let secrets = Arc::new(KeyringStore::new());
-    Services::open(&dir.join(DB_FILE), secrets).map(Arc::new)
+    pub fn vault(&self) -> Result<Arc<vault_service::VaultManager>, CommandError> {
+        self.vault.as_ref().cloned().map_err(Clone::clone)
+    }
 }
 
 pub fn run() {
     let result = tauri::Builder::default()
         .setup(|app| {
-            let services = match app.path().app_data_dir() {
-                Ok(dir) => open_services(&dir),
+            selai_platform::start();
+            let vault = match app.path().app_data_dir() {
+                Ok(dir) => vault_service::VaultManager::new(dir),
                 Err(err) => Err(CommandError::new(ErrorCode::StorageIo, err.to_string())),
             };
-            app.manage(AppState { services });
+            if let Ok(manager) = &vault {
+                let manager = manager.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        if manager.idle() {
+                            let force = selai_platform::must_lock();
+                            let manager = manager.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = manager.lock(force).await;
+                            });
+                        }
+                    }
+                });
+            }
+            app.manage(AppState { vault });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::vault_status,
+            commands::vault_activity,
+            commands::vault_lock,
+            commands::vault_flush_complete,
+            commands::vault_action,
             commands::storage_status,
             commands::host_list,
             commands::host_get,

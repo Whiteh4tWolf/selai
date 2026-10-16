@@ -12,6 +12,45 @@ vulnerability.
 Include: affected version or commit, reproduction steps, and the impact you
 observed. Do not include real credentials or private keys in a report.
 
+## Local vault
+
+The desktop starts locked. Argon2id (64 MiB, three iterations, one lane) derives
+a passphrase key; AES-256-GCM wraps a random data key. A separate random recovery
+key wraps the same data key. Bundled SQLCipher encrypts the entire database and
+WAL: hosts, notes, credentials, managed private keys, saved chat, command history,
+audit, settings, and retained legacy exports. SQLite temporary data stays in
+memory. The backend saves no passphrase, plaintext recovery key, or unwrapped
+data key on disk or in the OS credential store.
+
+The unencrypted `vault.json` contains format/KDF parameters, salt, a random
+database filename, nonces, and wrapped keys. Display preferences alone remain
+in localStorage. `.selai` backups and `.selai-history` exports are encrypted.
+Explicitly downloaded recovery keys and decrypted JSON exports are plaintext.
+
+Locking denies new operations, disconnects terminals, drains/cancels agent
+work, closes the encrypted connection, and drops the vault key. The UI reports
+**locking** until that finishes. Idle timeout defaults to 15 minutes of app
+inactivity. Windows session lock and suspend notifications request locking;
+a suspended process can finish releasing keys only when it runs again. Linux
+and macOS support manual and idle locking; OS session/suspend integration is pending.
+
+Migration validates an encrypted copy before committing and removing unchanged
+legacy files or copied OS credentials. Cleanup failures remain visible and
+retryable in Security. External private key originals and import files are
+not deleted. Missing key files remain external references until replaced.
+Files written by your own shell, shell history, approved local commands, and
+remote servers are outside Selai's vault and retain their normal permissions.
+Migration cannot erase earlier copies from SSD remnants, snapshots, backups,
+quarantine, or another running legacy application.
+
+Passphrase/recovery changes update the current vault only. Earlier backups and
+exports retain their earlier credentials. Restore requires a fresh data folder.
+Passphrase changes rewrap the same data key. Possession of an earlier header or
+backup together with its credentials can expose that key and newer data copies;
+changing the passphrase alone does not revoke a compromised data key.
+Keep a backup and its recovery key separately. Losing both the passphrase and
+recovery key makes the data unrecoverable.
+
 ## Scope of current release work
 
 SSH access, credential storage and the scoped agent (M1 to M3) are built and
@@ -24,7 +63,7 @@ are handled as design feedback.
 
 ## Known limits (v1 design)
 
-- Provider API keys are kept in the OS credential store and sent only in the
+- Provider API keys are kept in the encrypted vault and sent only in the
   `Authorization` or `x-api-key` header, to the base URL you configured. Redirects
   are not followed. Remote endpoints require https. Plain http is accepted for
   loopback addresses, and for another host only when the operator ticks "Allow plain
@@ -37,7 +76,9 @@ are handled as design feedback.
   password, private key and provider key are never sent.
 - Plain chat (a message without an `@host` mention) sends the conversation in that
   window to the provider: up to the last 40 messages, 200 kB at most. It offers the
-  model no tools and touches no host. It is not stored on disk.
+  model no tools and touches no host. Named sessions are saved in the encrypted
+  vault. Their transcripts are not guaranteed free of secrets typed by a user
+  or received from a model.
 - For each host task, the request is stored as a preview of at most 500 characters,
   after the same pattern-based redaction as command output, so History can show
   what was asked. Token counts reported by the provider are stored with it.
@@ -46,16 +87,20 @@ are handled as design feedback.
 - Root commands: the model asks with `as_root`; Selai adds `sudo` itself. The sudo
   password is given in the approval card (typed, saved for the host, or the host's
   SSH password), goes only to sudo's prompt on that host, and is redacted from the
-  output. It is never in a model request, the database or a log. "Remember for this
-  host" saves it in the OS keychain; archiving the host deletes it.
+  output. It is never in a model request or plaintext log. "Remember for this
+  host" saves it inside the encrypted vault; archiving the host deletes it.
 - "This computer" runs agent commands as your own user on your own machine, with
   the same approvals. An approved command can read anything your account can read,
   and its output goes to the model like output from a server.
 
 - Local logs and the local audit chain are tamper-evident only against
   accidental change. A local administrator can rewrite them.
-- The OS keychain protects secrets at rest. It does not protect against malware
-  running as the logged-in user.
+- Encryption protects stored vault files while locked. Malware, debuggers, or
+  administrators can still observe an unlocked process, keystrokes, screenshots,
+  swap/pagefiles, hibernation files, and crash dumps. OS disk encryption protects
+  those system files. Rust key buffers are zeroized, but complete erasure of all
+  library/webview/runtime copies is not guaranteed. This implementation has not
+  undergone an independent cryptographic audit.
 - Arbitrary shell commands are not classified as safe. Approval is the control.
 - Output sent to a cloud model may contain sensitive remote data.
 - Output redaction is pattern-based. It misses secrets under neutral key names

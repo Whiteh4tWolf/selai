@@ -200,7 +200,7 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
             </div>
           </div>
           {form.authMethod === 'password' ? (
-            <Field label="Password" hint="Stored in the OS keychain, never in the database.">
+            <Field label="Password" hint="Stored inside your encrypted vault.">
               <input
                 type="password"
                 autoComplete="off"
@@ -212,12 +212,14 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
           ) : (
             <>
               <label className="field">
-                Private key file path
+                {form.privateKeyPath.startsWith('vault://') ? 'Private key stored in vault' : 'Private key file path'}
                 <input
+                  aria-label="Private key file path"
                   value={form.privateKeyPath}
                   placeholder="~/.ssh/id_ed25519"
                   onChange={(e) => set('privateKeyPath')(e.target.value)}
                 />
+                <span className="hint">Key contents are imported into your encrypted vault. Protect the original file separately. Enter a new path to replace a managed key.</span>
               </label>
               <label className="field">
                 Key passphrase (optional)

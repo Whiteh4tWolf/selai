@@ -69,6 +69,8 @@ impl Default for Limits {
 
 /// Everything a task needs. The SSH session is not here: the executor carries it.
 pub struct TaskSpec {
+    /// Stop between commands when the vault starts locking.
+    pub drain: CancellationToken,
     pub task: TaskId,
     pub host: HostId,
     pub host_label: String,
@@ -198,7 +200,7 @@ where
     let mut totals = Usage::default();
 
     loop {
-        if cancel.is_cancelled() {
+        if cancel.is_cancelled() || spec.drain.is_cancelled() {
             return cancelled(&ctx);
         }
         if steps >= spec.limits.max_steps || started.elapsed() > spec.limits.max_wall {
@@ -277,6 +279,9 @@ where
             tool_calls: outcome.tool_calls.clone(),
         });
         for (index, call) in outcome.tool_calls.iter().enumerate() {
+            if spec.drain.is_cancelled() {
+                return cancelled(&ctx);
+            }
             let reply = if index >= spec.limits.max_calls_per_turn {
                 Ok(Reply {
                     content: "not run: too many tool calls in one turn".to_owned(),
@@ -682,6 +687,18 @@ where
     E: RemoteExecutor,
     W: ApprovalWaiter,
 {
+    if ctx.spec.drain.is_cancelled() || ctx.cancel.is_cancelled() {
+        set_execution(
+            ctx,
+            execution,
+            ExecStatus::Cancelled,
+            &ExecutionOutcome {
+                error_code: Some("VAULT_LOCKED".into()),
+                ..Default::default()
+            },
+        )?;
+        return Err(Stop::Cancelled);
+    }
     let limits = ctx.spec.limits;
     let timeout = Duration::from_secs(u64::from(request.timeout_secs())).min(limits.max_command);
     let shell_command = request.shell_command();

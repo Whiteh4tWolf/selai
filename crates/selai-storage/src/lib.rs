@@ -11,6 +11,7 @@ mod hosts;
 mod migrate;
 mod providers;
 mod recovery;
+mod vault_credentials;
 
 #[cfg(test)]
 mod tests;
