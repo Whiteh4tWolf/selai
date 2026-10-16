@@ -5,8 +5,8 @@ saves SSH hosts, mentions one with `@host`, and the agent runs diagnostics or
 approved commands on that host. The model never receives SSH credentials, and
 every AI command attempt is recorded per host.
 
-**Status: M0 to M5 are built. The v1.0.0 tag is not yet published (S-052 waits for
-the operator). Linux is the only platform tested end to end. Windows and macOS
+**Status: M0 to M5 are built. v0.1.0 is a preview release; v1.0.0 (S-052) waits
+for the operator. Linux is the only platform tested end to end. Windows and macOS
 installers are built by the release workflow but not run here, and no live AI
 provider has been verified.** Working on Linux:
 
@@ -44,6 +44,14 @@ When adding a provider, "Check API key" tests the key and loads the endpoint's
 model list into a dropdown, with a fallback to type an ID by hand.
 
 The interface is dark by default, with light and system themes in the sidebar.
+
+## Install
+
+Download the installer for your system from the repository's **Releases** page
+(Windows `.exe`/`.msi`, Linux `.deb`/`.AppImage`, macOS `.dmg`) and check it
+against `SHA256SUMS`. The installers are not code-signed yet, so Windows
+SmartScreen and macOS Gatekeeper warn on the first start. The release notes say
+how to get past that.
 
 ## Build and test
 

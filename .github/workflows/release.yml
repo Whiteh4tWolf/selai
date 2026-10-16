@@ -1,10 +1,11 @@
 name: Release packaging
 
 # Builds the desktop installers on Linux, Windows and macOS and uploads them as
-# workflow artifacts, together with SHA256SUMS and CycloneDX SBOMs. On tag
-# pushes it also attests build provenance. It does not create a GitHub release,
-# a tag or a PR. Artifacts are UNSIGNED unless the optional signing secrets are
-# set. See docs/release/packaging.md.
+# workflow artifacts, together with SHA256SUMS and CycloneDX SBOMs. On a `v*` tag
+# push it also attests build provenance and publishes a GitHub release with the
+# installers (0.x and suffixed versions as pre-releases). It never creates a tag
+# or a PR. Artifacts are UNSIGNED unless the optional signing secrets are set.
+# See docs/release/packaging.md.
 
 on:
   workflow_dispatch:
@@ -188,3 +189,49 @@ jobs:
             release/installers-windows/*
             release/installers-macos/*
             release/sbom/*
+
+  publish:
+    name: Publish GitHub release
+    needs: [package, sbom, attest]
+    # Tag pushes only, after every installer and the SBOMs were built. The
+    # attestation is waited for but not required: on a private repository
+    # without GitHub Enterprise Cloud it is unavailable, and the release notes
+    # then do not claim it.
+    if: >-
+      always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') &&
+      needs.package.result == 'success' && needs.sbom.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download installers and SBOMs
+        uses: actions/download-artifact@v8
+        with:
+          path: release
+      - name: Check the artifacts and assemble the release files
+        run: bash scripts/release/assemble-release.sh release dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          ATTESTED: ${{ needs.attest.result == 'success' }}
+        run: |
+          cp docs/release/RELEASE_NOTES.md notes.md
+          if [[ "$ATTESTED" == "true" ]]; then
+            {
+              echo
+              echo "Each file has a signed build provenance attestation:"
+              echo "\`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`."
+            } >> notes.md
+          fi
+          flags=()
+          # 0.x versions and versions with a suffix (v1.0.0-rc.1) are pre-releases.
+          if [[ "$TAG" == v0.* || "$TAG" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --title "Selai ${TAG#v}" \
+            --notes-file notes.md \
+            "${flags[@]}"

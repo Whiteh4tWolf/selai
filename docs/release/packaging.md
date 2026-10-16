@@ -2,8 +2,8 @@
 
 Backlog item S-050. The workflow is `.github/workflows/release.yml`. It builds
 the Selai desktop installers on Linux, Windows and macOS, and uploads them as
-workflow artifacts with checksums and SBOMs. It does not create a GitHub
-release, a tag or a PR.
+workflow artifacts with checksums and SBOMs. On a `v*` tag push it also
+publishes a GitHub release (see "How to run it"). It never creates a tag or a PR.
 
 **Without the optional signing secrets (see below), every installer is UNSIGNED.**
 Windows will show SmartScreen warnings and macOS Gatekeeper will block the app.
@@ -39,7 +39,16 @@ or `installers-macos`. Each contains the installers and a `SHA256SUMS` file.
 ## How to run it
 
 - **Manual:** Actions tab, "Release packaging", "Run workflow", choose the branch.
-- **Tag:** push a tag that matches `v*`. This also runs the attestation job.
+- **Tag:** push a tag that matches `v*`. This also runs the attestation job and,
+  after it, the `publish` job: it checks every platform's `SHA256SUMS`, then
+  creates a GitHub release named after the tag with all installers, one combined
+  `SHA256SUMS`, the SBOMs as `sbom-cyclonedx.tar.gz`, and
+  `docs/release/RELEASE_NOTES.md` as its text. The release is published even
+  when the attestation job fails (attestations on a private repository need
+  GitHub Enterprise Cloud); the notes mention attestations only when it passed. `v0.*` tags and tags with a
+  suffix (`v1.0.0-rc.1`) become pre-releases. The tag must match the version in
+  `Cargo.toml`, `tauri.conf.json` and `package.json`, because the installer file
+  names come from it.
 
 ## Where to find the output
 
