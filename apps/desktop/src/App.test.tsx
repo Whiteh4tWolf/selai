@@ -30,6 +30,7 @@ vi.mock('@xterm/addon-fit', () => ({
 describe('App shell', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    vi.stubGlobal('innerWidth', 1200);
     vi.spyOn(ipc, 'appInfo').mockResolvedValue({ name: 'Selai', version: '0.1.0' });
     vi.spyOn(ipc, 'storageStatus').mockResolvedValue({
       schemaVersion: 2,
@@ -44,12 +45,13 @@ describe('App shell', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('is a desktop workbench: host explorer on the left, chat on the right, welcome in the middle', async () => {
     render(<App />);
     expect(screen.getByRole('button', { name: 'Hosts' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'AI Agent' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Assistant' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('region', { name: 'Hosts' })).toBeVisible();
     expect(screen.getByLabelText('Request')).toBeVisible();
     expect(screen.getByText('Open a terminal on this computer')).toBeInTheDocument();
@@ -58,8 +60,8 @@ describe('App shell', () => {
 
   it('toggles the side panels from the activity bar and the keyboard', () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'AI Agent' }));
-    expect(screen.getByRole('button', { name: 'AI Agent' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Assistant' }));
+    expect(screen.getByRole('button', { name: 'Assistant' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByLabelText('Request')).not.toBeVisible();
     fireEvent.keyDown(window, { key: 'L', ctrlKey: true, shiftKey: true });
     expect(screen.getByLabelText('Request')).toBeVisible();
@@ -75,6 +77,24 @@ describe('App shell', () => {
     expect(within(tabs).getByRole('tab', { name: 'Providers' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(within(tabs).getByRole('button', { name: 'Close Providers' }));
     expect(screen.queryByRole('tablist', { name: 'Open tabs' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a compact window clear and opens Providers from the assistant', async () => {
+    vi.stubGlobal('innerWidth', 800);
+    render(<App />);
+    expect(screen.getByLabelText('Request')).not.toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Assistant' }));
+    expect(screen.getByLabelText('Request')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Providers' }));
+    expect(await screen.findByRole('tab', { name: 'Providers' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Request')).not.toBeVisible();
+  });
+
+  it('honours the saved assistant visibility in a compact window', () => {
+    vi.stubGlobal('innerWidth', 800);
+    window.localStorage.setItem('selai.chat', 'open');
+    render(<App />);
+    expect(screen.getByLabelText('Request')).toBeVisible();
   });
 
   it('reports a storage failure with its code instead of hiding it', async () => {

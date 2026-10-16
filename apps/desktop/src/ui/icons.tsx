@@ -39,6 +39,12 @@ export const TerminalIcon = make(
     <path d="m7 9 3 3-3 3M13 15h4" />
   </>,
 );
+export const AssistantIcon = make(
+  <>
+    <path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2z" />
+    <path d="m8 9 3 3-3 3M14 14h3" />
+  </>,
+);
 export const SparkIcon = make(
   <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />,
 );

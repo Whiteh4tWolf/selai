@@ -32,7 +32,7 @@ import {
   PlusIcon,
   SendIcon,
   ShieldIcon,
-  SparkIcon,
+  AssistantIcon,
   StopIcon,
   TerminalIcon,
 } from '../ui/icons';
@@ -463,7 +463,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   return (
     <section aria-label="AI Agent" className="chat">
       <header className="panel-head">
-        <h2>AI Agent</h2>
+        <AssistantIcon size={16} />
+        <h2>Assistant</h2>
         <span className="grow" />
         <button
           type="button"
@@ -497,13 +498,13 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
         {turns.length === 0 ? (
           <div className="chat-empty">
             <span className="empty-icon">
-              <SparkIcon size={26} />
+              <AssistantIcon size={26} />
             </span>
-            <h2>How can I help?</h2>
+            <h2>What are you working on?</h2>
             <p>
               {contextHost
                 ? `Ask about ${contextHost.label}, or just discuss. Commands run only when an answer needs them; anything beyond a read-only check waits for your approval.`
-                : 'Ask anything to discuss it. Open a terminal or choose a server below to work on it; @ asks about another host for one message.'}
+                : 'Think through a problem, review a config, or investigate a server. You choose where we work.'}
             </p>
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
@@ -517,6 +518,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                   }}
                 >
                   {s.title}
+                  <span aria-hidden="true">↗</span>
                 </button>
               ))}
             </div>
@@ -530,7 +532,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                 </li>
                 <li className="turn-ai">
                   <span className="ai-avatar">
-                    <SparkIcon size={15} />
+                    <AssistantIcon size={15} />
                   </span>
                   <div className="ai-body">
                     <div className="ai-meta">
@@ -628,6 +630,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
             </ul>
           )}
           <div className="context-row">
+            <span className="context-label">{host ? 'This message' : contextHost ? pinned ? 'Pinned server' : 'Following terminal' : 'Context'}</span>
             {host ? (
               <span className="target-chip" data-kind="mention" title={`${host.username}@${host.hostname}`}>
                 <AtIcon size={12} />
@@ -688,7 +691,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
                 <li className="head">Chat server</li>
                 <li>
                   <button type="button" role="menuitemradio" aria-checked={contextHost === null} onClick={() => chooseContext(null)}>
-                    <SparkIcon size={14} />
+                    <AssistantIcon size={14} />
                     <span>
                       No server
                       <small>plain chat, nothing runs</small>

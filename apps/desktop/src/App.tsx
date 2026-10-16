@@ -5,7 +5,7 @@ import { HostsSidebar } from './tabs/HostsSidebar';
 import { ProvidersPanel } from './tabs/ProvidersPanel';
 import { appInfo, describeError, localHost, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
-import { ClockIcon, CloseIcon, PlugIcon, PlusIcon, ServerIcon, SparkIcon, TerminalIcon } from './ui/icons';
+import { ClockIcon, CloseIcon, PlugIcon, PlusIcon, ServerIcon, AssistantIcon, TerminalIcon } from './ui/icons';
 
 // xterm.js is large; load it only when a terminal is first needed.
 const TerminalStack = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalStack })));
@@ -120,8 +120,11 @@ export function App() {
   const [chatRequest, setChatRequest] = useState<{ host: HostView; n: number } | null>(null);
   const [theme, setTheme] = useState<Theme>(storedTheme);
   const [sidebarOpen, setSidebarOpen] = useState(() => stored('selai.sidebar') !== 'closed');
-  const [chatOpen, setChatOpen] = useState(() => stored('selai.chat') !== 'closed');
-  const side = usePanelWidth('selai.sidebar.width', 248, 180, 420);
+  const [chatOpen, setChatOpen] = useState(() => {
+    const saved = stored('selai.chat');
+    return saved === null ? window.innerWidth > 1100 : saved !== 'closed';
+  });
+  const side = usePanelWidth('selai.sidebar.width', 264, 220, 420);
   const chat = usePanelWidth('selai.chat.width', 380, 300, 640);
 
   useEffect(() => {
@@ -244,6 +247,8 @@ export function App() {
 
   const active = tabs.find((t) => t.key === activeKey) ?? null;
   const focusedTerminal = terminals.find((t) => t.key === lastTerminal) ?? null;
+  const connectedSessions = Object.values(statuses).filter((status) => status === 'connected').length;
+  const locationTitle = active?.kind === 'terminal' ? active.host.label : active ? PAGE_TITLES[active.kind] : 'Overview';
   // Status per host for the explorer: the best state among its open terminals.
   const sessions: Record<string, SessionStatus> = {};
   for (const t of terminals) {
@@ -267,21 +272,33 @@ export function App() {
       onClick={onClick}
     >
       {icon}
+      <span className="activity-label">{label}</span>
     </button>
   );
 
   return (
     <div className="workbench">
+      <header className="workspace-head">
+        <div className="workspace-brand">
+          <span className="brand-mark" aria-hidden="true">s.</span>
+          <span>selai</span>
+        </div>
+        <span className="workspace-divider" aria-hidden="true" />
+        <span className="workspace-title">Workspace</span>
+        <span className="workspace-location">/ {locationTitle}</span>
+        <span className="grow" />
+        <span className="workspace-session-count">
+          <span className="dot" data-status={connectedSessions > 0 ? 'ok' : undefined} />
+          {connectedSessions} connected
+        </span>
+      </header>
       <div className="workbench-main">
         <nav className="activitybar" aria-label="Main">
-          <span className="brand-mark" title={info ? `${info.name} ${info.version}` : 'Selai'}>
-            S
-          </span>
           {activity('Hosts', <ServerIcon size={20} />, sidebarOpen, () => setSidebarOpen((o) => !o), 'Ctrl+Shift+E')}
           {activity('History', <ClockIcon size={20} />, active?.kind === 'history', () => openPage('history'))}
           {activity('Providers', <PlugIcon size={20} />, active?.kind === 'providers', () => openPage('providers'))}
           <span className="grow" />
-          {activity('AI Agent', <SparkIcon size={20} />, chatOpen, () => setChatOpen((o) => !o), 'Ctrl+Shift+L')}
+          {activity('Assistant', <AssistantIcon size={20} />, chatOpen, () => setChatOpen((o) => !o), 'Ctrl+Shift+L')}
         </nav>
 
         <aside className="sidebar" hidden={!sidebarOpen} style={{ width: side.width }}>
@@ -326,7 +343,12 @@ export function App() {
           )}
           <div className="editor-body">
             {tabs.length === 0 && (
-              <Welcome onLocal={openLocal} onHosts={() => setSidebarOpen(true)} onChat={() => setChatOpen(true)} />
+              <Welcome
+                onLocal={openLocal}
+                onHosts={() => setSidebarOpen(true)}
+                onChat={() => setChatOpen(true)}
+                onProviders={() => openPage('providers')}
+              />
             )}
             {terminals.length > 0 && (
               <Suspense fallback={<div className="welcome"><span className="spinner spinner-lg" /></div>}>
@@ -358,8 +380,14 @@ export function App() {
           <AgentPanel
             activeHost={focusedTerminal?.host ?? null}
             contextRequest={chatRequest}
-            onOpenProviders={() => openPage('providers')}
-            onOpenHosts={() => setSidebarOpen(true)}
+            onOpenProviders={() => {
+              openPage('providers');
+              if (window.innerWidth <= 1100) setChatOpen(false);
+            }}
+            onOpenHosts={() => {
+              setSidebarOpen(true);
+              if (window.innerWidth <= 1100) setChatOpen(false);
+            }}
             onClose={() => setChatOpen(false)}
           />
         </aside>
@@ -390,33 +418,55 @@ export function App() {
   );
 }
 
-function Welcome({ onLocal, onHosts, onChat }: { onLocal: () => void; onHosts: () => void; onChat: () => void }) {
+function Welcome({ onLocal, onHosts, onChat, onProviders }: {
+  onLocal: () => void;
+  onHosts: () => void;
+  onChat: () => void;
+  onProviders: () => void;
+}) {
   return (
     <div className="welcome">
       <div className="welcome-inner">
-        <h1>Selai</h1>
-        <p className="muted">SSH workspace with an AI that asks before it changes anything.</p>
-        <h2>Start</h2>
+        <span className="eyebrow">YOUR WORKSPACE</span>
+        <h1>Ready when you are.</h1>
+        <p className="welcome-intro">Open a terminal, connect to a server, or work through a problem with the assistant.</p>
+        <h2>Get started</h2>
         <ul className="welcome-actions">
           <li>
             <button type="button" onClick={onLocal}>
-              <TerminalIcon size={15} /> Open a terminal on this computer
+              <span className="welcome-action-icon"><TerminalIcon size={19} /></span>
+              <span className="welcome-action-copy">
+                <strong>Open a terminal on this computer</strong>
+                <small>Start a local shell, right here.</small>
+              </span>
+              <span className="welcome-arrow" aria-hidden="true">↗</span>
             </button>
           </li>
           <li>
             <button type="button" onClick={onHosts}>
-              <ServerIcon size={15} /> Connect to an SSH host
+              <span className="welcome-action-icon"><ServerIcon size={19} /></span>
+              <span className="welcome-action-copy">
+                <strong>Connect to an SSH host</strong>
+                <small>Choose a saved host or add a new one.</small>
+              </span>
               <kbd>Ctrl+Shift+E</kbd>
             </button>
           </li>
           <li>
             <button type="button" onClick={onChat}>
-              <SparkIcon size={15} /> Ask the AI
+              <span className="welcome-action-icon"><AssistantIcon size={19} /></span>
+              <span className="welcome-action-copy">
+                <strong>Ask the AI</strong>
+                <small>Investigate an issue or think through a change.</small>
+              </span>
               <kbd>Ctrl+Shift+L</kbd>
             </button>
           </li>
         </ul>
-        <p className="muted small">The chat works on the terminal you have open. Use @ to ask about another host.</p>
+        <div className="welcome-foot">
+          <span>Set up the assistant to work your way.</span>
+          <button type="button" onClick={onProviders}>Configure AI providers <span aria-hidden="true">→</span></button>
+        </div>
       </div>
     </div>
   );

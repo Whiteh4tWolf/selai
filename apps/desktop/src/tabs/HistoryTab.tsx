@@ -21,7 +21,7 @@ import {
 import { formatCompact, formatCount, formatDuration, formatWhen, sumTokens } from '../ui/format';
 import { HostAvatar } from '../ui/HostAvatar';
 import { Drawer } from '../ui/Overlay';
-import { ClockIcon, SparkIcon, TerminalIcon } from '../ui/icons';
+import { ClockIcon, AssistantIcon, TerminalIcon } from '../ui/icons';
 
 const STATES = ['completed', 'failed', 'denied', 'cancelled', 'interrupted', 'timed_out'] as const;
 
@@ -267,7 +267,7 @@ export function HistoryTab({ visible }: { visible: boolean }) {
                   <li key={t.id}>
                     <button type="button" className="task-row" onClick={() => setOpenTask(t)}>
                       <span className="task-icon" data-tone={stateTone(t.state)}>
-                        <SparkIcon size={15} />
+                        <AssistantIcon size={15} />
                       </span>
                       <span className="task-main">
                         <strong>{t.promptPreview ?? 'Request not recorded (task from an older version)'}</strong>

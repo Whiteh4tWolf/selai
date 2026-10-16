@@ -1,6 +1,6 @@
 import { ServerIcon } from './icons';
 
-const PALETTE = ['#5b7cfa', '#2fbf71', '#e8a23a', '#e5604f', '#9b6bff', '#1fb2c9', '#e0683a', '#d14d8a'];
+const PALETTE = ['#4c6460', '#57654c', '#756349', '#76584f', '#625b74', '#47676d', '#6d6257', '#705b65'];
 
 /** A stable colour per label, so a host is recognisable at a glance. */
 export function colorFor(label: string): string {

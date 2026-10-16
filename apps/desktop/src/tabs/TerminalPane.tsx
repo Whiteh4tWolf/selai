@@ -28,11 +28,11 @@ interface Props {
 }
 
 const THEME = {
-  background: '#0a0c12',
+  background: '#141618',
   foreground: '#d8dbe8',
-  cursor: '#7391ff',
-  cursorAccent: '#0a0c12',
-  selectionBackground: 'rgba(115, 145, 255, 0.35)',
+  cursor: '#a8c7b8',
+  cursorAccent: '#141618',
+  selectionBackground: 'rgba(168, 199, 184, 0.25)',
   black: '#1c2031',
   red: '#ef6b6b',
   green: '#3fcf86',
