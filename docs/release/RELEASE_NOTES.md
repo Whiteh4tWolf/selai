@@ -30,9 +30,16 @@ On Windows: `Get-FileHash -Algorithm SHA256 .\<file>` and compare with `SHA256SU
 
 - Hosts with labels that may contain spaces; the server key is approved inside
   the first connect, and a changed key needs an explicit confirmation.
+- A desktop workbench: host explorer on the left, terminals and History/Providers
+  as tabs in the middle, the AI chat on the right (Ctrl+Shift+E / Ctrl+Shift+L).
 - Terminal tabs with status, reconnect, and an "Edit host" step after a failed login.
-- AI Agent chat: plain technical discussion, or `@host` to run read-only checks
-  (other commands wait for your approval).
+- A local terminal on this computer ("This computer"), which the AI can use under
+  the same approvals as a host.
+- AI Agent chat: plain technical discussion. The chat works on the server of the
+  terminal in focus, and you can pin one; `@host` sends a single message elsewhere.
+  Read-only checks run on their own; other commands wait for your approval.
+- Commands that need root: the approval card asks for the sudo password when sudo
+  asks for one (typed, saved, or the SSH login password). The model never sees it.
 - History with each request, the commands it ran, and input/output token usage.
 - Providers: OpenAI, Anthropic and OpenAI-compatible servers (vLLM, Ollama,
   LiteLLM). "Check API key" loads the model list; one Test button checks the
