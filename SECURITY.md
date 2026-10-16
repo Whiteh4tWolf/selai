@@ -43,6 +43,14 @@ are handled as design feedback.
   what was asked. Token counts reported by the provider are stored with it.
 - "Check API key" sends the key typed in the form (or the saved one) once, to list
   the endpoint's models. The typed key is not stored until you save.
+- Root commands: the model asks with `as_root`; Selai adds `sudo` itself. The sudo
+  password is given in the approval card (typed, saved for the host, or the host's
+  SSH password), goes only to sudo's prompt on that host, and is redacted from the
+  output. It is never in a model request, the database or a log. "Remember for this
+  host" saves it in the OS keychain; archiving the host deletes it.
+- "This computer" runs agent commands as your own user on your own machine, with
+  the same approvals. An approved command can read anything your account can read,
+  and its output goes to the model like output from a server.
 
 - Local logs and the local audit chain are tamper-evident only against
   accidental change. A local administrator can rewrite them.

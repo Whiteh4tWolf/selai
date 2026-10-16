@@ -7,6 +7,7 @@ import {
   historySummary,
   historyTasks,
   hostList,
+  localHost,
   preferencesGet,
   preferencesSet,
   taskTimeline,
@@ -72,11 +73,12 @@ export function HistoryTab({ visible }: { visible: boolean }) {
 
   useEffect(() => {
     let active = true;
-    hostList(undefined, true)
-      .then((page) => {
+    Promise.all([localHost().catch(() => null), hostList(undefined, true)])
+      .then(([local, page]) => {
         if (!active) return;
-        setHosts(page.items);
-        setHostId((current) => current || page.items[0]?.id || '');
+        const all = [...page.items, ...(local ? [local] : [])];
+        setHosts(all);
+        setHostId((current) => current || all[0]?.id || '');
       })
       .catch((err: unknown) => active && setError(describeError(err)));
     preferencesGet()

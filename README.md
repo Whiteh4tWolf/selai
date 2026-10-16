@@ -43,6 +43,16 @@ retention window.
 When adding a provider, "Check API key" tests the key and loads the endpoint's
 model list into a dropdown, with a fallback to type an ID by hand.
 
+Commands that need root: the AI asks to run a command as root, and Selai adds
+`sudo` itself. If the host's sudo asks for a password, the approval card asks you
+for it (or uses the saved one, or the SSH login password of a password host). It
+goes only to sudo on that host; the AI never sees it. This works for hosts that
+sign in with a password and with a key.
+
+"This computer" is built in: open a local terminal from Hosts or the Terminal
+view, or mention `@This computer` in the AI Agent to work on your own machine with
+the same approvals.
+
 The interface is dark by default, with light and system themes in the sidebar.
 
 ## Install

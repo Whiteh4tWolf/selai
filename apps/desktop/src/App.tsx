@@ -3,7 +3,7 @@ import { AgentPanel } from './tabs/AgentPanel';
 import { ConnectionsTab } from './tabs/ConnectionsTab';
 import { HistoryTab } from './tabs/HistoryTab';
 import { ProvidersPanel } from './tabs/ProvidersPanel';
-import { appInfo, describeError, storageStatus, type AppInfo, type HostView } from './ipc';
+import { appInfo, describeError, localHost, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
 import { ClockIcon, PlugIcon, ServerIcon, SparkIcon, TerminalIcon } from './ui/icons';
 
@@ -192,6 +192,11 @@ export function App() {
                 onStatus={onStatus}
                 onNew={() => setView('hosts')}
                 onEditHost={editHost}
+                onNewLocal={() => {
+                  localHost()
+                    .then(openTerminal)
+                    .catch(() => setView('hosts'));
+                }}
               />
             </Suspense>
           )}

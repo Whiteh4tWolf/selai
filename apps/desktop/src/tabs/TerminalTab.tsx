@@ -19,9 +19,22 @@ interface Props {
   onStatus: (key: string, status: SessionStatus) => void;
   onNew: () => void;
   onEditHost: (hostId: string) => void;
+  /** Opens a shell on this computer. */
+  onNewLocal?: () => void;
 }
 
-export function TerminalTab({ tabs, statuses, activeKey, visible, onSelect, onClose, onStatus, onNew, onEditHost }: Props) {
+export function TerminalTab({
+  tabs,
+  statuses,
+  activeKey,
+  visible,
+  onSelect,
+  onClose,
+  onStatus,
+  onNew,
+  onEditHost,
+  onNewLocal,
+}: Props) {
   return (
     <section aria-label="Terminal" className="term-view" hidden={!visible}>
       {tabs.length === 0 ? (
@@ -31,9 +44,16 @@ export function TerminalTab({ tabs, statuses, activeKey, visible, onSelect, onCl
           </span>
           <h2>No open sessions</h2>
           <p>Pick a host to open an SSH terminal. Sessions stay open while you switch views.</p>
-          <button type="button" className="btn btn-primary" onClick={onNew}>
-            Choose a host
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {onNewLocal && (
+              <button type="button" className="btn" onClick={onNewLocal}>
+                Open a local terminal
+              </button>
+            )}
+            <button type="button" className="btn btn-primary" onClick={onNew}>
+              Choose a host
+            </button>
+          </div>
         </div>
       ) : (
         <div role="tablist" aria-label="Open terminals" className="term-tabs">

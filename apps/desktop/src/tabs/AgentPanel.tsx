@@ -9,6 +9,7 @@ import {
   hostKeyProblem,
   sudoOptions,
   hostList,
+  localHost,
   preferencesGet,
   preferencesSet,
   providerList,
@@ -36,6 +37,18 @@ import {
 } from '../ui/icons';
 import { applyEvent, isTerminal, setApprovalState, type TranscriptItem } from './agentTranscript';
 import { PROVIDERS_CHANGED } from './ProvidersPanel';
+
+/** "This computer" when it matches `query`, then the matching SSH hosts. */
+async function targetSearch(query: string): Promise<HostView[]> {
+  const q = query.trim().toLowerCase();
+  const [local, page] = await Promise.all([
+    localHost().catch(() => null),
+    hostList(query.trim() || undefined),
+  ]);
+  const localMatches =
+    local !== null && (!q || local.label.toLowerCase().includes(q) || 'local'.startsWith(q));
+  return [...(localMatches ? [local] : []), ...page.items.filter((h) => !h.archived)];
+}
 
 /** The "@query" being typed at the end of the request. Labels may hold spaces. */
 const MENTION = /(^|\s)@([^\n@]{0,64})$/;
@@ -126,10 +139,10 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
   useEffect(() => {
     if (mention === null) return;
     let active = true;
-    hostList(mention.trim() || undefined)
-      .then((page) => {
+    targetSearch(mention)
+      .then((targets) => {
         if (!active) return;
-        setMatches(page.items.filter((h) => !h.archived));
+        setMatches(targets);
         setActive(0);
       })
       .catch(() => active && setMatches([]));
@@ -526,9 +539,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                     <HostAvatar label={h.label} size={14} />
                     <span>
                       {h.label}
-                      <small>
-                        {h.username}@{h.hostname}
-                      </small>
+                      <small>{h.kind === 'local' ? 'This machine · local shell' : `${h.username}@${h.hostname}`}</small>
                     </span>
                   </button>
                 </li>

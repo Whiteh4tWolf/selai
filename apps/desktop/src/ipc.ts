@@ -46,6 +46,8 @@ export interface HostView {
   updatedAtMs: number;
   lastConnectedAtMs: number | null;
   archived: boolean;
+  /** `local` is the built-in "This computer" entry: no SSH, cannot be edited. */
+  kind: 'ssh' | 'local';
 }
 
 export interface Page<T> {
@@ -114,6 +116,12 @@ export function storageStatus(): Promise<StorageStatus> {
 
 export function hostList(query?: string, includeArchived = false): Promise<Page<HostView>> {
   return invoke<Page<HostView>>('host_list', { query: query ?? null, includeArchived });
+}
+
+/** The built-in "This computer" entry, for a local terminal and local agent tasks. */
+export async function localHost(): Promise<HostView> {
+  // Async so a failure always arrives as a rejected promise, never a throw.
+  return invoke<HostView>('local_host');
 }
 
 export function hostSave(input: HostInput): Promise<HostView> {

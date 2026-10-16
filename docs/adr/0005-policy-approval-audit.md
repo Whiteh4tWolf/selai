@@ -75,6 +75,34 @@ and task. The spec forbids executing text the model produced in plain prose.
     retried only as the provider adapter allows (ADR-0004). A command that has
     started is never re-run because the model stream broke.
 
+13. **Root commands (amended).** `ssh_run_command` takes `as_root`. The model
+    never writes `sudo` and never handles a password; local code wraps the command
+    as `sudo -S -k -p '<nonce>' -- sh -c '<command>'` (or `sudo -n` when the host
+    needs no password). The stored, shown and approved text is `sudo <command>`,
+    so its digest differs from the plain command's.
+    - Before the approval is created, `LC_ALL=C sudo -k -n true` classifies the
+      host: no password, password required, not allowed, or not installed. It
+      runs nothing as root. "Not allowed" and "not installed" deny the command
+      without asking the operator.
+    - The password comes with the approval decision: typed, the sudo password
+      saved for that host, or (password hosts only) the host's SSH password. It
+      is held in memory and taken by the task only after the database confirmed
+      the approval; every other outcome drops it. Only a host that asks for a
+      password gets one.
+    - It is written to stdin only after sudo prints this run's random prompt,
+      once, and stdin is then closed. Output that arrives before any prompt
+      closes stdin without writing it. A command that reads stdin therefore
+      cannot capture it. The prompt is removed from the output and the password
+      is redacted from stdout and stderr as a literal.
+    - `sudo_used` (with `password_supplied`, never the value) is audited before
+      the command runs. A rejected password is `SUDO_AUTH_FAILED`.
+14. **This computer (amended).** A built-in host row (`kind = 'local'`, fixed
+    id) is the target for a local terminal and for agent tasks on the operator's
+    own machine. Tasks bound to it use the same policy, approval tickets, audit
+    and limits; only the executor differs (a local process instead of an SSH
+    exec channel, with stdin closed). Root commands use the same sudo wrapper on
+    the local machine. The row cannot be edited, archived, probed or trusted.
+
 ## Consequences
 
 - The agent runtime holds no SSH credentials. It receives an executor that

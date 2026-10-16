@@ -38,6 +38,7 @@ const host: ipc.HostView = {
   updatedAtMs: 1,
   lastConnectedAtMs: null,
   archived: false,
+  kind: 'ssh',
 };
 
 /** Captures the event callback so a test can play the task's events. */
@@ -293,6 +294,24 @@ describe('AgentPanel', () => {
     render(<AgentPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Verify audit log' }));
     expect(await screen.findByText('Audit log intact: 4 event(s) checked.')).toBeInTheDocument();
+  });
+
+  it('offers This computer in the @ list and runs the task there', async () => {
+    const agent = mockAgent();
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+    vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [], nextCursor: null });
+    vi.spyOn(ipc, 'localHost').mockResolvedValue({ ...host, id: 'local', label: 'This computer', kind: 'local' });
+    render(<AgentPanel />);
+    const textarea = screen.getByLabelText('Request');
+    fireEvent.change(textarea, { target: { value: '@this' } });
+    const option = await screen.findByRole('button', { name: /This computer/ });
+    expect(option).toHaveTextContent('This machine · local shell');
+    fireEvent.click(option);
+    fireEvent.change(textarea, { target: { value: '@This computer how much disk is free?' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() =>
+      expect(agent.start).toHaveBeenCalledWith('local', 'p1', '@This computer how much disk is free?', expect.any(Function)),
+    );
   });
 
   describe('root commands', () => {

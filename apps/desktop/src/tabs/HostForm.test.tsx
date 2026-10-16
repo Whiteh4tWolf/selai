@@ -80,6 +80,7 @@ describe('HostForm', () => {
       updatedAtMs: 1,
       lastConnectedAtMs: null,
       archived: false,
+      kind: 'ssh',
     } satisfies ipc.HostView;
     render(<HostForm host={host} onCancel={() => {}} onSaved={() => {}} />);
     const password = screen.getByLabelText('Password') as HTMLInputElement;

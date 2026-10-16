@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { describeError, hostArchive, hostList, type HostView } from '../ipc';
+import { describeError, hostArchive, hostList, localHost, type HostView } from '../ipc';
 import { HostAvatar } from '../ui/HostAvatar';
 import { ArchiveIcon, EditIcon, KeyIcon, LockIcon, PlusIcon, SearchIcon, ServerIcon, TerminalIcon } from '../ui/icons';
 import { HostForm } from './HostForm';
@@ -16,6 +16,17 @@ export function ConnectionsTab({ onConnect, editRequest }: Props) {
   const [editing, setEditing] = useState<HostView | 'new' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [local, setLocal] = useState<HostView | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    localHost()
+      .then((h) => active && setLocal(h))
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const refresh = useCallback(async (filter: string) => {
     try {
@@ -106,7 +117,35 @@ export function ConnectionsTab({ onConnect, editRequest }: Props) {
       )}
       {empty && query !== '' && <p className="muted">No host matches “{query}”.</p>}
 
-      {hosts.length > 0 && <h2 className="section-title">All hosts · {hosts.length}</h2>}
+      {local && (query === '' || local.label.toLowerCase().includes(query.toLowerCase()) || 'local'.includes(query.toLowerCase())) && (
+        <>
+          <h2 className="section-title">This computer</h2>
+          <div className="host-grid" style={{ marginBottom: '1.4rem' }}>
+            <div className="host-card">
+              <button
+                type="button"
+                className="host-open"
+                aria-label={`Open a terminal on ${local.label}`}
+                onClick={() => onConnect(local)}
+              />
+              <span className="avatar local-avatar">
+                <TerminalIcon size={18} />
+              </span>
+              <div className="host-text">
+                <strong>{local.label}</strong>
+                <span>Local shell · no SSH</span>
+                <div className="host-tags">
+                  <span className="badge" data-tone="accent">
+                    Local
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {hosts.length > 0 && <h2 className="section-title">SSH hosts · {hosts.length}</h2>}
       <ul className="host-grid" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {hosts.map((host) => (
           <li key={host.id} className="host-card">

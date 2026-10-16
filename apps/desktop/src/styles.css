@@ -435,10 +435,13 @@ textarea:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-input[type='checkbox'] {
+input[type='checkbox'],
+input[type='radio'] {
   width: 15px;
   height: 15px;
   min-height: 0;
+  padding: 0;
+  flex: none;
   accent-color: var(--accent);
   margin: 0;
 }
@@ -2396,4 +2399,9 @@ option {
 
 .sudo-note {
   padding: 0.5rem 0.8rem 0;
+}
+
+.local-avatar {
+  background: linear-gradient(135deg, #2a3350, #3b4a7a);
+  color: #cfd8ff;
 }

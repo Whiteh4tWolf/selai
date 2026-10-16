@@ -213,7 +213,10 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost }: Pr
       });
   }
 
-  const address = `${host.username}@${host.hostname}${host.port !== 22 ? `:${host.port}` : ''}`;
+  const address =
+    host.kind === 'local'
+      ? 'Local shell'
+      : `${host.username}@${host.hostname}${host.port !== 22 ? `:${host.port}` : ''}`;
   const statusText: Record<SessionStatus, string> = {
     connecting: 'Connecting…',
     connected: 'Connected',

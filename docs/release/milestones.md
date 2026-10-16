@@ -238,6 +238,27 @@ Same setup. The database upgraded from schema v3 to v4 on open, with existing da
   task drawer shows the request, 962 / 80 / 1,042 tokens, 2 model turns and the
   command with its output.
 
+### Sudo and local terminal run (2026-10-16, Linux, debug build)
+
+Same setup; the fixture user may use sudo with its password. The database
+upgraded from schema v4 to v5 on open.
+
+- Pass: Hosts shows "This computer"; it opens a local login shell in a terminal
+  tab (`local-42`, colors, exit status).
+- Pass: `@Production Web who am I as root?` showed "Run this command as root"
+  with `sudo id -u && whoami`. The card offered "Use my SSH login password"
+  (selected) and "Type a password". After "Approve as root" the command ran
+  through the real sudo and the reply confirmed uid 0. The password was in none
+  of the model requests and not in the database files.
+- Pass: `@This computer check disk usage` ran `df -hP` on the local machine.
+- Automated: real sudo over sshd (right, wrong and missing password; a command
+  that reads stdin cannot capture the password), runtime fakes, and desktop e2e
+  for a password host, a key host (typed, then remembered), a wrong password,
+  and the local target (shell, approval, local sudo).
+
+Not covered: local terminal and local agent on Windows and macOS (PowerShell and
+the macOS shell are not run here); sudo on hosts that need a TTY (`requiretty`).
+
 ## M6 — Not planned
 
 Nothing beyond M5 is started. The master plan lists v1.1 and later work (SFTP, tunnels, multi-host AI, and so on).

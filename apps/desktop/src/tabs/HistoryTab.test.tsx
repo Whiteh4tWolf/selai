@@ -22,6 +22,7 @@ const host: ipc.HostView = {
   updatedAtMs: 1,
   lastConnectedAtMs: null,
   archived: false,
+  kind: 'ssh',
 };
 
 const archived: ipc.HostView = { ...host, id: 'h2', label: 'retired-db', archived: true };
