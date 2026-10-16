@@ -16,6 +16,7 @@ fn settings(model: &str, base: &str) -> ProviderSettings {
         model_id: ModelId::parse(model).expect("model"),
         timeout: TimeoutSecs::new(60).expect("timeout"),
         max_output_tokens: MaxOutputTokens::new(1024).expect("max"),
+        allow_insecure_http: false,
     }
 }
 

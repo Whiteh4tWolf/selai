@@ -33,6 +33,7 @@ async fn live_probe(protocol: ProviderProtocol, base: &str, key: Option<String>,
         model_id: ModelId::parse(&model).expect("model"),
         timeout: TimeoutSecs::new(120).expect("timeout"),
         max_output_tokens: MaxOutputTokens::new(512).expect("max"),
+        allow_insecure_http: false,
     };
     let client = LlmClient::new(ClientOptions {
         use_system_proxy: true,

@@ -15,6 +15,8 @@ pub struct ProviderRecord {
     pub model_id: String,
     pub timeout_seconds: u32,
     pub max_output_tokens: u32,
+    /// Operator opt-in for plain http to a non-loopback host.
+    pub allow_insecure_http: bool,
     pub key_configured: bool,
     pub enabled: bool,
     /// True only when the probe passed for the current `probe_identity`.
@@ -57,6 +59,7 @@ fn row_to_provider(row: &Row<'_>) -> rusqlite::Result<ProviderRecord> {
         model_id: row.get(4)?,
         timeout_seconds: options["timeoutSeconds"].as_u64().unwrap_or(120) as u32,
         max_output_tokens: options["maxOutputTokens"].as_u64().unwrap_or(4096) as u32,
+        allow_insecure_http: options["allowInsecureHttp"].as_bool().unwrap_or(false),
         key_configured: key_configured == 1,
         enabled: enabled == 1,
         tool_probe_passed: probe_passed == 1,
@@ -232,6 +235,7 @@ fn options_json(settings: &ProviderSettings) -> String {
     serde_json::json!({
         "timeoutSeconds": settings.timeout.seconds(),
         "maxOutputTokens": settings.max_output_tokens.tokens(),
+        "allowInsecureHttp": settings.allow_insecure_http,
     })
     .to_string()
 }

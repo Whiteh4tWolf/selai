@@ -177,6 +177,7 @@ pub fn provider_input(base: &str) -> ProviderInput {
         max_output_tokens: 256,
         api_key: Some(KEY.to_owned()),
         clear_api_key: None,
+        allow_insecure_http: None,
     }
 }
 

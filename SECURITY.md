@@ -26,8 +26,11 @@ are handled as design feedback.
 
 - Provider API keys are kept in the OS credential store and sent only in the
   `Authorization` or `x-api-key` header, to the base URL you configured. Redirects
-  are not followed. Remote endpoints require https. Plain http is accepted only for
-  loopback addresses.
+  are not followed. Remote endpoints require https. Plain http is accepted for
+  loopback addresses, and for another host only when the operator ticks "Allow plain
+  HTTP" on that provider (for example a LiteLLM proxy on a private network). With that
+  opt-in the API key and every prompt and tool result travel unencrypted on the
+  network.
 - Anything you send to a cloud model leaves this machine. That includes the
   agent's request, the text of its replies, and the output of each command it
   runs (bounded and redacted, but not guaranteed free of sensitive data). The SSH

@@ -277,6 +277,9 @@ pub struct ProviderInput {
     pub api_key: Option<String>,
     /// True removes the stored key.
     pub clear_api_key: Option<bool>,
+    /// Allows plain http to a host other than this machine (for example a LiteLLM
+    /// proxy on a private network). The key then travels unencrypted.
+    pub allow_insecure_http: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -301,6 +304,8 @@ pub struct ProviderView {
     /// Whether an API key is stored. The key itself is never returned.
     pub key_configured: bool,
     pub is_loopback: bool,
+    /// Plain http to a non-loopback host was explicitly allowed.
+    pub allow_insecure_http: bool,
     pub updated_at_ms: i64,
     pub tool_calling: ToolCallingView,
 }

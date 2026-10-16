@@ -40,13 +40,15 @@ fn parse_provider_id(raw: &str) -> Result<ProviderId, CommandError> {
 fn settings_from_input(input: &ProviderInput) -> Result<ProviderSettings, CommandError> {
     let protocol = ProviderProtocol::parse(&input.protocol)
         .ok_or_else(|| CommandError::new(ErrorCode::InvalidInput, "unknown provider protocol"))?;
+    let allow_insecure_http = input.allow_insecure_http.unwrap_or(false);
     Ok(ProviderSettings {
         name: ProviderName::parse(&input.name).map_err(invalid)?,
         protocol,
-        base_url: BaseUrl::parse(&input.base_url).map_err(invalid)?,
+        base_url: BaseUrl::parse_with(&input.base_url, allow_insecure_http).map_err(invalid)?,
         model_id: ModelId::parse(&input.model_id).map_err(invalid)?,
         timeout: TimeoutSecs::new(input.timeout_seconds).map_err(invalid)?,
         max_output_tokens: MaxOutputTokens::new(input.max_output_tokens).map_err(invalid)?,
+        allow_insecure_http,
     })
 }
 
@@ -55,10 +57,11 @@ pub(crate) fn settings_from_record(rec: &ProviderRecord) -> Result<ProviderSetti
     Ok(ProviderSettings {
         name: ProviderName::parse(&rec.name).map_err(invalid)?,
         protocol: rec.protocol,
-        base_url: BaseUrl::parse(&rec.base_url).map_err(invalid)?,
+        base_url: BaseUrl::parse_with(&rec.base_url, rec.allow_insecure_http).map_err(invalid)?,
         model_id: ModelId::parse(&rec.model_id).map_err(invalid)?,
         timeout: TimeoutSecs::new(rec.timeout_seconds).map_err(invalid)?,
         max_output_tokens: MaxOutputTokens::new(rec.max_output_tokens).map_err(invalid)?,
+        allow_insecure_http: rec.allow_insecure_http,
     })
 }
 
@@ -95,7 +98,9 @@ fn provider_view(rec: &ProviderRecord) -> ProviderView {
         timeout_seconds: rec.timeout_seconds,
         max_output_tokens: rec.max_output_tokens,
         key_configured: rec.key_configured,
-        is_loopback: BaseUrl::parse(&rec.base_url).is_ok_and(|b| b.is_loopback()),
+        is_loopback: BaseUrl::parse_with(&rec.base_url, rec.allow_insecure_http)
+            .is_ok_and(|b| b.is_loopback()),
+        allow_insecure_http: rec.allow_insecure_http,
         updated_at_ms: rec.updated_at_ms,
         tool_calling: tool_calling_view(rec),
     }

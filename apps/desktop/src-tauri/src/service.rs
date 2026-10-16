@@ -322,6 +322,27 @@ impl Services {
         })
     }
 
+    /// When a connection stops at an unknown or changed host key, keeps the key the
+    /// server presented as a fresh probe. The user can then review and trust it in
+    /// the connect flow, without a separate probe. Trusting still needs the exact
+    /// fingerprint that was shown, within the probe lifetime.
+    pub(crate) fn remember_observed_key(&self, id: HostId, err: &SshError) {
+        let observed = match err {
+            SshError::HostKeyUnknown(observed) => observed.clone(),
+            SshError::HostKeyChanged { observed, .. } => observed.clone(),
+            _ => return,
+        };
+        if let Ok(mut probes) = self.probes.lock() {
+            probes.insert(
+                id,
+                CachedProbe {
+                    observed,
+                    at: Instant::now(),
+                },
+            );
+        }
+    }
+
     /// Pins a key that the user confirmed from a fresh probe. The fingerprint
     /// must match the probe; the webview cannot supply a key of its own.
     pub fn host_trust(
@@ -409,7 +430,13 @@ impl Services {
                 s => Some(Duration::from_secs(u64::from(s))),
             },
         };
-        let session = connect(options).await.map_err(|e| ssh_error(&e))?;
+        let session = match connect(options).await {
+            Ok(session) => session,
+            Err(e) => {
+                self.remember_observed_key(id, &e);
+                return Err(ssh_error(&e));
+            }
+        };
         let shell = session
             .open_shell(cols, rows, &host.terminal_type)
             .await
@@ -739,7 +766,7 @@ fn poisoned() -> CommandError {
     CommandError::new(ErrorCode::Internal, "internal state is unavailable")
 }
 
-fn ssh_error(err: &SshError) -> CommandError {
+pub(crate) fn ssh_error(err: &SshError) -> CommandError {
     let mut out = CommandError::new(err.code(), err.to_string());
     match err {
         SshError::HostKeyUnknown(observed) => {

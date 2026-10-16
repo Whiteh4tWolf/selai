@@ -91,6 +91,7 @@ fn input(base: &str, model: &str, api_key: Option<&str>) -> ProviderInput {
         max_output_tokens: 256,
         api_key: api_key.map(str::to_owned),
         clear_api_key: None,
+        allow_insecure_http: None,
     }
 }
 
@@ -353,4 +354,33 @@ fn templates_offer_protocols_and_never_a_model_id() {
         ));
         assert!(!t.note.is_empty());
     }
+}
+
+#[tokio::test]
+async fn plain_http_to_another_host_needs_the_explicit_opt_in() {
+    let h = harness();
+    let base = "http://10.255.255.1:4000/v1";
+
+    let refused = h
+        .services
+        .provider_save(input(base, "litellm-model", Some(KEY)))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::InvalidInput);
+
+    let mut opted_in = input(base, "litellm-model", Some(KEY));
+    opted_in.allow_insecure_http = Some(true);
+    let view = h
+        .services
+        .provider_save(opted_in)
+        .expect("saved with opt-in");
+    assert!(view.allow_insecure_http);
+    assert!(!view.is_loopback);
+    assert_eq!(view.base_url, base);
+
+    // The opt-in survives a reload of the list.
+    let listed = h.services.provider_list(None).expect("list");
+    assert!(listed
+        .items
+        .iter()
+        .any(|p| p.id == view.id && p.allow_insecure_http));
 }

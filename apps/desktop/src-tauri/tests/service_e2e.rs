@@ -195,6 +195,58 @@ async fn first_contact_is_blocked_until_the_user_trusts_the_probed_key() {
 }
 
 #[tokio::test]
+async fn the_key_shown_by_a_refused_connect_can_be_trusted_without_a_separate_probe() {
+    let h = harness();
+    let sshd = Sshd::start();
+    let host = h
+        .services
+        .host_save(password_host(
+            "Production Web",
+            sshd.port,
+            &material().password,
+        ))
+        .expect("save");
+
+    let (sink, _rx) = new_sink();
+    let err = h
+        .services
+        .terminal_connect(&host.id, 80, 24, sink)
+        .await
+        .expect_err("unknown key must block");
+    assert_eq!(err.code, ErrorCode::SshHostkeyUnknown);
+    let details = err.details.expect("fingerprint is shown to the user");
+    assert!(sshd.auth_decisions().is_empty());
+
+    // Only the exact key the refused connect observed can be pinned.
+    let other = h
+        .services
+        .host_trust(&host.id, "SHA256:not-what-was-shown", TrustMode::First);
+    assert_eq!(other.expect_err("mismatch").code, ErrorCode::InvalidInput);
+
+    let trusted = h
+        .services
+        .host_trust(&host.id, &details.fingerprint_sha256, TrustMode::First)
+        .expect("trust the key from the connect error");
+    assert_eq!(trusted.outcome, "pinned");
+
+    let (sink, mut rx) = new_sink();
+    let session = h
+        .services
+        .terminal_connect(&host.id, 80, 24, sink)
+        .await
+        .expect("connect after approval");
+    h.services
+        .terminal_input(&session, "echo approved-$((6*7))\n".into())
+        .await
+        .expect("input");
+    expect_output(&mut rx, "approved-42").await;
+    h.services
+        .terminal_disconnect(&session)
+        .await
+        .expect("disconnect");
+}
+
+#[tokio::test]
 async fn saved_secret_is_never_in_any_response_or_the_database() {
     let h = harness();
     let sshd = Sshd::start();

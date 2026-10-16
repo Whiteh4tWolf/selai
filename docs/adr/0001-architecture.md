@@ -73,7 +73,7 @@ requires each conflict to be logged here with the resolution selected.
 
 | # | Documents | Conflict | Resolution |
 |---|---|---|---|
-| C1 | Engineering spec §3.1 vs backlog S-010 | Spec requires lower-case slug `[a-z][a-z0-9_-]{1,47}`; backlog requires `production-web` and `PRODUCTION-WEB` to conflict. | Input is case-folded to lower case on parse, so both forms are one label. Matches both documents. |
+| C1 | Engineering spec §3.1 vs backlog S-010 | Spec requires lower-case slug `[a-z][a-z0-9_-]{1,47}`; backlog requires `production-web` and `PRODUCTION-WEB` to conflict. | Input is case-folded to lower case on parse, so both forms are one label. Matches both documents.**Amended (UI revamp):** the operator asked for labels with spaces, such as `Production Web`. Labels now allow letters, digits, spaces, `-`, `_` and `.`, start with a letter or digit, and have whitespace trimmed and collapsed. The typed case is kept for display; equality, hashing and the `COLLATE NOCASE` index still treat case variants as one label, so the backlog's conflict rule holds. This departs from the spec's slug pattern by the operator's decision. |
 | C3 | Schema file vs spec §8 | Schema has no audit-output preview columns, but F-03 requires stdout/stderr previews in history. | Added bounded `stdout_preview` / `stderr_preview` (migration 0002). |
 | C4 | Schema file vs spec §3.1, §8 | Host `notes` and provider `enabled` are missing. | Added in migration 0002. |
 | C5 | Spec §8 vs AGENTS.md | `audit_events` has no ordering column for the hash chain; `created_at_ms, id` is ambiguous. | Added `seq` with a unique index. The writer must assign it. |

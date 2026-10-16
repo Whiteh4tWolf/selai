@@ -22,7 +22,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    dto::{CommandError, KeyErrorDetails},
+    dto::CommandError,
     provider_service::{settings_from_record, tool_calling_view},
     service::Services,
 };
@@ -360,15 +360,9 @@ impl Services {
         })
         .await
         .map_err(|e| {
-            let mut out = CommandError::new(e.code(), e.to_string());
-            if let SshError::HostKeyUnknown(k) = &e {
-                out.details = Some(KeyErrorDetails {
-                    algorithm: k.algorithm.clone(),
-                    fingerprint_sha256: k.fingerprint_sha256.clone(),
-                    pinned_fingerprint_sha256: None,
-                });
-            }
-            out
+            // Same review-and-trust path as the terminal: keep the presented key.
+            self.remember_observed_key(host, &e);
+            crate::service::ssh_error(&e)
         })?;
 
         let task = TaskId::new();

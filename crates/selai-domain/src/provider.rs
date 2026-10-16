@@ -104,11 +104,19 @@ impl ModelId {
 pub struct BaseUrl(String);
 
 impl BaseUrl {
+    /// Accepts https anywhere and plain http only on this machine.
     pub fn parse(input: &str) -> Result<Self, ProviderFieldError> {
+        Self::parse_with(input, false)
+    }
+
+    /// Like [`BaseUrl::parse`], but with `allow_insecure_http` plain http is also
+    /// accepted for other hosts, such as a LiteLLM proxy on a private network. The
+    /// operator opts in per provider; the API key then travels unencrypted.
+    pub fn parse_with(input: &str, allow_insecure_http: bool) -> Result<Self, ProviderFieldError> {
         let url = url::Url::parse(input.trim()).map_err(|_| ProviderFieldError::BaseUrlParse)?;
         match url.scheme() {
             "https" => {}
-            "http" if is_loopback(&url) => {}
+            "http" if allow_insecure_http || is_loopback(&url) => {}
             _ => return Err(ProviderFieldError::BaseUrlScheme),
         }
         if !url.username().is_empty()
@@ -124,6 +132,11 @@ impl BaseUrl {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Whether requests go over plain http (unencrypted).
+    pub fn is_plain_http(&self) -> bool {
+        self.0.starts_with("http://")
     }
 
     /// Whether the endpoint is on this machine. Only then may a request omit the key.
@@ -192,6 +205,8 @@ pub struct ProviderSettings {
     pub model_id: ModelId,
     pub timeout: TimeoutSecs,
     pub max_output_tokens: MaxOutputTokens,
+    /// Operator opt-in for plain http to a host other than this machine.
+    pub allow_insecure_http: bool,
 }
 
 impl ProviderSettings {
@@ -287,5 +302,28 @@ mod tests {
             assert_eq!(ProviderProtocol::parse(p.as_str()), Some(p));
         }
         assert_eq!(ProviderProtocol::parse("openai"), None);
+    }
+
+    #[test]
+    fn plain_http_to_other_hosts_needs_the_opt_in() {
+        assert_eq!(
+            BaseUrl::parse("http://10.0.0.5:4000/v1"),
+            Err(ProviderFieldError::BaseUrlScheme),
+            "no opt-in, no plain http to another host"
+        );
+        let litellm = BaseUrl::parse_with("http://10.0.0.5:4000/v1", true).expect("opt-in");
+        assert!(litellm.is_plain_http());
+        assert!(!litellm.is_loopback());
+        // The opt-in widens http only; other schemes and shapes stay refused.
+        assert_eq!(
+            BaseUrl::parse_with("ftp://example.com", true),
+            Err(ProviderFieldError::BaseUrlScheme)
+        );
+        assert_eq!(
+            BaseUrl::parse_with("http://user:pw@10.0.0.5:4000", true),
+            Err(ProviderFieldError::BaseUrlShape)
+        );
+        let tls = BaseUrl::parse_with("https://api.example.com/v1", true).expect("https");
+        assert!(!tls.is_plain_http());
     }
 }

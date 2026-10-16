@@ -354,3 +354,24 @@ fn explicit_rotation_keeps_the_old_key_as_history() {
         "old key retained"
     );
 }
+
+#[test]
+fn labels_with_spaces_keep_their_case_and_still_conflict_ignoring_case() {
+    let mut db = Database::open_in_memory().expect("db");
+    let id = HostId::new();
+    db.create_host(id, &settings("Production Web", AuthMethod::Password), T0)
+        .expect("create");
+    let stored = db.get_host(id).expect("get").expect("row");
+    assert_eq!(stored.label, "Production Web", "display case is kept");
+
+    // Same label with other case and extra spaces: HostLabel collapses the spaces,
+    // and the NOCASE index refuses it.
+    let err = db
+        .create_host(
+            HostId::new(),
+            &settings("  production   WEB ", AuthMethod::Password),
+            T0,
+        )
+        .unwrap_err();
+    assert!(matches!(err, StorageError::Conflict(_)), "{err:?}");
+}

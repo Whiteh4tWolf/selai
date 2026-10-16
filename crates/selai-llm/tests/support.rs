@@ -30,6 +30,7 @@ pub fn settings(protocol: ProviderProtocol, base: &str) -> ProviderSettings {
         model_id: ModelId::parse("mock-model").expect("model"),
         timeout: TimeoutSecs::new(10).expect("timeout"),
         max_output_tokens: MaxOutputTokens::new(256).expect("max"),
+        allow_insecure_http: false,
     }
 }
 
