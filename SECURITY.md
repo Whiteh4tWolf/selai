@@ -35,6 +35,14 @@ are handled as design feedback.
   agent's request, the text of its replies, and the output of each command it
   runs (bounded and redacted, but not guaranteed free of sensitive data). The SSH
   password, private key and provider key are never sent.
+- Plain chat (a message without an `@host` mention) sends the conversation in that
+  window to the provider: up to the last 40 messages, 200 kB at most. It offers the
+  model no tools and touches no host. It is not stored on disk.
+- For each host task, the request is stored as a preview of at most 500 characters,
+  after the same pattern-based redaction as command output, so History can show
+  what was asked. Token counts reported by the provider are stored with it.
+- "Check API key" sends the key typed in the form (or the saved one) once, to list
+  the endpoint's models. The typed key is not stored until you save.
 
 - Local logs and the local audit chain are tamper-evident only against
   accidental change. A local administrator can rewrite them.

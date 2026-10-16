@@ -27,12 +27,21 @@ provider has been verified.** Working on Linux:
 - Startup reconciliation: work that was live at the last shutdown is marked
   `interrupted` and is never re-run.
 
-The AI Agent is a chat console. Type `@` to mention a host (labels with spaces
-work), and each message runs as one task on that host. Diagnostics run without
-approval; free-form commands wait for an approval card, and the model cannot
-choose the host (M3). Every attempt is recorded in that host's history, and the
-audit chain can be verified. The History view (M4) shows filtered history, task
-timelines, a redacted JSON export, and output purge with a retention window.
+The AI Agent is a chat. Without a mention it is plain technical discussion with
+the model: multi-turn, Markdown with code blocks, no tools and nothing run on any
+server. Mention a host with `@` (labels with spaces work) and that message runs as
+one task on that host. Diagnostics run without approval; free-form commands wait
+for an approval card, and the model cannot choose the host (M3). Commands show as
+one line each in the chat; their output stays in History. Every attempt is
+recorded in that host's history, and the audit chain can be verified.
+
+History (M4) opens on tasks: the request, the commands it ran, and the input and
+output tokens the provider reported, with per-host totals. A Commands view keeps
+the filters, task timelines, the redacted JSON export, and output purge with a
+retention window.
+
+When adding a provider, "Check API key" tests the key and loads the endpoint's
+model list into a dropdown, with a fallback to type an ID by hand.
 
 The interface is dark by default, with light and system themes in the sidebar.
 

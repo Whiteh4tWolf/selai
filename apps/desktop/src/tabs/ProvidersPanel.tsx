@@ -3,6 +3,7 @@ import {
   describeError,
   providerDelete,
   providerList,
+  providerModels,
   providerSave,
   providerTemplates,
   providerTest,
@@ -14,7 +15,7 @@ import {
 } from '../ipc';
 import { Field } from '../ui/Field';
 import { Drawer } from '../ui/Overlay';
-import { AlertIcon, BoltIcon, CheckIcon, CloseIcon, EditIcon, PlugIcon, PlusIcon, TrashIcon } from '../ui/icons';
+import { AlertIcon, BoltIcon, CheckIcon, CloseIcon, EditIcon, KeyIcon, PlugIcon, PlusIcon, TrashIcon } from '../ui/icons';
 
 const PROTOCOLS: { value: ProviderProtocolName; label: string }[] = [
   { value: 'openai_chat', label: 'OpenAI-compatible Chat Completions' },
@@ -80,6 +81,14 @@ function isRemotePlainHttp(url: string): boolean {
 
 type Step = ProviderTestView | 'running' | 'skipped';
 
+type KeyCheck =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'ok'; models: string[]; latencyMs: number }
+  | { state: 'fail'; message: string };
+
+const OTHER_MODEL = '__other__';
+
 interface TestRun {
   connectivity?: Step;
   toolCalling?: Step;
@@ -92,6 +101,8 @@ export function ProvidersPanel() {
   const [templates, setTemplates] = useState<TemplateView[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
   const [apiKey, setApiKey] = useState('');
+  const [check, setCheck] = useState<KeyCheck>({ state: 'idle' });
+  const [manualModel, setManualModel] = useState(false);
   const [clearKey, setClearKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -120,6 +131,39 @@ export function ProvidersPanel() {
     setApiKey('');
     setClearKey(false);
     setFormError(null);
+    setCheck({ state: 'idle' });
+    setManualModel(false);
+  }
+
+  /** Any change to where or how we connect makes an earlier check stale. */
+  function changeEndpoint(next: FormState) {
+    setForm(next);
+    setCheck({ state: 'idle' });
+    setManualModel(false);
+  }
+
+  async function checkKey() {
+    if (!form) return;
+    setCheck({ state: 'checking' });
+    try {
+      const result = await providerModels({
+        id: form.id,
+        protocol: form.protocol,
+        baseUrl: form.baseUrl.trim(),
+        allowInsecureHttp: isRemotePlainHttp(form.baseUrl) && form.allowInsecureHttp,
+        apiKey: apiKey || undefined,
+      });
+      setCheck({ state: 'ok', models: result.models, latencyMs: result.latencyMs });
+      // Keep a model the profile already has; otherwise preselect the first one.
+      setForm((prev) =>
+        prev && !result.models.includes(prev.modelId) && result.models.length > 0 && !prev.modelId
+          ? { ...prev, modelId: result.models[0] ?? '' }
+          : prev,
+      );
+      setManualModel(result.models.length === 0 || (!!form.modelId && !result.models.includes(form.modelId)));
+    } catch (err) {
+      setCheck({ state: 'fail', message: describeError(err) });
+    }
   }
 
   function applyTemplate(id: string) {
@@ -335,7 +379,7 @@ export function ProvidersPanel() {
                 Protocol
                 <select
                   value={form.protocol}
-                  onChange={(e) => setForm({ ...form, protocol: e.target.value as ProviderProtocolName })}
+                  onChange={(e) => changeEndpoint({ ...form, protocol: e.target.value as ProviderProtocolName })}
                 >
                   {PROTOCOLS.map((p) => (
                     <option key={p.value} value={p.value}>
@@ -351,7 +395,7 @@ export function ProvidersPanel() {
                 <input
                   value={form.baseUrl}
                   placeholder="https://api.example.com/v1"
-                  onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+                  onChange={(e) => changeEndpoint({ ...form, baseUrl: e.target.value })}
                 />
               </Field>
               {remoteHttp && (
@@ -362,7 +406,7 @@ export function ProvidersPanel() {
                       <input
                         type="checkbox"
                         checked={form.allowInsecureHttp}
-                        onChange={(e) => setForm({ ...form, allowInsecureHttp: e.target.checked })}
+                        onChange={(e) => changeEndpoint({ ...form, allowInsecureHttp: e.target.checked })}
                       />
                       <span>Allow plain HTTP</span>
                     </label>
@@ -373,16 +417,16 @@ export function ProvidersPanel() {
                   </div>
                 </div>
               )}
-              <Field label="Model ID" hint="Copy it exactly from your provider.">
-                <input value={form.modelId} onChange={(e) => setForm({ ...form, modelId: e.target.value })} />
-              </Field>
               <Field label="API key" hint="Write-only. Leave blank for a local server without a key.">
                 <input
                   type="password"
                   autoComplete="off"
                   value={apiKey}
                   placeholder={keyPlaceholder}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    setCheck({ state: 'idle' });
+                  }}
                 />
               </Field>
               {form.keyConfigured && (
@@ -390,6 +434,72 @@ export function ProvidersPanel() {
                   <input type="checkbox" checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
                   <span>Remove the saved key</span>
                 </label>
+              )}
+              <div className="key-check">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => void checkKey()}
+                  disabled={check.state === 'checking' || !form.baseUrl.trim()}
+                >
+                  <KeyIcon size={13} /> {check.state === 'checking' ? 'Checking…' : 'Check API key'}
+                </button>
+                {check.state === 'ok' && (
+                  <span role="status" className="key-check-result" data-tone="success">
+                    <CheckIcon size={13} /> Key works · {check.models.length} model
+                    {check.models.length === 1 ? '' : 's'} available · {check.latencyMs} ms
+                  </span>
+                )}
+                {check.state === 'fail' && (
+                  <span role="alert" className="key-check-result" data-tone="danger">
+                    <AlertIcon size={13} /> {check.message}
+                  </span>
+                )}
+                {check.state === 'idle' && (
+                  <span className="hint">Checks the key and loads the model list.</span>
+                )}
+              </div>
+              {check.state === 'ok' && check.models.length > 0 && !manualModel ? (
+                <Field label="Model" hint="Models this key can use, from the provider.">
+                  <select
+                    value={check.models.includes(form.modelId) ? form.modelId : ''}
+                    onChange={(e) => {
+                      if (e.target.value === OTHER_MODEL) {
+                        setManualModel(true);
+                        return;
+                      }
+                      setForm({ ...form, modelId: e.target.value });
+                    }}
+                  >
+                    {!check.models.includes(form.modelId) && (
+                      <option value="" disabled>
+                        Choose a model
+                      </option>
+                    )}
+                    {check.models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                    <option value={OTHER_MODEL}>Other (type an ID)…</option>
+                  </select>
+                </Field>
+              ) : (
+                <Field
+                  label="Model ID"
+                  hint={
+                    check.state === 'ok' && check.models.length > 0
+                      ? 'Typed by hand. Use the list above unless your model is missing.'
+                      : 'Check the API key to pick from a list, or type the ID exactly.'
+                  }
+                >
+                  <input value={form.modelId} onChange={(e) => setForm({ ...form, modelId: e.target.value })} />
+                </Field>
+              )}
+              {manualModel && check.state === 'ok' && check.models.length > 0 && (
+                <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setManualModel(false)}>
+                  Pick from the list instead
+                </button>
               )}
             </div>
             <div className="form-section">

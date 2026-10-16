@@ -121,4 +121,51 @@ describe('ProvidersPanel', () => {
     expect(save.mock.calls[0]?.[0]).toMatchObject({ modelId: 'qwen-tools', apiKey: 'k-1' });
     await waitFor(() => expect(screen.queryByLabelText(/API key/)).not.toBeInTheDocument());
   });
+
+  it('checks the API key, then offers the available models as a dropdown', async () => {
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [], nextCursor: null });
+    mockTemplates();
+    const models = vi
+      .spyOn(ipc, 'providerModels')
+      .mockRejectedValueOnce({ code: 'PROVIDER_UNAUTHORIZED', message: 'the provider rejected the API key' })
+      .mockResolvedValueOnce({ models: ['gpt-4o', 'gpt-4o-mini'], latencyMs: 40 });
+    const save = vi.spyOn(ipc, 'providerSave').mockResolvedValue(provider);
+    render(<ProvidersPanel />);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Add provider' }))[0]!);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'openai' } });
+    fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://api.openai.com/v1' } });
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-wrong' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check API key' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('PROVIDER_UNAUTHORIZED');
+    expect(screen.getByLabelText('Model ID')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-right' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check API key' }));
+    expect(await screen.findByText(/Key works · 2 models available/)).toBeInTheDocument();
+    expect(models).toHaveBeenLastCalledWith(
+      expect.objectContaining({ baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-right', protocol: 'openai_chat' }),
+    );
+
+    const select = screen.getByLabelText('Model');
+    expect(select).toHaveValue('gpt-4o');
+    fireEvent.change(select, { target: { value: 'gpt-4o-mini' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ modelId: 'gpt-4o-mini', apiKey: 'sk-right' });
+  });
+
+  it('a model missing from the list can still be typed', async () => {
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [], nextCursor: null });
+    mockTemplates();
+    vi.spyOn(ipc, 'providerModels').mockResolvedValue({ models: ['a', 'b'], latencyMs: 1 });
+    render(<ProvidersPanel />);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Add provider' }))[0]!);
+    fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://127.0.0.1:4000/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check API key' }));
+    fireEvent.change(await screen.findByLabelText('Model'), { target: { value: '__other__' } });
+    fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'custom-finetune' } });
+    expect(screen.getByLabelText('Model ID')).toHaveValue('custom-finetune');
+  });
 });
+

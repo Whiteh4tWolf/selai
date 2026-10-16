@@ -102,11 +102,17 @@ describe('AgentPanel', () => {
     );
   });
 
-  it('deleting the mention text removes the target', async () => {
+  it('deleting the mention text removes the target, and the message becomes plain chat', async () => {
+    const chat = vi.spyOn(ipc, 'chatSend').mockResolvedValue('c1');
+    const start = vi.spyOn(ipc, 'agentStart');
     const textarea = await pickProductionWeb();
-    fireEvent.change(textarea, { target: { value: 'check disk usage' } });
+    fireEvent.change(textarea, { target: { value: 'what does df -h show?' } });
     expect(screen.queryByLabelText('Remove production-web')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() =>
+      expect(chat).toHaveBeenCalledWith('p1', [{ role: 'user', content: 'what does df -h show?' }], expect.any(Function)),
+    );
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('picks a host from the @ list with the keyboard', async () => {
@@ -127,18 +133,74 @@ describe('AgentPanel', () => {
     expect(textarea).toHaveValue('check @production-db ');
   });
 
-  it('does not allow sending without a host or with an unverified provider', async () => {
+  it('an unverified provider can chat but cannot work on a host', async () => {
     vi.spyOn(ipc, 'providerList').mockResolvedValue({
       items: [{ ...verified, toolCalling: { status: 'not_verified', lastCheckedAtMs: null } }],
       nextCursor: null,
     });
+    vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [host], nextCursor: null });
     const openProviders = vi.fn();
     render(<AgentPanel onOpenProviders={openProviders} />);
-    expect(await screen.findByText(/No verified provider selected/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Request'), { target: { value: 'check disk usage' } });
+    const textarea = screen.getByLabelText('Request');
+    fireEvent.change(textarea, { target: { value: 'how do I rotate nginx logs?' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+
+    fireEvent.change(textarea, { target: { value: '@prod' } });
+    fireEvent.click(await screen.findByRole('button', { name: /production-web/ }));
+    fireEvent.change(textarea, { target: { value: '@production-web check disk usage' } });
+    expect(await screen.findByText(/Working on a host needs a provider whose tool calling test passed/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Open Providers' }));
     expect(openProviders).toHaveBeenCalled();
+  });
+
+  it('plain chat keeps the conversation, renders Markdown and runs nothing', async () => {
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+    let emit: ((e: ipc.ChatEvent) => void) | undefined;
+    const chat = vi.spyOn(ipc, 'chatSend').mockImplementation(async (_p, _m, onEvent) => {
+      emit = onEvent;
+      return 'c1';
+    });
+    const start = vi.spyOn(ipc, 'agentStart');
+    render(<AgentPanel />);
+    const textarea = screen.getByLabelText('Request');
+    fireEvent.change(textarea, { target: { value: 'how do I list open ports?' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
+
+    act(() => emit?.({ type: 'textDelta', text: 'Use this:\n\n```bash\nss -tlnp\n```\n\nIt needs **root** for process names.' }));
+    act(() => emit?.({ type: 'usage', inputTokens: 1200, outputTokens: 34 }));
+    act(() => emit?.({ type: 'completed' }));
+
+    expect(await screen.findByText('ss -tlnp')).toBeInTheDocument();
+    expect(screen.getByText('root').tagName).toBe('STRONG');
+    expect(screen.getByText('bash')).toBeInTheDocument();
+    expect(screen.getByText('1.2k in · 34 out')).toBeInTheDocument();
+    expect(screen.queryByText(/```/)).not.toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: 'and on macOS?' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() => expect(chat).toHaveBeenCalledTimes(2));
+    expect(chat.mock.calls[1]?.[1]).toEqual([
+      { role: 'user', content: 'how do I list open ports?' },
+      { role: 'assistant', content: 'Use this:\n\n```bash\nss -tlnp\n```\n\nIt needs **root** for process names.' },
+      { role: 'user', content: 'and on macOS?' },
+    ]);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('a host task shows each command as one quiet line, not its output', async () => {
+    const agent = mockAgent();
+    const textarea = await pickProductionWeb();
+    await sendRequest(textarea, 'check disk usage');
+    await waitFor(() => expect(agent.start).toHaveBeenCalled());
+    agent.play({ taskId: 't1', type: 'toolProposed', executionId: 'e1', tool: 'ssh.run_diagnostic', command: 'df -hP', hostLabel: 'production-web' });
+    agent.play({ taskId: 't1', type: 'toolFinished', executionId: 'e1', state: 'completed', exitCode: 0, errorCode: null });
+    const line = await screen.findByLabelText('Command');
+    expect(line).toHaveTextContent('Randf -hPexit 0');
+    // The mention applied to that message only.
+    expect(screen.queryByLabelText('Remove production-web')).not.toBeInTheDocument();
   });
 
   it('shows the exact command and sends the operator decision for an approval', async () => {

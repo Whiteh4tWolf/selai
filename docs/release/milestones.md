@@ -218,6 +218,26 @@ fixed: the card now reads "Approved by you." with the result badge.
 
 Not covered: Windows and macOS rendering, and screen readers.
 
+### Chat, token usage and model discovery run (2026-10-16, Linux, debug build)
+
+Same setup. The database upgraded from schema v3 to v4 on open, with existing data.
+
+- Pass: History shows schema v4 data: tasks from before the upgrade read
+  "Request not recorded" with unknown (—) tokens, not zero.
+- Pass: provider edit: a wrong key gave `PROVIDER_UNAUTHORIZED`; the right key
+  gave "Key works · 4 models available" and a model dropdown. Saved.
+- Pass: plain chat without a mention: two turns, Markdown with code blocks, the
+  second request carried the first exchange (input tokens 136 then 196). No task,
+  no command.
+- Pass: the SSH fixture was restarted with a new host key. `@Production Web check
+  disk usage` showed "Server key has changed" with the old key struck through;
+  after the confirmation, the task started on its own and showed one line,
+  "Ran `df -hP` exit 0", then the answer.
+- Pass: an approval in the chat; after Approve the command ran.
+- Pass: History: 5 tasks, 2,035 input and 160 output tokens for the host; the
+  task drawer shows the request, 962 / 80 / 1,042 tokens, 2 model turns and the
+  command with its output.
+
 ## M6 — Not planned
 
 Nothing beyond M5 is started. The master plan lists v1.1 and later work (SFTP, tunnels, multi-host AI, and so on).

@@ -258,6 +258,26 @@ export function providerSave(input: ProviderInput): Promise<ProviderView> {
   return invoke<ProviderView>('provider_save', { input });
 }
 
+export interface ProviderModelsInput {
+  /** With no key typed, the key saved for this provider is used. */
+  id?: string;
+  protocol: ProviderProtocolName;
+  baseUrl: string;
+  allowInsecureHttp?: boolean;
+  /** Write-only. Used for this one request. */
+  apiKey?: string;
+}
+
+export interface ModelsView {
+  models: string[];
+  latencyMs: number;
+}
+
+/** Lists the endpoint's models. Also the API key check: a bad key fails here. */
+export function providerModels(input: ProviderModelsInput): Promise<ModelsView> {
+  return invoke<ModelsView>('provider_models', { input });
+}
+
 export function providerDelete(id: string): Promise<void> {
   return invoke<void>('provider_delete', { id });
 }
@@ -275,6 +295,7 @@ export type TaskEvent =
   | { type: 'toolProposed'; executionId: string; tool: string; command: string; hostLabel: string }
   | { type: 'approvalRequired'; approvalId: string; executionId: string; command: string; expiresAtMs: number }
   | { type: 'toolFinished'; executionId: string; state: string; exitCode: number | null; errorCode: string | null }
+  | { type: 'usage'; inputTokens: number | null; outputTokens: number | null }
   | { type: 'completed'; text: string }
   | { type: 'failed'; code: string; message: string };
 
@@ -317,6 +338,29 @@ export function agentStart(
   return invoke<string>('agent_start', { hostId, providerId, prompt, onEvent: channel });
 }
 
+/** Events of a plain discussion reply. No host and no tools are involved. */
+export type ChatEvent =
+  | { type: 'textDelta'; text: string }
+  | { type: 'usage'; inputTokens: number | null; outputTokens: number | null }
+  | { type: 'completed' }
+  | { type: 'failed'; code: string; message: string };
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** Streams one reply. The returned id can be cancelled with `agentCancel`. */
+export function chatSend(
+  providerId: string,
+  messages: ChatMessage[],
+  onEvent: (event: ChatEvent) => void,
+): Promise<string> {
+  const channel = new Channel<ChatEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>('chat_send', { providerId, messages, onEvent: channel });
+}
+
 export function agentCancel(taskId: string): Promise<boolean> {
   return invoke<boolean>('agent_cancel', { taskId });
 }
@@ -349,6 +393,26 @@ export interface TaskView {
   errorCode: string | null;
   createdAtMs: number;
   finishedAtMs: number | null;
+  /** The request, redacted before it was stored. Null for tasks from older versions. */
+  promptPreview: string | null;
+  /** Summed over the task's model turns. Null when the provider never reported it. */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  modelTurns: number;
+  executions: number;
+}
+
+export interface HostUsageView {
+  tasks: number;
+  executions: number;
+  failedExecutions: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  lastActivityMs: number | null;
+}
+
+export function historySummary(hostId: string): Promise<HostUsageView> {
+  return invoke<HostUsageView>('history_summary', { hostId });
 }
 
 export interface ExportResult {

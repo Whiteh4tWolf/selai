@@ -67,6 +67,11 @@ Chat Completions (also used by many compatible servers), and Anthropic Messages.
    - The UI runs both with one Test button: connectivity first, then tool
      calling. Tool calling is skipped, and shown as skipped, when connectivity
      fails.
+   - *Amended (model discovery):* "Check API key" calls `GET {base}/models`
+     (`{base}/v1/models` for Anthropic) with the typed or saved key. A 401/403
+     is reported as `PROVIDER_UNAUTHORIZED`; a 404 tells the operator to type the
+     model ID. One attempt, a 4 MB body cap, at most 1000 IDs. Listing models
+     does not verify tool calling; Test still does.
    - The stored result is tied to `protocol | base_url | model_id`. Changing any
      of these clears the result.
 

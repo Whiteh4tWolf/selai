@@ -4,6 +4,7 @@ import {
   agentStart,
   approvalDecide,
   auditVerify,
+  chatSend,
   describeError,
   hostKeyProblem,
   hostList,
@@ -14,8 +15,10 @@ import {
   type HostView,
   type ProviderView,
 } from '../ipc';
+import { formatCompact, formatCount } from '../ui/format';
 import { HostAvatar } from '../ui/HostAvatar';
 import { HostKeyDialog } from '../ui/HostKeyDialog';
+import { Markdown } from '../ui/Markdown';
 import {
   AlertIcon,
   AtIcon,
@@ -36,8 +39,9 @@ const MENTION = /(^|\s)@([^\n@]{0,64})$/;
 
 interface Turn {
   id: number;
-  hostId: string;
-  hostLabel: string;
+  /** Null for plain discussion: no host, no tools, nothing runs anywhere. */
+  hostId: string | null;
+  hostLabel: string | null;
   /** The "@Label" text inside the prompt, highlighted in the bubble. */
   mentionText: string | null;
   prompt: string;
@@ -46,13 +50,15 @@ interface Turn {
   running: boolean;
   notice: string | null;
   error: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
 }
 
 const SUGGESTIONS = [
-  { title: 'Check disk usage', detail: 'and find the largest directories' },
-  { title: 'Why is the load high?', detail: 'look at CPU, memory and top processes' },
-  { title: 'Is nginx healthy?', detail: 'service status and recent errors' },
-  { title: 'Summarise recent logins', detail: 'who connected in the last day' },
+  { title: 'Check disk usage', detail: 'mention a host, then send', text: 'check disk usage and the largest directories' },
+  { title: 'Is nginx healthy?', detail: 'mention a host, then send', text: 'is nginx healthy? check the service and recent errors' },
+  { title: 'Explain a config', detail: 'plain discussion, nothing runs', text: 'Explain what this nginx config does:\n' },
+  { title: 'Plan a change', detail: 'plain discussion, nothing runs', text: 'Help me plan a zero-downtime PostgreSQL major upgrade.' },
 ];
 
 let nextTurnId = 0;
@@ -93,10 +99,16 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
           setProviders(page.items);
           const isVerified = (id: string | null | undefined) =>
             page.items.some((p) => p.id === id && p.toolCalling.status === 'verified');
+          const exists = (id: string | null | undefined) => page.items.some((p) => p.id === id);
+          // Prefer a provider verified for tool calling (needed for host tasks);
+          // any provider can still be used for plain discussion.
           setProviderId((current) => {
             if (isVerified(current)) return current;
             if (isVerified(prefs?.lastProviderId)) return prefs?.lastProviderId ?? '';
-            return page.items.find((p) => p.toolCalling.status === 'verified')?.id ?? '';
+            const firstVerified = page.items.find((p) => p.toolCalling.status === 'verified')?.id;
+            if (firstVerified) return firstVerified;
+            if (exists(current)) return current;
+            return page.items[0]?.id ?? '';
           });
         })
         .catch((err: unknown) => active && setError(describeError(err)));
@@ -207,19 +219,22 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
 
   const provider = providers.find((p) => p.id === providerId);
   const verified = provider?.toolCalling.status === 'verified';
-  const canSend = !running && host !== null && verified && prompt.trim().length > 0;
+  // A mention runs a task on that host and needs tool calling; without one it is
+  // plain discussion, which any provider can answer.
+  const canSend = !running && provider !== undefined && (host === null || verified) && prompt.trim().length > 0;
 
   const updateTurn = (id: number, change: (t: Turn) => Turn) =>
     setTurns((prev) => prev.map((t) => (t.id === id ? change(t) : t)));
 
   async function startTurn(turn: Turn, target: HostView) {
-    updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [] }));
+    updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null, error: null, items: [], inputTokens: null, outputTokens: null }));
     try {
       const id = await agentStart(target.id, providerId, turn.prompt, (event) => {
         updateTurn(turn.id, (t) => ({
           ...t,
           items: applyEvent(t.items, event),
           running: t.running && !isTerminal(event),
+          ...(event.type === 'usage' ? { inputTokens: event.inputTokens, outputTokens: event.outputTokens } : {}),
         }));
       });
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
@@ -234,13 +249,45 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
     }
   }
 
+  /** Earlier messages as context for plain discussion. Turns with no reply are skipped. */
+  function conversation(): { role: 'user' | 'assistant'; content: string }[] {
+    const out: { role: 'user' | 'assistant'; content: string }[] = [];
+    for (const t of turns) {
+      const reply = t.items
+        .filter((i): i is Extract<TranscriptItem, { kind: 'text' }> => i.kind === 'text')
+        .map((i) => i.text)
+        .join('\n')
+        .trim();
+      if (!reply) continue;
+      out.push({ role: 'user', content: t.prompt }, { role: 'assistant', content: reply });
+    }
+    return out;
+  }
+
+  async function startChat(turn: Turn, history: { role: 'user' | 'assistant'; content: string }[]) {
+    try {
+      const id = await chatSend(providerId, [...history, { role: 'user', content: turn.prompt }], (event) => {
+        const asTask = event.type === 'completed' ? ({ type: 'completed', text: '' } as const) : event;
+        updateTurn(turn.id, (t) => ({
+          ...t,
+          items: applyEvent(t.items, asTask),
+          running: t.running && !isTerminal(asTask),
+          ...(event.type === 'usage' ? { inputTokens: event.inputTokens, outputTokens: event.outputTokens } : {}),
+        }));
+      });
+      updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
+    } catch (err) {
+      updateTurn(turn.id, (t) => ({ ...t, running: false, error: describeError(err) }));
+    }
+  }
+
   async function send() {
-    if (!host || !canSend) return;
+    if (!canSend) return;
     nextTurnId += 1;
     const turn: Turn = {
       id: nextTurnId,
-      hostId: host.id,
-      hostLabel: host.label,
+      hostId: host?.id ?? null,
+      hostLabel: host?.label ?? null,
       mentionText: draftMention,
       prompt: prompt.trim(),
       items: [],
@@ -248,13 +295,21 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
       running: true,
       notice: null,
       error: null,
+      inputTokens: null,
+      outputTokens: null,
     };
+    const history = conversation();
+    const target = host;
     setTurns((prev) => [...prev, turn]);
     setPrompt('');
+    // The target belongs to this message only; the next one is plain chat unless
+    // it mentions a host again.
     setDraftMention(null);
+    setHost(null);
     setMention(null);
     setError(null);
-    await startTurn(turn, host);
+    if (target) await startTurn(turn, target);
+    else await startChat(turn, history);
   }
 
   async function stop() {
@@ -311,9 +366,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             </option>
           )}
           {providers.map((p) => (
-            <option key={p.id} value={p.id} disabled={p.toolCalling.status !== 'verified'}>
+            <option key={p.id} value={p.id}>
               {p.name} · {p.modelId}
-              {p.toolCalling.status === 'verified' ? '' : ' (not verified)'}
+              {p.toolCalling.status === 'verified' ? '' : ' (chat only)'}
             </option>
           ))}
         </select>
@@ -344,10 +399,10 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             <span className="empty-icon">
               <SparkIcon size={26} />
             </span>
-            <h2>What should we check?</h2>
+            <h2>How can I help?</h2>
             <p>
-              Type <kbd>@</kbd> to mention a host, then ask in plain language. Read-only diagnostics run
-              on their own; any other command waits for your approval.
+              Ask anything to discuss it. Mention a host with <kbd>@</kbd> to work on that server:
+              read-only checks run on their own, any other command waits for your approval.
             </p>
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
@@ -356,9 +411,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                   type="button"
                   className="suggestion"
                   onClick={() => {
-                    const body = `${s.title} ${s.detail}`;
-                    const next = draftMention ? `${draftMention} ${body}` : body;
-                    setPrompt(next);
+                    setPrompt(draftMention ? `${draftMention} ${s.text}` : s.text);
                     textareaRef.current?.focus();
                   }}
                 >
@@ -382,14 +435,32 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
                   <div className="ai-body">
                     <div className="ai-meta">
                       <span>Selai</span>
-                      <span>·</span>
-                      <span>on {turn.hostLabel}</span>
-                      {turn.running && <span className="spinner" aria-label="Working" />}
+                      {turn.hostLabel && (
+                        <span className="host-tag" title="Commands in this reply ran on this host">
+                          <TerminalIcon size={11} /> {turn.hostLabel}
+                        </span>
+                      )}
+                      {(turn.inputTokens !== null || turn.outputTokens !== null) && (
+                        <span
+                          className="token-chip"
+                          title={`${formatCount(turn.inputTokens)} input · ${formatCount(turn.outputTokens)} output tokens`}
+                        >
+                          {formatCompact(turn.inputTokens)} in · {formatCompact(turn.outputTokens)} out
+                        </span>
+                      )}
                     </div>
                     {turn.items.map((item, i) => (
                       <TranscriptRow key={i} item={item} items={turn.items} onDecide={decide} />
                     ))}
-                    {turn.running && turn.items.length === 0 && <p className="status-line">Thinking…</p>}
+                    {turn.running &&
+                      !turn.items.some((i) => i.kind === 'text') &&
+                      !turn.items.some((i) => i.kind === 'approval' && i.state === 'pending') && (
+                      <span className="typing" aria-label="Working">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                    )}
                     {turn.notice && <p className="status-line">{turn.notice}</p>}
                     {turn.error && (
                       <p role="alert" className="banner" data-tone="danger">
@@ -411,13 +482,13 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             {error}
           </p>
         )}
-        {!verified && (
+        {(providers.length === 0 || (host !== null && !verified)) && (
           <div className="banner" data-tone="warning" style={{ maxWidth: 820, margin: '0 auto 0.6rem' }}>
             <AlertIcon />
             <span className="grow">
               {providers.length === 0
                 ? 'Add an AI provider first.'
-                : 'No verified provider selected. Run Test on the Providers page to check connection and tool calling.'}
+                : 'Working on a host needs a provider whose tool calling test passed. Run Test on the Providers page, or remove the mention to just chat.'}
             </span>
             {onOpenProviders && (
               <button type="button" className="btn btn-sm" onClick={onOpenProviders}>
@@ -468,7 +539,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
             onChange={(e) => onPromptChange(e.target.value)}
             onKeyDown={onPromptKeyDown}
             rows={Math.min(8, Math.max(2, prompt.split('\n').length))}
-            placeholder={host ? `Ask about ${host.label}…` : 'Type @ to choose a host, then describe what you need'}
+            placeholder={host ? `What should I do on ${host.label}?` : 'Message Selai… (type @ to work on a host)'}
           />
           <div className="composer-bar">
             {host ? (
@@ -504,7 +575,9 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
           </div>
         </div>
         <p className="composer-note">
-          Enter to send · Shift+Enter for a new line · Each message runs as its own task on the mentioned host.
+          {host
+            ? `This message runs as a task on ${host.label}. Other commands wait for your approval.`
+            : 'Plain chat: nothing runs on any server. Mention a host with @ to work on it.'}
         </p>
       </div>
 
@@ -558,7 +631,7 @@ function TranscriptRow({
 }) {
   switch (item.kind) {
     case 'text':
-      return <p className="reply">{item.text}</p>;
+      return <Markdown text={item.text} />;
     case 'status':
       return <p className="status-line">{item.text}</p>;
     case 'failed':
@@ -577,7 +650,7 @@ function TranscriptRow({
           i.kind === 'approval' && i.executionId === item.executionId,
       );
       if (approval) return <ApprovalCard item={approval} hostLabel={item.hostLabel} status={item} onDecide={onDecide} />;
-      return <ToolCard item={item} />;
+      return <Activity item={item} />;
     }
     case 'approval': {
       // Shown inside its command card when that card exists.
@@ -601,18 +674,24 @@ function StatusBadge({ item }: { item: ToolItem }) {
   );
 }
 
-function ToolCard({ item }: { item: ToolItem }) {
+/** One quiet line per command: what ran and how it ended. Output stays in History. */
+function Activity({ item }: { item: ToolItem }) {
+  const done = item.status === 'completed';
+  const bad = ['failed', 'denied', 'timed_out', 'cancelled', 'interrupted'].includes(item.status);
+  const pending = item.status === 'proposed';
   return (
-    <div className="tool-card" aria-label="Command">
-      <div className="tool-head">
-        <TerminalIcon size={13} />
-        <span>{item.hostLabel}</span>
-        <span className="grow" />
-        <StatusBadge item={item} />
-      </div>
-      <pre className="tool-cmd">
-        <code>{item.command}</code>
-      </pre>
+    <div className="activity" aria-label="Command" data-tone={done ? 'success' : bad ? 'danger' : undefined}>
+      <span className="mark">
+        {pending ? <span className="spinner" style={{ width: 12, height: 12 }} /> : done ? <CheckIcon size={11} /> : bad ? <CloseIcon size={11} /> : <TerminalIcon size={11} />}
+      </span>
+      <span className="when">{pending ? 'Running' : 'Ran'}</span>
+      <code title={item.command}>{item.command}</code>
+      {!pending && (
+        <span className="when">
+          {done ? '' : item.status.replace(/_/g, ' ')}
+          {item.exitCode !== null ? `${done ? '' : ' · '}exit ${item.exitCode}` : ''}
+        </span>
+      )}
     </div>
   );
 }

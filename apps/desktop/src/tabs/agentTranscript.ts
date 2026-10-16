@@ -75,6 +75,9 @@ export function applyEvent(items: TranscriptItem[], event: TaskEvent): Transcrip
           ? { ...item, status: event.state, exitCode: event.exitCode }
           : item,
       );
+    case 'usage':
+      // Token totals belong to the turn, not the transcript; the panel keeps them.
+      return items;
     case 'completed':
       return items;
     case 'failed':
