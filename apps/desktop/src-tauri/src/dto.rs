@@ -260,3 +260,73 @@ mod tests {
         assert!(json.get("password").is_none() && json.get("keyPassphrase").is_none());
     }
 }
+
+/// Provider create or update request. The API key is write-only.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInput {
+    pub id: Option<String>,
+    pub expected_updated_at_ms: Option<i64>,
+    pub name: String,
+    pub protocol: String,
+    pub base_url: String,
+    pub model_id: String,
+    pub timeout_seconds: u32,
+    pub max_output_tokens: u32,
+    /// Empty or absent keeps the stored key.
+    pub api_key: Option<String>,
+    /// True removes the stored key.
+    pub clear_api_key: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallingView {
+    /// `verified` only for the current endpoint and model. `failed` when the last
+    /// probe for them did not pass. Otherwise `not_verified`.
+    pub status: &'static str,
+    pub last_checked_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderView {
+    pub id: String,
+    pub name: String,
+    pub protocol: &'static str,
+    pub base_url: String,
+    pub model_id: String,
+    pub timeout_seconds: u32,
+    pub max_output_tokens: u32,
+    /// Whether an API key is stored. The key itself is never returned.
+    pub key_configured: bool,
+    pub is_loopback: bool,
+    pub updated_at_ms: i64,
+    pub tool_calling: ToolCallingView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateView {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub protocol: &'static str,
+    pub default_base_url: &'static str,
+    pub note: &'static str,
+}
+
+/// Outcome of one provider test. Provider failures are reported here with a
+/// code, not thrown, so the UI can explain them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderTestView {
+    /// `connectivity` or `tool_calling`.
+    pub kind: &'static str,
+    pub ok: bool,
+    /// For tool calling: true only when the full round trip passed.
+    pub verified: bool,
+    pub code: Option<ErrorCode>,
+    pub message: String,
+    pub latency_ms: u64,
+    pub reply_preview: Option<String>,
+}

@@ -44,6 +44,12 @@ impl Database {
         &mut self.conn
     }
 
+    /// Raw connection for tests that check schema constraints directly.
+    #[doc(hidden)]
+    pub fn connection_for_provider_test(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Number of retired host keys for a host (history of rotations).
     pub fn retired_key_count(&self, host: selai_domain::HostId) -> Result<i64, StorageError> {
         Ok(self.conn.query_row(

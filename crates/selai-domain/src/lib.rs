@@ -8,6 +8,7 @@ pub mod host;
 pub mod ids;
 pub mod label;
 pub mod page;
+pub mod provider;
 pub mod state;
 
 pub use error::{ErrorCode, SelaiError};
@@ -21,4 +22,8 @@ pub use ids::{
 };
 pub use label::{HostLabel, LabelError, Port, PortError};
 pub use page::{Page, PageRequest};
+pub use provider::{
+    BaseUrl, MaxOutputTokens, ModelId, ProviderFieldError, ProviderName, ProviderProtocol,
+    ProviderSettings, TimeoutSecs,
+};
 pub use state::{ApprovalState, ExecStatus, TaskState, TransitionError};

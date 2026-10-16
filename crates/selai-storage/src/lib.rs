@@ -5,6 +5,7 @@ mod db;
 mod error;
 mod hosts;
 mod migrate;
+mod providers;
 mod recovery;
 
 #[cfg(test)]
@@ -14,4 +15,5 @@ pub use db::Database;
 pub use error::StorageError;
 pub use hosts::{GroupRecord, HostRecord, PinOutcome, PinnedKey};
 pub use migrate::{Migration, MIGRATIONS};
+pub use providers::ProviderRecord;
 pub use recovery::ReconcileReport;

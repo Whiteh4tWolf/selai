@@ -35,7 +35,9 @@ describe('App shell', () => {
       interruptedTasksAtStartup: 0,
       interruptedExecutionsAtStartup: 0,
     });
-    vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [], nextCursor: null });
+    vi.spyOn(ipc, "hostList").mockResolvedValue({ items: [], nextCursor: null });
+    vi.spyOn(ipc, "providerList").mockResolvedValue({ items: [], nextCursor: null });
+    vi.spyOn(ipc, "providerTemplates").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -54,7 +56,7 @@ describe('App shell', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('tab', { name: 'AI' }));
     expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText(/AI agent is not available yet/)).toBeVisible();
+    expect(screen.getByText(/The agent is not available yet/)).toBeVisible();
   });
 
   it('reports a storage failure with its code instead of hiding it', async () => {

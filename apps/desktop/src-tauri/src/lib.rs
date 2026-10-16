@@ -3,6 +3,7 @@
 
 pub mod commands;
 pub mod dto;
+pub mod provider_service;
 pub mod service;
 
 use std::sync::Arc;
@@ -59,6 +60,11 @@ pub fn run() {
             commands::terminal_input,
             commands::terminal_resize,
             commands::terminal_disconnect,
+            commands::provider_templates,
+            commands::provider_list,
+            commands::provider_save,
+            commands::provider_delete,
+            commands::provider_test,
         ])
         .run(tauri::generate_context!());
 

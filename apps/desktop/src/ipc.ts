@@ -172,3 +172,76 @@ export function decodeBase64(data: string): Uint8Array {
   }
   return bytes;
 }
+
+export type ProviderProtocolName = 'openai_responses' | 'openai_chat' | 'anthropic_messages';
+
+export interface ToolCallingStatus {
+  status: 'verified' | 'failed' | 'not_verified';
+  lastCheckedAtMs: number | null;
+}
+
+export interface ProviderView {
+  id: string;
+  name: string;
+  protocol: ProviderProtocolName;
+  baseUrl: string;
+  modelId: string;
+  timeoutSeconds: number;
+  maxOutputTokens: number;
+  keyConfigured: boolean;
+  isLoopback: boolean;
+  updatedAtMs: number;
+  toolCalling: ToolCallingStatus;
+}
+
+export interface TemplateView {
+  id: string;
+  displayName: string;
+  protocol: ProviderProtocolName;
+  defaultBaseUrl: string;
+  note: string;
+}
+
+export interface ProviderInput {
+  id?: string;
+  expectedUpdatedAtMs?: number;
+  name: string;
+  protocol: ProviderProtocolName;
+  baseUrl: string;
+  modelId: string;
+  timeoutSeconds: number;
+  maxOutputTokens: number;
+  /** Write-only. Empty or absent keeps the stored key. */
+  apiKey?: string;
+  clearApiKey?: boolean;
+}
+
+export interface ProviderTestView {
+  kind: 'connectivity' | 'tool_calling';
+  ok: boolean;
+  verified: boolean;
+  code: string | null;
+  message: string;
+  latencyMs: number;
+  replyPreview: string | null;
+}
+
+export function providerTemplates(): Promise<TemplateView[]> {
+  return invoke<TemplateView[]>('provider_templates');
+}
+
+export function providerList(): Promise<Page<ProviderView>> {
+  return invoke<Page<ProviderView>>('provider_list', { cursor: null });
+}
+
+export function providerSave(input: ProviderInput): Promise<ProviderView> {
+  return invoke<ProviderView>('provider_save', { input });
+}
+
+export function providerDelete(id: string): Promise<void> {
+  return invoke<void>('provider_delete', { id });
+}
+
+export function providerTest(id: string, kind: 'connectivity' | 'tool_calling'): Promise<ProviderTestView> {
+  return invoke<ProviderTestView>('provider_test', { id, kind });
+}

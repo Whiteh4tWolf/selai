@@ -8,8 +8,9 @@ use tauri::{ipc::Channel, State};
 
 use crate::{
     dto::{
-        AppInfo, CommandError, GroupView, HostInput, HostView, ProbeView, StorageStatus,
-        TerminalEvent, TrustMode, TrustView,
+        AppInfo, CommandError, GroupView, HostInput, HostView, ProbeView, ProviderInput,
+        ProviderTestView, ProviderView, StorageStatus, TemplateView, TerminalEvent, TrustMode,
+        TrustView,
     },
     service::{EventSink, Services},
     AppState,
@@ -127,4 +128,39 @@ pub async fn terminal_disconnect(
     session_id: String,
 ) -> Result<(), CommandError> {
     services(&state)?.terminal_disconnect(&session_id).await
+}
+
+#[tauri::command]
+pub fn provider_templates() -> Vec<TemplateView> {
+    Services::provider_templates()
+}
+
+#[tauri::command]
+pub fn provider_list(
+    state: State<'_, AppState>,
+    cursor: Option<String>,
+) -> Result<Page<ProviderView>, CommandError> {
+    services(&state)?.provider_list(cursor)
+}
+
+#[tauri::command]
+pub fn provider_save(
+    state: State<'_, AppState>,
+    input: ProviderInput,
+) -> Result<ProviderView, CommandError> {
+    services(&state)?.provider_save(input)
+}
+
+#[tauri::command]
+pub fn provider_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+    services(&state)?.provider_delete(&id)
+}
+
+#[tauri::command]
+pub async fn provider_test(
+    state: State<'_, AppState>,
+    id: String,
+    kind: String,
+) -> Result<ProviderTestView, CommandError> {
+    services(&state)?.provider_test(&id, &kind).await
 }

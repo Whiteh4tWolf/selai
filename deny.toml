@@ -22,6 +22,9 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   "BSD-3-Clause",
   "CC0-1.0",
+  # Mozilla CA bundle data (webpki-root-certs), pulled by TLS verification in reqwest
+  # and Tauri. A permissive data license; needed to verify provider certificates.
+  "CDLA-Permissive-2.0",
   "ISC",
   "MIT",
   "MPL-2.0",

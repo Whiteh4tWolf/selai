@@ -58,8 +58,9 @@ struct TerminalHandle {
 }
 
 pub struct Services {
-    db: Arc<Mutex<Database>>,
-    secrets: Arc<dyn SecretStore>,
+    pub(crate) db: Arc<Mutex<Database>>,
+    pub(crate) secrets: Arc<dyn SecretStore>,
+    pub(crate) llm: Arc<selai_llm::LlmClient>,
     probes: Mutex<HashMap<HostId, CachedProbe>>,
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
     reconcile: ReconcileReport,
@@ -73,7 +74,7 @@ impl Services {
         let reconcile = db
             .reconcile_after_restart(now_ms())
             .map_err(storage_error)?;
-        Ok(Self::with_database(db, secrets, reconcile))
+        Self::with_database(db, secrets, reconcile)
     }
 
     pub fn in_memory(secrets: Arc<dyn SecretStore>) -> Result<Self, CommandError> {
@@ -81,21 +82,31 @@ impl Services {
         let reconcile = db
             .reconcile_after_restart(now_ms())
             .map_err(storage_error)?;
-        Ok(Self::with_database(db, secrets, reconcile))
+        Self::with_database(db, secrets, reconcile)
     }
 
     fn with_database(
         db: Database,
         secrets: Arc<dyn SecretStore>,
         reconcile: ReconcileReport,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, CommandError> {
+        let llm = selai_llm::LlmClient::new(selai_llm::ClientOptions::default())
+            .map_err(|e| CommandError::new(e.code, e.message))?;
+        Ok(Self {
             db: Arc::new(Mutex::new(db)),
             secrets,
+            llm: Arc::new(llm),
             probes: Mutex::new(HashMap::new()),
             terminals: Arc::new(Mutex::new(HashMap::new())),
             reconcile,
-        }
+        })
+    }
+
+    /// Replaces the provider HTTP client. Tests use this to turn off the system
+    /// proxy so requests reach a local mock server.
+    pub fn with_llm_client(mut self, client: selai_llm::LlmClient) -> Self {
+        self.llm = Arc::new(client);
+        self
     }
 
     pub fn app_info() -> AppInfo {
@@ -465,6 +476,10 @@ impl Services {
 
     fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, Database>, CommandError> {
         self.db.lock().map_err(|_| poisoned())
+    }
+
+    pub(crate) fn lock_db_pub(&self) -> Result<std::sync::MutexGuard<'_, Database>, CommandError> {
+        self.lock_db()
     }
 
     fn terminal(&self, session_id: &str) -> Result<TerminalHandle, CommandError> {

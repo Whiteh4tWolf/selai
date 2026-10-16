@@ -1,0 +1,24 @@
+[package]
+name = "selai-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "http2"] }
+selai-domain = { version = "0.1.0", path = "../selai-domain" }
+selai-secrets = { version = "0.1.0", path = "../selai-secrets" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+tokio-util = "0.7"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread"] }
+wiremock = "0.6"

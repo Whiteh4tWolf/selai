@@ -1,0 +1,286 @@
+//! Provider profiles and their tests (S-020, S-023). Same rules as hosts: the
+//! key goes to the OS store before the profile is committed, and nothing returns
+//! the key to the webview.
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use selai_domain::{
+    BaseUrl, ErrorCode, MaxOutputTokens, ModelId, Page, PageRequest, ProviderId, ProviderName,
+    ProviderProtocol, ProviderSettings, SelaiError, TimeoutSecs,
+};
+use selai_llm::{probe_tools, test_connectivity, TEMPLATES};
+use selai_secrets::{SecretKey, SecretValue};
+use selai_storage::ProviderRecord;
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    dto::{
+        CommandError, ProviderInput, ProviderTestView, ProviderView, TemplateView, ToolCallingView,
+    },
+    service::Services,
+};
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+fn invalid(err: impl SelaiError + std::fmt::Display) -> CommandError {
+    CommandError::new(err.code(), err.to_string())
+}
+
+fn parse_provider_id(raw: &str) -> Result<ProviderId, CommandError> {
+    raw.parse()
+        .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid provider id"))
+}
+
+fn settings_from_input(input: &ProviderInput) -> Result<ProviderSettings, CommandError> {
+    let protocol = ProviderProtocol::parse(&input.protocol)
+        .ok_or_else(|| CommandError::new(ErrorCode::InvalidInput, "unknown provider protocol"))?;
+    Ok(ProviderSettings {
+        name: ProviderName::parse(&input.name).map_err(invalid)?,
+        protocol,
+        base_url: BaseUrl::parse(&input.base_url).map_err(invalid)?,
+        model_id: ModelId::parse(&input.model_id).map_err(invalid)?,
+        timeout: TimeoutSecs::new(input.timeout_seconds).map_err(invalid)?,
+        max_output_tokens: MaxOutputTokens::new(input.max_output_tokens).map_err(invalid)?,
+    })
+}
+
+/// Rebuilds settings from a stored row, through the same validation as input.
+fn settings_from_record(rec: &ProviderRecord) -> Result<ProviderSettings, CommandError> {
+    Ok(ProviderSettings {
+        name: ProviderName::parse(&rec.name).map_err(invalid)?,
+        protocol: rec.protocol,
+        base_url: BaseUrl::parse(&rec.base_url).map_err(invalid)?,
+        model_id: ModelId::parse(&rec.model_id).map_err(invalid)?,
+        timeout: TimeoutSecs::new(rec.timeout_seconds).map_err(invalid)?,
+        max_output_tokens: MaxOutputTokens::new(rec.max_output_tokens).map_err(invalid)?,
+    })
+}
+
+fn tool_calling_view(rec: &ProviderRecord) -> ToolCallingView {
+    let current = format!(
+        "{}|{}|{}",
+        rec.protocol.as_str(),
+        rec.base_url,
+        rec.model_id
+    );
+    let same_identity = rec.tool_probe_identity.as_deref() == Some(current.as_str());
+    let status = match (
+        same_identity,
+        rec.tool_probe_passed,
+        rec.last_tool_probe_at_ms,
+    ) {
+        (true, true, _) => "verified",
+        (true, false, Some(_)) => "failed",
+        _ => "not_verified",
+    };
+    ToolCallingView {
+        status,
+        last_checked_at_ms: rec.last_tool_probe_at_ms,
+    }
+}
+
+fn provider_view(rec: &ProviderRecord) -> ProviderView {
+    ProviderView {
+        id: rec.id.to_string(),
+        name: rec.name.clone(),
+        protocol: rec.protocol.as_str(),
+        base_url: rec.base_url.clone(),
+        model_id: rec.model_id.clone(),
+        timeout_seconds: rec.timeout_seconds,
+        max_output_tokens: rec.max_output_tokens,
+        key_configured: rec.key_configured,
+        is_loopback: BaseUrl::parse(&rec.base_url).is_ok_and(|b| b.is_loopback()),
+        updated_at_ms: rec.updated_at_ms,
+        tool_calling: tool_calling_view(rec),
+    }
+}
+
+fn llm_failure(kind: &'static str, err: &selai_llm::LlmError) -> ProviderTestView {
+    ProviderTestView {
+        kind,
+        ok: false,
+        verified: false,
+        code: Some(err.code),
+        message: err.message.clone(),
+        latency_ms: 0,
+        reply_preview: None,
+    }
+}
+
+impl Services {
+    pub fn provider_templates() -> Vec<TemplateView> {
+        TEMPLATES
+            .iter()
+            .map(|t| TemplateView {
+                id: t.id,
+                display_name: t.display_name,
+                protocol: t.protocol.as_str(),
+                default_base_url: t.default_base_url,
+                note: t.note,
+            })
+            .collect()
+    }
+
+    pub fn provider_list(
+        &self,
+        cursor: Option<String>,
+    ) -> Result<Page<ProviderView>, CommandError> {
+        let db = self.lock_db_pub()?;
+        let page = db
+            .list_providers(&PageRequest { cursor, limit: 50 })
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+        Ok(Page {
+            items: page.items.iter().map(provider_view).collect(),
+            next_cursor: page.next_cursor,
+        })
+    }
+
+    /// Creates or updates a provider profile. A new key is written to the OS store
+    /// before the row is committed. A failed commit removes a key written for a
+    /// new profile.
+    pub fn provider_save(&self, input: ProviderInput) -> Result<ProviderView, CommandError> {
+        let settings = settings_from_input(&input)?;
+        let now = now_ms();
+        let previous = match input.id.as_deref() {
+            Some(raw) => {
+                let id = parse_provider_id(raw)?;
+                Some(
+                    self.lock_db_pub()?
+                        .get_provider(id)
+                        .map_err(|e| CommandError::new(e.code(), e.to_string()))?
+                        .ok_or_else(|| {
+                            CommandError::new(ErrorCode::NotFound, "provider not found")
+                        })?,
+                )
+            }
+            None => None,
+        };
+        let id = previous.as_ref().map_or_else(ProviderId::new, |p| p.id);
+        let key = SecretKey::provider_api_key(id);
+        let mut configured = previous.as_ref().is_some_and(|p| p.key_configured);
+        let mut wrote_key = false;
+
+        if input.clear_api_key == Some(true) {
+            self.secrets
+                .delete(&key)
+                .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+            configured = false;
+        } else if let Some(k) = input.api_key.as_deref().filter(|k| !k.is_empty()) {
+            self.secrets
+                .put(&key, &SecretValue::new(k))
+                .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+            configured = true;
+            wrote_key = true;
+        }
+
+        let saved = {
+            let mut db = self.lock_db_pub()?;
+            let result = match previous {
+                Some(ref p) => db.update_provider(
+                    id,
+                    &settings,
+                    input.expected_updated_at_ms.unwrap_or(p.updated_at_ms),
+                    now,
+                ),
+                None => db.create_provider(id, &settings, now),
+            };
+            match result {
+                Ok(rec) => rec,
+                Err(e) => {
+                    if previous.is_none() && wrote_key {
+                        let _ = self.secrets.delete(&key);
+                    }
+                    return Err(CommandError::new(e.code(), e.to_string()));
+                }
+            }
+        };
+        self.lock_db_pub()?
+            .set_provider_key_configured(id, configured, now)
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+        let rec = self
+            .lock_db_pub()?
+            .get_provider(saved.id)
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?
+            .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "provider not found"))?;
+        Ok(provider_view(&rec))
+    }
+
+    pub fn provider_delete(&self, id: &str) -> Result<(), CommandError> {
+        let id = parse_provider_id(id)?;
+        self.lock_db_pub()?
+            .delete_provider(id)
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+        self.secrets
+            .delete(&SecretKey::provider_api_key(id))
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+        Ok(())
+    }
+
+    /// Runs `connectivity` or `tool_calling`. Provider failures come back as a
+    /// result with `ok = false`. Only a broken local store is an error. A tool
+    /// probe that runs to completion is recorded for the current endpoint and model.
+    pub async fn provider_test(
+        &self,
+        id: &str,
+        kind: &str,
+    ) -> Result<ProviderTestView, CommandError> {
+        let id = parse_provider_id(id)?;
+        let rec = self
+            .lock_db_pub()?
+            .get_provider(id)
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?
+            .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "provider not found"))?;
+        let settings = settings_from_record(&rec)?;
+        let key = self
+            .secrets
+            .get(&SecretKey::provider_api_key(id))
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+        let cancel = CancellationToken::new();
+
+        match kind {
+            "connectivity" => Ok(
+                match test_connectivity(&self.llm, &settings, key.as_ref(), &cancel).await {
+                    Ok(t) => ProviderTestView {
+                        kind: "connectivity",
+                        ok: true,
+                        verified: false,
+                        code: None,
+                        message: "the provider replied".to_owned(),
+                        latency_ms: t.latency_ms,
+                        reply_preview: Some(t.reply_preview),
+                    },
+                    Err(e) => llm_failure("connectivity", &e),
+                },
+            ),
+            "tool_calling" => {
+                match probe_tools(&self.llm, &settings, key.as_ref(), &cancel).await {
+                    Ok(p) => {
+                        self.lock_db_pub()?
+                            .record_tool_probe(id, p.verified, &settings.probe_identity(), now_ms())
+                            .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+                        Ok(ProviderTestView {
+                            kind: "tool_calling",
+                            ok: p.verified,
+                            verified: p.verified,
+                            code: p.code,
+                            message: p.detail,
+                            latency_ms: p.latency_ms,
+                            reply_preview: None,
+                        })
+                    }
+                    Err(e) => Ok(llm_failure("tool_calling", &e)),
+                }
+            }
+            _ => Err(CommandError::new(
+                ErrorCode::InvalidInput,
+                "test kind must be connectivity or tool_calling",
+            )),
+        }
+    }
+}

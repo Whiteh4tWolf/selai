@@ -48,6 +48,41 @@ test fixture.
 - `cargo deny check advisories licenses bans sources`: pass. One ignored
   advisory, RUSTSEC-2023-0071, with the reason in `deny.toml`.
 
-## M2 to M5
+## M2 — Universal AI provider configuration
+
+| Task | Status | Evidence | Gaps |
+|---|---|---|---|
+| S-020 Provider CRUD, secure keys | done | `selai-storage/tests/providers.rs` (6), `selai-desktop/tests/provider_e2e.rs` (10): key stored in the OS store, never in the database, responses, or request bodies; locked store fails closed; delete removes the key. In-app: provider created through the UI, key field write-only | Edit and delete were checked in tests; not every edit path was clicked in the app. |
+| S-021 OpenAI Responses and Chat adapters | done against mock servers | `selai-llm/tests/adapters.rs`: text streams, fragmented tool arguments, malformed JSON never executes, cut streams fail, redirects not followed, 429 retried only before output, 401 and tool rejections classified, cancellation | Not verified against the live OpenAI API (no key supplied). |
+| S-022 Anthropic Messages adapter | done against mock servers | `adapters.rs`: `tool_use` with partial JSON, parallel calls, `tool_result` ordering (merged into one user message), error events | Not verified against the live Anthropic API. |
+| S-023 Compatible templates and probes | partial | `probe.rs` (6): verified only after a full round trip; text-only and refusing models reported as not verified. Templates in `selai-llm/src/templates.rs`, with notes | GLM and Kimi base URLs come from third-party docs, not the vendor's. No live smoke test for any compatible server. Model IDs are never hardcoded. |
+
+### M2 milestone gate
+
+The gate is: a model produces a genuine tool call and receives the tool result
+through the selected provider, with no SSH involved.
+
+Checked in the app: a provider pointed at a local OpenAI-compatible mock
+(`/tmp/mock_provider.py`, a local script, not part of the repo) was created
+through the UI. "Test tool calling" showed *tool calling verified for this
+model*. The round trip was real: a tool call, the tool result sent back, and a
+final answer.
+
+**Not verified against any live provider.** The `live` tests in
+`crates/selai-llm/tests/live.rs` are ignored until someone supplies keys (see
+CONTRIBUTING.md). Until they pass, every provider is reported as not verified
+against a live endpoint.
+
+### Test evidence (last run)
+
+- `cargo test --workspace` through the keyring harness: domain 29, secrets 5,
+  selai-llm 9 unit + 21 adapter + 6 probe, storage 22 + 15 + 6, SSH 13, desktop
+  unit 2, service e2e 10, provider e2e 10. All passed. Ignored: 3 live provider
+  tests.
+- Frontend: 14 tests, typecheck, lint, build pass.
+- `cargo deny check advisories licenses bans sources`: pass. Added
+  CDLA-Permissive-2.0 for the Mozilla CA bundle (reason in `deny.toml`).
+
+## M3 to M5
 
 Not started. See `SELAI_EXECUTION_BACKLOG.md`.

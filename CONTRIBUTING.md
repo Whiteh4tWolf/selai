@@ -61,3 +61,19 @@ keep it alive while you test:
 ```sh
 sleep 900 | sudo -E target/debug/examples/serve   # build first: cargo build -p selai-testkit --example serve
 ```
+
+## Live provider tests (not run in CI)
+
+`crates/selai-llm/tests/live.rs` calls real provider APIs with keys you supply.
+They are ignored by default. A passing run is the only evidence that a provider
+works; nothing else counts as verification.
+
+```sh
+SELAI_LIVE_OPENAI_KEY=... SELAI_LIVE_OPENAI_MODEL=... \
+SELAI_LIVE_ANTHROPIC_KEY=... SELAI_LIVE_ANTHROPIC_MODEL=... \
+SELAI_LIVE_COMPAT_BASE_URL=http://127.0.0.1:8000/v1 SELAI_LIVE_COMPAT_MODEL=... \
+  cargo test -p selai-llm --test live -- --ignored --nocapture
+```
+
+Record the provider, model and date in `docs/release/milestones.md`. Do not
+mark a provider as supported from a run you did not perform.

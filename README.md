@@ -5,8 +5,9 @@ saves SSH hosts, mentions one with `@host`, and the agent runs diagnostics or
 approved commands on that host. The model never receives SSH credentials, and
 every AI command attempt is recorded per host.
 
-**Status: milestone M1 (working SSH client), partially complete.** Working on
-Linux:
+**Status: M1 (working SSH client) done on Linux; M2 (AI providers) built and
+tested against mock servers, not yet verified against a live provider.** Working
+on Linux:
 
 - Host profiles: create, edit, archive, filter. Labels are unique and
   case-insensitive. Secrets are kept in the OS credential store, never in the
@@ -16,10 +17,14 @@ Linux:
   changed keys are refused before any credential is sent.
 - Terminal: interactive PTY sessions over SSH, with resize, several tabs, and
   exit status. Sessions are bound to one host.
+- AI providers: OpenAI Responses, OpenAI Chat Completions (and compatible
+  servers), and Anthropic Messages. A provider is shown as verified only after a
+  real tool-call round trip.
 - Startup reconciliation: work that was live at the last shutdown is marked
   `interrupted` and is never re-run.
 
-Not yet built: AI providers (M2), the `@host` agent and command approval (M3),
+Provider profiles can be configured and tested for tool calling (M2). Not yet
+built: the `@host` agent and command approval (M3),
 the per-host AI history UI (M4), and installers (M5). The AI tab is a
 placeholder.
 
