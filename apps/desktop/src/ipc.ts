@@ -293,7 +293,15 @@ export type TaskEvent =
   | { type: 'state'; state: string; errorCode: string | null }
   | { type: 'textDelta'; text: string }
   | { type: 'toolProposed'; executionId: string; tool: string; command: string; hostLabel: string }
-  | { type: 'approvalRequired'; approvalId: string; executionId: string; command: string; expiresAtMs: number }
+  | {
+      type: 'approvalRequired';
+      approvalId: string;
+      executionId: string;
+      command: string;
+      expiresAtMs: number;
+      /** Set for a root command: whether the host's sudo asks for a password. */
+      sudo?: SudoNeed | null;
+    }
   | { type: 'toolFinished'; executionId: string; state: string; exitCode: number | null; errorCode: string | null }
   | { type: 'usage'; inputTokens: number | null; outputTokens: number | null }
   | { type: 'completed'; text: string }
@@ -365,8 +373,31 @@ export function agentCancel(taskId: string): Promise<boolean> {
   return invoke<boolean>('agent_cancel', { taskId });
 }
 
-export function approvalDecide(approvalId: string, approve: boolean): Promise<void> {
-  return invoke<void>('approval_decide', { approvalId, approve });
+export type SudoNeed = 'no_password' | 'password_required';
+
+/** How the operator answers sudo's password question. The password is write-only. */
+export type SudoAnswer =
+  | { source: 'typed'; password: string; remember: boolean }
+  | { source: 'saved' }
+  | { source: 'login' };
+
+export interface SudoOptions {
+  hostLabel: string;
+  savedPassword: boolean;
+  /** The host signs in with a saved SSH password that can be reused for sudo. */
+  loginPassword: boolean;
+}
+
+export function approvalDecide(approvalId: string, approve: boolean, sudo?: SudoAnswer): Promise<void> {
+  return invoke<void>('approval_decide', { approvalId, approve, sudo: sudo ?? null });
+}
+
+export function sudoOptions(approvalId: string): Promise<SudoOptions> {
+  return invoke<SudoOptions>('sudo_options', { approvalId });
+}
+
+export function hostForgetSudoPassword(id: string): Promise<void> {
+  return invoke<void>('host_forget_sudo_password', { id });
 }
 
 export function historyList(hostId: string, cursor?: string): Promise<Page<ExecutionView>> {

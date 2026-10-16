@@ -218,7 +218,7 @@ describe('AgentPanel', () => {
     expect(card).toHaveTextContent('Run this command on production-web?');
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, undefined));
     expect(await screen.findByText('Approved. Waiting for the result.')).toBeInTheDocument();
   });
 
@@ -294,4 +294,53 @@ describe('AgentPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Verify audit log' }));
     expect(await screen.findByText('Audit log intact: 4 event(s) checked.')).toBeInTheDocument();
   });
+
+  describe('root commands', () => {
+    async function rootApproval(sudo: ipc.SudoNeed) {
+      const agent = mockAgent();
+      const textarea = await pickProductionWeb();
+      await sendRequest(textarea, 'restart nginx');
+      await waitFor(() => expect(agent.start).toHaveBeenCalled());
+      agent.play({ taskId: 't1', type: 'toolProposed', executionId: 'e1', tool: 'ssh.run_command', command: 'sudo systemctl restart nginx', hostLabel: 'production-web' });
+      agent.play({ taskId: 't1', type: 'approvalRequired', approvalId: 'a1', executionId: 'e1', command: 'sudo systemctl restart nginx', expiresAtMs: Date.now() + 300_000, sudo });
+      return screen.findByRole('group', { name: 'Approval required' });
+    }
+
+    it('reuses the SSH login password when the host has one', async () => {
+      vi.spyOn(ipc, 'sudoOptions').mockResolvedValue({ hostLabel: 'production-web', savedPassword: false, loginPassword: true });
+      const decide = vi.spyOn(ipc, 'approvalDecide').mockResolvedValue(undefined);
+      const card = await rootApproval('password_required');
+      expect(card).toHaveTextContent('Run this command as root on production-web?');
+      expect(await screen.findByLabelText('Use my SSH login password')).toBeChecked();
+      fireEvent.click(screen.getByRole('button', { name: 'Approve as root' }));
+      await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, { source: 'login' }));
+    });
+
+    it('needs a typed password before approving, and can remember it', async () => {
+      vi.spyOn(ipc, 'sudoOptions').mockResolvedValue({ hostLabel: 'key-box', savedPassword: false, loginPassword: false });
+      const decide = vi.spyOn(ipc, 'approvalDecide').mockResolvedValue(undefined);
+      await rootApproval('password_required');
+      const approve = screen.getByRole('button', { name: 'Approve as root' });
+      expect(approve).toBeDisabled();
+      fireEvent.change(await screen.findByLabelText('Sudo password'), { target: { value: 's3cret' } });
+      fireEvent.click(screen.getByLabelText(/Remember for this host/));
+      expect(approve).toBeEnabled();
+      fireEvent.click(approve);
+      await waitFor(() =>
+        expect(decide).toHaveBeenCalledWith('a1', true, { source: 'typed', password: 's3cret', remember: true }),
+      );
+      expect(screen.queryByDisplayValue('s3cret')).not.toBeInTheDocument();
+    });
+
+    it('a host without a sudo password approves without asking for one', async () => {
+      const options = vi.spyOn(ipc, 'sudoOptions');
+      const decide = vi.spyOn(ipc, 'approvalDecide').mockResolvedValue(undefined);
+      await rootApproval('no_password');
+      expect(screen.getByText(/does not ask for a password/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Approve as root' }));
+      await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, undefined));
+      expect(options).not.toHaveBeenCalled();
+    });
+  });
 });
+

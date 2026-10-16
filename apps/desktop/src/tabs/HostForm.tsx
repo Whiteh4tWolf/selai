@@ -1,5 +1,12 @@
 import { useState, type FormEvent } from 'react';
-import { describeError, hostSave, type AuthMethod, type HostInput, type HostView } from '../ipc';
+import {
+  describeError,
+  hostForgetSudoPassword,
+  hostSave,
+  type AuthMethod,
+  type HostInput,
+  type HostView,
+} from '../ipc';
 import { Field } from '../ui/Field';
 import { Drawer } from '../ui/Overlay';
 import { ChevronIcon } from '../ui/icons';
@@ -60,6 +67,17 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sudoNote, setSudoNote] = useState<string | null>(null);
+
+  async function forgetSudo() {
+    if (!host) return;
+    try {
+      await hostForgetSudoPassword(host.id);
+      setSudoNote('No sudo password is saved for this host now.');
+    } catch (err) {
+      setSudoNote(describeError(err));
+    }
+  }
 
   const set = (key: keyof FormState) => (value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -242,6 +260,24 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
                 Notes
                 <textarea rows={3} value={form.notes} onChange={(e) => set('notes')(e.target.value)} />
               </label>
+              {host && (
+                <div className="field">
+                  <span>Sudo password</span>
+                  <span className="hint">
+                    Saved only when you tick "Remember for this host" while approving a root command.
+                  </span>
+                  <div>
+                    <button type="button" className="btn btn-sm" onClick={() => void forgetSudo()}>
+                      Forget saved sudo password
+                    </button>
+                  </div>
+                  {sudoNote && (
+                    <span role="status" className="hint">
+                      {sudoNote}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </details>
         </div>

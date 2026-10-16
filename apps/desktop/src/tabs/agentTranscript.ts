@@ -1,6 +1,6 @@
 // Turns the task's event stream into the transcript the operator reads. Pure:
 // the Rust core decides what happens; this only arranges what is shown.
-import type { TaskEvent } from '../ipc';
+import type { SudoNeed, TaskEvent } from '../ipc';
 
 export type ApprovalState = 'pending' | 'sending' | 'approved' | 'denied';
 
@@ -16,6 +16,8 @@ export type TranscriptItem =
       expiresAtMs: number;
       state: ApprovalState;
       error: string | null;
+      /** Set for a root command. */
+      sudo: SudoNeed | null;
     }
   | { kind: 'failed'; code: string; message: string };
 
@@ -67,6 +69,7 @@ export function applyEvent(items: TranscriptItem[], event: TaskEvent): Transcrip
           expiresAtMs: event.expiresAtMs,
           state: 'pending',
           error: null,
+          sudo: event.sudo ?? null,
         },
       ];
     case 'toolFinished':

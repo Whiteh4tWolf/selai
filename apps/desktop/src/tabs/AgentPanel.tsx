@@ -7,11 +7,14 @@ import {
   chatSend,
   describeError,
   hostKeyProblem,
+  sudoOptions,
   hostList,
   preferencesGet,
   preferencesSet,
   providerList,
   type HostKeyProblem,
+  type SudoAnswer,
+  type SudoOptions,
   type HostView,
   type ProviderView,
 } from '../ipc';
@@ -321,12 +324,12 @@ export function AgentPanel({ onOpenProviders, onOpenHosts }: Props = {}) {
     }
   }
 
-  async function decide(approvalId: string, approve: boolean) {
+  async function decide(approvalId: string, approve: boolean, sudo?: SudoAnswer) {
     const update = (state: 'sending' | 'approved' | 'denied' | 'pending', why: string | null = null) =>
       setTurns((prev) => prev.map((t) => ({ ...t, items: setApprovalState(t.items, approvalId, state, why) })));
     update('sending');
     try {
-      await approvalDecide(approvalId, approve);
+      await approvalDecide(approvalId, approve, sudo);
       update(approve ? 'approved' : 'denied');
     } catch (err) {
       // The database refused it (expired or already decided). Show why.
@@ -627,7 +630,7 @@ function TranscriptRow({
 }: {
   item: TranscriptItem;
   items: TranscriptItem[];
-  onDecide: (approvalId: string, approve: boolean) => void;
+  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer) => void;
 }) {
   switch (item.kind) {
     case 'text':
@@ -705,10 +708,14 @@ function ApprovalCard({
   item: ApprovalItem;
   hostLabel: string | null;
   status: ToolItem | null;
-  onDecide: (approvalId: string, approve: boolean) => void;
+  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer) => void;
 }) {
+  const [sudo, setSudo] = useState<SudoAnswer | null>(null);
   const expired = Date.now() > item.expiresAtMs;
   const open = item.state === 'pending' && !expired;
+  const asRoot = item.sudo !== null;
+  const needsPassword = item.sudo === 'password_required';
+  const ready = !needsPassword || sudo !== null;
   return (
     <div
       className={open || item.state === 'sending' ? 'tool-card approval' : 'tool-card'}
@@ -717,13 +724,24 @@ function ApprovalCard({
     >
       <div className="tool-head">
         <ShieldIcon size={13} />
-        <span>Run this command on {hostLabel ?? 'the host'}?</span>
+        <span>
+          Run this command{asRoot ? ' as root' : ''} on {hostLabel ?? 'the host'}?
+        </span>
+        {asRoot && (
+          <span className="badge" data-tone="warning">
+            root
+          </span>
+        )}
         <span className="grow" />
         {status && item.state === 'approved' && <StatusBadge item={status} />}
       </div>
       <pre className="tool-cmd">
         <code>{item.command}</code>
       </pre>
+      {needsPassword && open && <SudoPassword approvalId={item.approvalId} onChange={setSudo} />}
+      {asRoot && !needsPassword && open && (
+        <p className="sudo-note">This host's sudo does not ask for a password.</p>
+      )}
       <div className="approval-foot">
         <span className="grow">
           {item.state === 'sending' && 'Sending your decision…'}
@@ -738,8 +756,13 @@ function ApprovalCard({
             <button type="button" className="btn btn-sm" disabled={!open} onClick={() => onDecide(item.approvalId, false)}>
               Deny
             </button>
-            <button type="button" className="btn btn-primary btn-sm" disabled={!open} onClick={() => onDecide(item.approvalId, true)}>
-              Approve
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!open || !ready}
+              onClick={() => onDecide(item.approvalId, true, needsPassword && sudo ? sudo : undefined)}
+            >
+              {asRoot ? 'Approve as root' : 'Approve'}
             </button>
           </>
         )}
@@ -750,5 +773,77 @@ function ApprovalCard({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Asks how to answer sudo's password question. The typed password stays in this
+ * component until the approval is sent; the model never sees it, and saved
+ * passwords never come back to the webview.
+ */
+function SudoPassword({ approvalId, onChange }: { approvalId: string; onChange: (answer: SudoAnswer | null) => void }) {
+  const [options, setOptions] = useState<SudoOptions | null>(null);
+  const [source, setSource] = useState<'typed' | 'saved' | 'login'>('typed');
+  const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    sudoOptions(approvalId)
+      .then((o) => {
+        if (!active) return;
+        setOptions(o);
+        setSource(o.savedPassword ? 'saved' : o.loginPassword ? 'login' : 'typed');
+      })
+      .catch(() => active && setOptions({ hostLabel: '', savedPassword: false, loginPassword: false }));
+    return () => {
+      active = false;
+    };
+  }, [approvalId]);
+
+  useEffect(() => {
+    if (source === 'typed') onChange(password ? { source, password, remember } : null);
+    else onChange({ source });
+  }, [source, password, remember]);
+
+  return (
+    <fieldset className="sudo-box">
+      <legend>sudo asks for a password on this host</legend>
+      {options?.savedPassword && (
+        <label className="check">
+          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'saved'} onChange={() => setSource('saved')} />
+          <span>Use the saved sudo password</span>
+        </label>
+      )}
+      {options?.loginPassword && (
+        <label className="check">
+          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'login'} onChange={() => setSource('login')} />
+          <span>Use my SSH login password</span>
+        </label>
+      )}
+      {(options?.savedPassword || options?.loginPassword) && (
+        <label className="check">
+          <input type="radio" name={`sudo-${approvalId}`} checked={source === 'typed'} onChange={() => setSource('typed')} />
+          <span>Type a password</span>
+        </label>
+      )}
+      {source === 'typed' && (
+        <>
+          <input
+            type="password"
+            autoComplete="off"
+            aria-label="Sudo password"
+            placeholder="Sudo password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <label className="check">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            <span>Remember for this host (saved in the OS keychain)</span>
+          </label>
+        </>
+      )}
+      <p className="hint">Sent only to sudo on the host. The AI never sees it.</p>
+    </fieldset>
   );
 }
