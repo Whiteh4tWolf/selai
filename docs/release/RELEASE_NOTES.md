@@ -2,16 +2,18 @@ Selai is a desktop SSH client with a scoped AI agent: save hosts, open terminals
 chat with a model, and mention a host with `@` to let the agent check it. The
 model never receives SSH credentials, and every command it runs is recorded.
 
-**This is a preview release.** It is tested end to end on Linux. The Windows
-and macOS installers are built by CI but have not been run by the maintainers.
-The installers are not code-signed, so your OS will warn before the first start.
+**This is a preview release.** Automated tests cover Linux SSH/agent flows with
+fixtures and mock providers. Windows packaging also checks encryption and the
+vault in the release build profile. This is not complete interactive coverage
+of every platform and live AI provider. The installers are not code-signed.
 
 **New in 0.1.1:** a passphrase vault with a recovery key, saved chat sessions,
-tasks across several hosts, SSH profile import (CSV, JSON, KeePass `.kdbx`),
-Markdown and Mermaid in chat, and a refreshed desktop layout. 0.1.1 also fixes
-a Windows crash when creating the vault passphrase (stack overflow). That fix
-is covered by the Windows CI tests, but nobody has yet confirmed it on a real
-Windows desktop. If setup still closes the app, please open an issue.
+tasks across several hosts, SSH profile import (CSV, JSON, KeePass `.kdbx`,
+and OpenSSH config), a reusable SSH key manager, optional root approval for
+one request on one host, Markdown and Mermaid in chat, and a refreshed desktop
+layout. Windows fixes cover the vault-setup stack overflow, installer artwork
+overlapping default text, and startup background/theme handling to reduce
+white WebView flashes around the passphrase screen.
 
 ## Download
 
@@ -42,15 +44,27 @@ On Windows: `Get-FileHash -Algorithm SHA256 .\<file>` and compare with `SHA256SU
 - Terminal tabs with status, reconnect, and an "Edit host" step after a failed login.
 - A local terminal on this computer ("This computer"), which the AI can use under
   the same approvals as a host.
-- AI Agent chat: plain technical discussion. The chat works on the server of the
-  terminal in focus, and you can pin one; `@host` sends a single message elsewhere.
-  Read-only checks run on their own; other commands wait for your approval.
+- AI Agent chat: plain technical discussion or independent tasks on multiple
+  selected hosts. Follow the focused terminal, pin a host, or mention one or
+  more hosts with `@`. Fixed diagnostics run on their own; other commands need
+  approval, subject to the optional root grant described below.
 - Commands that need root: the approval card asks for the sudo password when sudo
   asks for one (typed, saved, or the SSH login password). The model never sees it.
+- The first root approval can enable **Allow further root commands in this
+  request on this host**. The in-memory grant ends with the task, cancellation,
+  or vault lock; it does not cover another host or request. Commands remain
+  recorded in History and the audit log.
+- SSH key management: generate Ed25519 or ECDSA P-256/P-384/P-521 key pairs,
+  import private keys with an optional passphrase, view fingerprints, copy
+  public keys, and select a reusable named key in each host profile. Private
+  key material stays in the encrypted vault. RSA and DSA are not offered.
 - A passphrase vault: your data is encrypted at rest, with a recovery key,
   auto-lock, an encrypted backup, and encrypted `.selai-history` exports.
 - Saved chat sessions, and tasks that span several hosts, each with its own approvals.
-- Import SSH profiles from CSV, JSON or a KeePass `.kdbx` file; credentials stay local.
+- Import SSH profiles from CSV, JSON, KeePass `.kdbx`, or OpenSSH config. Upload
+  a config file or read `~/.ssh/config`, review a preview, then save selected
+  profiles. Include/Match blocks and proxy connections are not imported.
+  Credentials stay local.
 - Chat replies render Markdown tables, code blocks and Mermaid diagrams.
 - History with each request, the commands it ran, and input/output token usage.
 - Providers: OpenAI, Anthropic and OpenAI-compatible servers (vLLM, Ollama,

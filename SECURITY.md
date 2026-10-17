@@ -56,8 +56,10 @@ recovery key makes the data unrecoverable.
 SSH access, credential storage and the scoped agent (M1 to M3) are built and
 tested on Linux. macOS and Windows are not yet verified for SSH. The agent can
 run commands on a host only through the rules in ADR-0005: the host is fixed by
-the task, diagnostics are fixed commands, and every free-form command needs an
-approval that is checked again in the database before it runs. Reports about
+the task and diagnostics are fixed commands. By default, free-form commands
+need an approval checked again in the database before execution. The first
+root approval can optionally grant further root commands for that task and host;
+this in-memory grant is described below. Reports about
 behaviour that is documented as planned (for example encrypted audit blobs, S-040)
 are handled as design feedback.
 
@@ -89,6 +91,12 @@ are handled as design feedback.
   SSH password), goes only to sudo's prompt on that host, and is redacted from the
   output. It is never in a model request or plaintext log. "Remember for this
   host" saves it inside the encrypted vault; archiving the host deletes it.
+- **Allow further root commands in this request on this host** approves later
+  root commands only within that running task on its fixed host. The initial
+  command still needs its exact approval. The grant and any sudo password held
+  for it stay in memory and are cleared when the task ends or the vault locks.
+  Non-root free-form commands, other requests, and other hosts need separate
+  approval. Grant creation and use are audited; each command remains in History.
 - "This computer" runs agent commands as your own user on your own machine, with
   the same approvals. An approved command can read anything your account can read,
   and its output goes to the model like output from a server.

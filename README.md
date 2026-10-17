@@ -3,9 +3,9 @@
 <h1 align="center">Selai</h1>
 
 <p align="center"><strong>A desktop SSH workbench with a host-scoped AI assistant.</strong><br>
-Terminals, an AI chat, and command history in one app. You choose where the assistant may work, and every change waits for your approval.</p>
+Terminals, an AI chat, and command history in one app. You choose where the assistant may work and approve its commands, with optional root approval for one request on one host.</p>
 
-<p align="center"><sub>Preview 0.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
+<p align="center"><sub>Preview 0.1.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
 
 <p align="center">
   <a href="#screenshots">Screenshots</a> ·
@@ -21,23 +21,25 @@ Terminals, an AI chat, and command history in one app. You choose where the assi
 
 Selai brings SSH hosts, terminal tabs, an AI chat, and command history into one
 desktop app. You choose the machine the assistant may work on. Routine
-diagnostics use fixed commands; other commands need your approval before they
-run. SSH credentials stay in your passphrase-protected local vault and are
+diagnostics use fixed commands; other commands need approval before they run.
+For a multi-step root task, you can approve further root commands for that
+request on that host. SSH credentials stay in your passphrase-protected local vault and are
 never included in requests to an AI provider.
 
 - **You choose the machine.** A task is bound to the servers you select, or to
   This computer. The model cannot move it to another host.
-- **Nothing changes without you.** Fixed diagnostics run on their own. Any other
-  command shows its exact text and target, and waits for your approval.
+- **You control execution.** Fixed diagnostics run on their own. Other commands
+  show their exact text and target for approval. You can allow further root
+  commands within one request on one host.
 - **Credentials stay local.** Passwords, private keys, and sudo passwords never
   reach the AI provider. They live in an encrypted vault that one passphrase unlocks.
 - **Everything is recorded.** Each request, command, outcome, and token count is
   saved to History, with an audit record written before remote execution.
 
-> **Version 0.1 is a preview.** The core SSH and agent flows have been tested
-> end to end on Linux with an OpenSSH fixture and a local mock AI provider.
-> Windows and macOS SSH use, installer runs, and live provider integrations have
-> not been verified by the maintainers. See [current milestone evidence](docs/release/milestones.md)
+> **Version 0.1.1 is a preview.** Automated coverage includes Linux SSH and agent
+> flows with an OpenSSH fixture and mock AI providers, plus Windows encryption
+> and vault checks in the release build profile. Full interactive SSH and live
+> provider coverage across all platforms is not established. See [current milestone evidence](docs/release/milestones.md)
 > and [known security limits](SECURITY.md) before using Selai with sensitive
 > systems.
 
@@ -88,22 +90,24 @@ never included in requests to an AI provider.
 
 | Area | What you can do |
 | --- | --- |
-| **SSH hosts** | Add, edit, filter, and archive profiles; use password or local private key authentication; save a host and connect in one flow. Labels can contain spaces. |
+| **SSH hosts** | Add, edit, filter, and archive profiles; use a password or choose a managed SSH key; save a host and connect in one flow. Labels can contain spaces. |
+| **SSH keys** | Generate named Ed25519 or ECDSA P-256/P-384/P-521 key pairs, import private keys with an optional passphrase, copy public keys, and reuse a key across profiles. Private keys stay in the encrypted vault. |
 | **Host verification** | Inspect and explicitly trust a fingerprint on first connection. A changed host key blocks connection until you confirm its replacement. |
 | **Terminal** | Open interactive SSH terminals in tabs, resize them, adjust the terminal font with Ctrl+Plus or Ctrl+Minus, see connection and exit status, reconnect, and edit a host after a failed login. Open a terminal for **This computer** too. |
 | **AI chat** | Discuss a question without a server, or bind a task to one or more SSH hosts or This computer. Mention hosts with `@` for one message to run independent tasks in parallel, follow the focused terminal, or pin a server in the chat. Each host has its own output and change approvals. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
-| **Command control** | Fixed diagnostic commands may run without a prompt. Every free-form command needs approval for the exact command and host. Denied, expired, and interrupted work is not replayed automatically. |
+| **Command control** | Fixed diagnostics may run without a prompt. Other commands need approval; a root approval can optionally cover further root commands in the same request on the same host. Denied, expired, and interrupted work is not replayed automatically. |
 | **Providers** | Configure OpenAI Responses, OpenAI Chat Completions and compatible endpoints, or Anthropic Messages. Check an API key, choose or enter a model ID, and test a real tool-call round trip. |
 | **History** | Search saved AI sessions by title, then open a session to review its requests and command executions across servers, including status, exit codes and stored output. Browse by host for older tasks, provider token counts, timeline filters, encrypted history exports and output retention. |
-| **Profile import** | Review and map CSV or plaintext JSON SSH profiles, select valid rows, and import them without replacing existing hosts. Use a shared CSV template for exports from other tools. |
+| **Profile import** | Preview CSV, JSON, password-protected KDBX, or OpenSSH config profiles before import. Upload a config file or read `~/.ssh/config` directly. Use the shared CSV template for exports from other tools. Existing hosts are not replaced. |
 | **Workbench** | Use the host explorer, terminal and History/Providers tabs, and the assistant side by side. Toggle the right-hand Assistant panel from the header and drag its divider to give it more room. The window controls are integrated into the workbench header. Choose dark, light, or system theme. |
 | **Encrypted vault** | Protect credentials, managed private keys, host metadata, chat, and history with one passphrase. Use automatic locking, a separate recovery key, encrypted backup/restore, and encrypted history exports. |
 
 ### SSH hosts and terminals
 
 Create a profile with a label, address, port, username, and authentication
-method. Passwords and key passphrases are saved inside the encrypted vault;
-for key authentication, select a local file whose contents Selai imports into the vault. The original file remains outside Selai and needs its own protection. Selai asks you to
+method. Passwords and key passphrases are saved inside the encrypted vault.
+For **Private key** authentication, choose a saved key from the **SSH key**
+selector or open **Manage SSH keys** to generate or import one. Selai asks you to
 trust an unknown server key *before* sending credentials. It refuses a changed
 key until you inspect and explicitly replace the saved fingerprint.
 
@@ -115,6 +119,25 @@ host editor from the error flow.
 With a terminal focused, press **Ctrl+Plus** or **Ctrl+Minus** to change its font
 size. The setting applies to all terminal tabs and is remembered when Selai
 restarts.
+
+### SSH key management
+
+In a host profile, select **Private key → Manage SSH keys**. Give a key a name,
+then generate **Ed25519** or **ECDSA P-256, P-384, or P-521**. Alternatively,
+choose an existing OpenSSH or PEM private key file and enter its passphrase if
+it is encrypted. Private key imports are limited to **1 MB**.
+
+The manager shows the algorithm, SHA-256 fingerprint, and public key. Use
+**Copy public key** to obtain the public half for the server's `authorized_keys`,
+then select the named key in any host profile that should use it. Generating
+or importing a key does not install its public key on a server.
+
+Generated private keys stay in the backend and encrypted vault; the manager
+does not export them to the UI. Imported key files remain at their original
+location and need separate protection. A key cannot be deleted while an active
+host profile references it. Existing per-host vault keys remain usable.
+RSA and DSA are not offered by the key manager; Selai's SSH client refuses RSA
+private-key authentication in this release.
 
 ### Assistant and approvals
 
@@ -154,6 +177,15 @@ access is handled through `sudo`; the sudo password goes to that machine's
 prompt, never to the model. The same approval rules apply to **This computer**,
 where an approved command runs with your local user account's access.
 
+For multi-step root work, the first root approval offers **Allow further root
+commands in this request on this host**. Tick it before approving to let later
+root commands in that task continue without another prompt. The grant is held
+in memory and ends when the task finishes or is cancelled, or the vault locks.
+It does not cover another request or host; non-root free-form commands still
+need their own approval. Covered root commands have a five-minute command limit
+within the task's ten-minute total limit. The commands and use of the grant
+remain recorded in History and the audit log.
+
 Command output is available in **History**, along with the task, outcome, and
 token usage. Selai stores bounded, pattern-redacted output previews and an
 audit record before remote execution. Redaction can miss sensitive content, so
@@ -177,7 +209,16 @@ OpenAI, Anthropic, or compatible service has been verified for this preview.
 
 Open **Hosts -> Import SSH profiles**. Select a `.csv`, plaintext `.json`, or password-protected `.kdbx` file, review the detected column mapping and preview, select rows, and import. The drawer provides a downloadable CSV template. It recognizes common host columns, Bitwarden login entries with `ssh://` or `sftp://` URIs, compatible host-list JSON such as Termius API Bridge-shaped host objects, and Passbolt exports. KDBX vaults are decrypted locally after entering the passphrase; only entries with `ssh://` or `sftp://` URLs are included. Selai skips non-SSH entries and existing labels or matching host/port/username combinations, and reports failures per row.
 
-The preview hides passwords. Imported passwords and key passphrases use the same encrypted vault as a manually added host. Notes are excluded by default to avoid retaining unnecessary information. Importing inline private key contents and connecting directly to another manager are not supported; supply a path to a local key file and Selai imports its contents into the vault. CSV/JSON imports are limited to **2 MB**, KDBX files to **10 MB**, and both to **500 profiles**. Import does not connect to a server or trust its host key. The source export remains wherever you saved it; handle a plaintext export as a file containing secrets. See the [format and vendor examples](docs/import-ssh-profiles.md).
+OpenSSH config has two entry points: upload a file named `config`, `ssh_config`,
+`ssh-config`, or ending in `.sshconfig`, or click **Import ~/.ssh/config** to
+read the current user's default file. Both show a preview before saving.
+Concrete `Host` aliases and `HostName`, `User`, `Port`, `IdentityFile`,
+`ConnectTimeout`, and `ServerAliveInterval` are supported. `Include` files and
+`Match` blocks are not imported; wildcard patterns do not create profiles.
+Profiles requiring `ProxyJump` or `ProxyCommand` are skipped. Referenced key
+files must be available on the computer running Selai.
+
+The preview hides passwords. Imported passwords and key passphrases use the same encrypted vault as a manually added host. Notes are excluded by default. Profile rows do not accept inline private keys; supply a local key file path, or use **Manage SSH keys** to import a reusable key separately. The importer does not connect to another manager's account. CSV/JSON/config files are limited to **2 MB**, KDBX files to **10 MB**, and imports to **500 profiles**. Import does not connect to a server or trust its host key. The source export remains wherever you saved it; handle plaintext exports as files containing secrets. See the [format and vendor examples](docs/import-ssh-profiles.md).
 
 ### Vault setup, locking, and recovery
 
@@ -230,9 +271,9 @@ Keep the old folder until you have verified the restored hosts and history.
 
 ### Install a preview build
 
-If a build is available, download it from [GitHub Releases](https://github.com/f3ci/selai/releases)
-or the **Release packaging** workflow artifacts. The workflow is configured to
-produce these packages:
+Download [Selai 0.1.1 from GitHub Releases](https://github.com/f3ci/selai/releases/tag/v0.1.1).
+Builds are also available from the **Release packaging** workflow artifacts.
+Packages are provided for:
 
 | Platform | Package |
 | --- | --- |
@@ -249,13 +290,14 @@ commands, signing status, and workflow instructions.
 
 ### First session
 
-1. Open **Hosts**, add an SSH profile, and choose **Save & connect**.
-2. Check the server fingerprint against a trusted source, then choose **Trust & connect**.
-3. Use the terminal. Open more hosts in separate tabs if needed.
-4. For AI features, open **Providers**, save a provider, choose a model, and run **Test**.
-5. Open the assistant with **Ctrl+Shift+L**. Select a server or type `@` to
+1. Create a vault passphrase and save the recovery key; unlock an existing vault with its passphrase.
+2. Open **Hosts**, add or import an SSH profile, and choose **Save & connect**. For key authentication, generate/import a key and select it in the profile.
+3. Check the server fingerprint against a trusted source, then choose **Trust & connect**.
+4. Use the terminal. Open more hosts in separate tabs if needed.
+5. For AI features, open **Providers**, save a provider, choose a model, and run **Test**.
+6. Open the assistant with **Ctrl+Shift+L**. Select a server or type `@` to
    choose a host for one message. Review any command approval before accepting.
-6. Open **History** to inspect the task and command records.
+7. Open **History** to inspect the task and command records.
 
 **Ctrl+Shift+E** toggles the host explorer. The status bar lets you switch
 between dark, light, and system theme.
@@ -320,6 +362,7 @@ are installed.
 - [Security model and disclosure policy](SECURITY.md)
 - [Milestone status and test evidence](docs/release/milestones.md)
 - [Installer packaging and verification](docs/release/packaging.md)
+- [Release notes](docs/release/RELEASE_NOTES.md)
 - [Vault validation](docs/release/vault-validation.md)
 - [Architecture decisions](docs/adr/)
 - [Contributing and local checks](CONTRIBUTING.md)
