@@ -2,7 +2,30 @@
 
 <h1 align="center">Selai</h1>
 
-<p align="center">A desktop SSH workbench with a host-scoped AI assistant.</p>
+<p align="center"><strong>A desktop SSH workbench with a host-scoped AI assistant.</strong><br>
+Terminals, an AI chat, and command history in one app. You choose where the assistant may work, and every change waits for your approval.</p>
+
+<p align="center">
+  <img alt="Status: preview 0.1.0" src="https://img.shields.io/badge/status-preview%200.1.0-orange">
+  <img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue">
+  <img alt="Platforms: Windows, Linux, macOS" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-lightgrey">
+  <img alt="Built with Tauri 2, Rust and React" src="https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20Rust%20%C2%B7%20React-informational">
+</p>
+
+<p align="center">
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="#build-from-source">Build</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/workspace-light.png">
+    <img src="docs/screenshots/workspace-dark.png" alt="Selai workbench: the host explorer on the left, a terminal in the middle, and the AI assistant answering a disk usage question on the right" width="920">
+  </picture>
+</p>
 
 Selai brings SSH hosts, terminal tabs, an AI chat, and command history into one
 desktop app. You choose the machine the assistant may work on. Routine
@@ -10,12 +33,64 @@ diagnostics use fixed commands; other commands need your approval before they
 run. SSH credentials stay in your passphrase-protected local vault and are
 never included in requests to an AI provider.
 
+- **You choose the machine.** A task is bound to the servers you select, or to
+  This computer. The model cannot move it to another host.
+- **Nothing changes without you.** Fixed diagnostics run on their own. Any other
+  command shows its exact text and target, and waits for your approval.
+- **Credentials stay local.** Passwords, private keys, and sudo passwords never
+  reach the AI provider. They live in an encrypted vault that one passphrase unlocks.
+- **Everything is recorded.** Each request, command, outcome, and token count is
+  saved to History, with an audit record written before remote execution.
+
 > **Version 0.1.0 is a preview.** The core SSH and agent flows have been tested
 > end to end on Linux with an OpenSSH fixture and a local mock AI provider.
 > Windows and macOS SSH use, installer runs, and live provider integrations have
 > not been verified by the maintainers. See [current milestone evidence](docs/release/milestones.md)
 > and [known security limits](SECURITY.md) before using Selai with sensitive
 > systems.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/approval.png" alt="An approval card asking to run sudo id -u as root on This computer, with Deny and Approve as root buttons">
+      <br><strong>Approve before it runs</strong><br>
+      A command that is not a fixed diagnostic shows its exact text and target. Root requests are marked, and a sudo password goes to the machine, never to the model.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/assistant-diagram.png" alt="The assistant panel widened to show a Mermaid flowchart of the command approval flow">
+      <br><strong>Replies that read well</strong><br>
+      Markdown, tables, and Mermaid diagrams render in the chat. Chat with no server selected runs nothing and contacts no host.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/history-session.png" alt="History showing one AI session with its request, the command that ran, and its completed status and exit code">
+      <br><strong>History you can audit</strong><br>
+      Open a session to see its requests, the commands that ran on each server, their status and exit codes, and token usage.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/providers.png" alt="The AI Providers page showing a verified OpenAI-compatible provider with a Test button">
+      <br><strong>Bring your own model</strong><br>
+      Use OpenAI, Anthropic, or a compatible gateway. <strong>Test</strong> checks a real tool-call round trip before a provider can work on a server.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/vault-setup.png" alt="The Protect your workspace screen asking for a new passphrase and a confirmation">
+      <br><strong>Encrypted vault</strong><br>
+      One passphrase protects hosts, credentials, chat, and history on this computer. Selai generates a separate recovery key during setup.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/workspace-light.png" alt="The workbench in the light theme with a saved chat session about disk usage">
+      <br><strong>Dark, light, or system</strong><br>
+      Switch the theme from the status bar. Chats are saved as named sessions you can search and reopen.
+    </td>
+  </tr>
+</table>
+
+<sub>Screenshots use sample hosts and a mock AI provider.</sub>
 
 ## Features
 
@@ -230,12 +305,30 @@ unlocked Secret Service. Use the harness and setup instructions in
 `apps/desktop` with `pnpm tauri build` once the platform's Tauri dependencies
 are installed.
 
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `apps/desktop` | The Tauri 2 app: React and TypeScript UI, plus the Rust commands behind it. |
+| `crates/selai-domain` | Core IDs, state machines, error codes, and shared contracts. |
+| `crates/selai-ssh` | SSH transport. |
+| `crates/selai-agent` | The agent runtime for one scoped task. |
+| `crates/selai-policy` | Policy for agent tool calls. |
+| `crates/selai-llm` | Provider adapters. |
+| `crates/selai-vault` | The passphrase-protected local vault. |
+| `crates/selai-secrets` | Secret values and storage contracts. |
+| `crates/selai-storage` | SQLite persistence and migrations. |
+| `crates/selai-audit` | Redaction, bounded previews, and the audit hash chain. |
+| `crates/selai-platform` | OS lock signals. |
+| `crates/selai-testkit` | A real OpenSSH server for tests. Not part of the product. |
+
 ## Documentation
 
 - [Import format and examples](docs/import-ssh-profiles.md)
 - [Security model and disclosure policy](SECURITY.md)
 - [Milestone status and test evidence](docs/release/milestones.md)
 - [Installer packaging and verification](docs/release/packaging.md)
+- [Vault validation](docs/release/vault-validation.md)
 - [Architecture decisions](docs/adr/)
 - [Contributing and local checks](CONTRIBUTING.md)
 
