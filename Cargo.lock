@@ -4820,7 +4820,7 @@ dependencies = [
 
 [[package]]
 name = "selai-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "selai-audit",
  "selai-domain",
@@ -4839,7 +4839,7 @@ dependencies = [
 
 [[package]]
 name = "selai-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "regex",
  "selai-domain",
@@ -4850,7 +4850,7 @@ dependencies = [
 
 [[package]]
 name = "selai-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "fs2",
@@ -4882,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "selai-domain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4893,7 +4893,7 @@ dependencies = [
 
 [[package]]
 name = "selai-llm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-util",
  "reqwest",
@@ -4909,14 +4909,14 @@ dependencies = [
 
 [[package]]
 name = "selai-platform"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "selai-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "selai-domain",
  "serde_json",
@@ -4926,7 +4926,7 @@ dependencies = [
 
 [[package]]
 name = "selai-secrets"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keyring",
  "selai-domain",
@@ -4936,7 +4936,7 @@ dependencies = [
 
 [[package]]
 name = "selai-ssh"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "russh",
  "selai-domain",
@@ -4949,7 +4949,7 @@ dependencies = [
 
 [[package]]
 name = "selai-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rusqlite",
  "selai-audit",
@@ -4962,14 +4962,14 @@ dependencies = [
 
 [[package]]
 name = "selai-testkit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "selai-vault"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",

@@ -6,6 +6,13 @@ model never receives SSH credentials, and every command it runs is recorded.
 and macOS installers are built by CI but have not been run by the maintainers.
 The installers are not code-signed, so your OS will warn before the first start.
 
+**New in 0.1.1:** a passphrase vault with a recovery key, saved chat sessions,
+tasks across several hosts, SSH profile import (CSV, JSON, KeePass `.kdbx`),
+Markdown and Mermaid in chat, and a refreshed desktop layout. 0.1.1 also fixes
+a Windows crash when creating the vault passphrase (stack overflow). That fix
+is covered by the Windows CI tests, but nobody has yet confirmed it on a real
+Windows desktop. If setup still closes the app, please open an issue.
+
 ## Download
 
 | System | File | Notes |
@@ -40,6 +47,11 @@ On Windows: `Get-FileHash -Algorithm SHA256 .\<file>` and compare with `SHA256SU
   Read-only checks run on their own; other commands wait for your approval.
 - Commands that need root: the approval card asks for the sudo password when sudo
   asks for one (typed, saved, or the SSH login password). The model never sees it.
+- A passphrase vault: your data is encrypted at rest, with a recovery key,
+  auto-lock, an encrypted backup, and encrypted `.selai-history` exports.
+- Saved chat sessions, and tasks that span several hosts, each with its own approvals.
+- Import SSH profiles from CSV, JSON or a KeePass `.kdbx` file; credentials stay local.
+- Chat replies render Markdown tables, code blocks and Mermaid diagrams.
 - History with each request, the commands it ran, and input/output token usage.
 - Providers: OpenAI, Anthropic and OpenAI-compatible servers (vLLM, Ollama,
   LiteLLM). "Check API key" loads the model list; one Test button checks the
