@@ -591,3 +591,35 @@ fn existing_v2_database_upgrades_in_place_and_keeps_its_rows() {
     );
     assert_eq!(indexes, "1");
 }
+
+#[test]
+fn encrypted_memory_security_does_not_reenter_native_logging() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("memory-security.sqlite3");
+    let key = [42; 32];
+    // Exceed Windows' usual VirtualLock allowance so refusal to lock a page
+    // cannot recursively invoke SQLCipher's allocator through its logger.
+    let payload = vec![0x5a; 1024 * 1024];
+    {
+        let db = Database::open_encrypted(&path, &key).expect("encrypted open");
+        assert_eq!(scalar(&db, "PRAGMA cipher_log_level"), "NONE");
+        assert_eq!(scalar(&db, "PRAGMA cipher_memory_security"), "1");
+        db.put_vault_secret("memory-security-test", &payload, false)
+            .expect("write beyond locked-page allowance");
+        assert_eq!(
+            db.vault_secret("memory-security-test").expect("read"),
+            Some(payload.clone())
+        );
+        db.checkpoint().expect("checkpoint");
+        db.integrity_check().expect("integrity");
+    }
+    let db = Database::open_encrypted(&path, &key).expect("reopen encrypted");
+    assert_eq!(
+        db.vault_secret("memory-security-test")
+            .expect("read after reopen"),
+        Some(payload)
+    );
+    assert!(!std::fs::read(&path)
+        .expect("ciphertext")
+        .starts_with(b"SQLite format 3"));
+}

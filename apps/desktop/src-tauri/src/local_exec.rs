@@ -108,6 +108,13 @@ fn spawn(command: &str, with_stdin: bool) -> Result<Child, SshError> {
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        // Selai is a GUI application without a console. Without this flag,
+        // PowerShell allocates a new console (often in Windows Terminal) for
+        // each AI command instead of keeping its output on the IPC pipes.
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     if let Some(home) = home_dir() {
         cmd.current_dir(home);
     }

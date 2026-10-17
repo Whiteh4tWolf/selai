@@ -22,6 +22,12 @@ impl Database {
     /// to run if a build accidentally links an SQLite without SQLCipher.
     pub fn open_encrypted(path: &Path, key: &[u8; 32]) -> Result<Self, StorageError> {
         let mut conn = Connection::open(path)?;
+        // SQLCipher logs through SQLite's allocator. On Windows a failed
+        // VirtualLock logs a warning, whose allocations re-enter VirtualLock
+        // once cipher_memory_security is enabled, overflowing the stack.
+        // Disable that native logger first; SQLite errors still propagate to
+        // the caller and encrypted pages / memory sanitization stay enabled.
+        conn.pragma_update(None, "cipher_log_level", "NONE")?;
         Self::set_key(&conn, key)?;
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
             row.get::<_, i64>(0)

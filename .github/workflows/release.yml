@@ -97,6 +97,15 @@ jobs:
           pnpm tauri build --ci
           -- --locked
 
+      # Exercise the native Windows encryption path in the same release profile
+      # as the MSI. A successfully bundled but crashing vault must not be uploaded.
+      - name: Validate Windows vault before publishing installers
+        if: matrix.platform == 'windows'
+        run: |
+          cargo test --release --locked -p selai-storage encrypted_memory_security_does_not_reenter_native_logging
+          cargo test --release --locked -p selai-vault --test vault -- --test-threads=1
+          cargo test --release --locked -p selai-desktop --lib vault_service::tests -- --test-threads=1
+
       # Optional Apple signing and notarization. Tauri reads these variables itself.
       # A variable whose secret is empty is unset, because Tauri treats an empty
       # string as configured and would then try to use it.
