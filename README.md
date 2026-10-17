@@ -5,12 +5,7 @@
 <p align="center"><strong>A desktop SSH workbench with a host-scoped AI assistant.</strong><br>
 Terminals, an AI chat, and command history in one app. You choose where the assistant may work, and every change waits for your approval.</p>
 
-<p align="center">
-  <img alt="Status: preview 0.1.0" src="https://img.shields.io/badge/status-preview%200.1.0-orange">
-  <img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue">
-  <img alt="Platforms: Windows, Linux, macOS" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-lightgrey">
-  <img alt="Built with Tauri 2, Rust and React" src="https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20Rust%20%C2%B7%20React-informational">
-</p>
+<p align="center"><sub>Preview 0.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
 
 <p align="center">
   <a href="#screenshots">Screenshots</a> ·
@@ -21,10 +16,7 @@ Terminals, an AI chat, and command history in one app. You choose where the assi
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/workspace-light.png">
-    <img src="docs/screenshots/workspace-dark.png" alt="Selai workbench: the host explorer on the left, a terminal in the middle, and the AI assistant answering a disk usage question on the right" width="920">
-  </picture>
+  <img src="docs/screenshots/workspace-dark.png" alt="Selai workbench: the host explorer on the left, a terminal in the middle, and the AI assistant answering a disk usage question on the right" width="920">
 </p>
 
 Selai brings SSH hosts, terminal tabs, an AI chat, and command history into one
@@ -42,7 +34,7 @@ never included in requests to an AI provider.
 - **Everything is recorded.** Each request, command, outcome, and token count is
   saved to History, with an audit record written before remote execution.
 
-> **Version 0.1.0 is a preview.** The core SSH and agent flows have been tested
+> **Version 0.1 is a preview.** The core SSH and agent flows have been tested
 > end to end on Linux with an OpenSSH fixture and a local mock AI provider.
 > Windows and macOS SSH use, installer runs, and live provider integrations have
 > not been verified by the maintainers. See [current milestone evidence](docs/release/milestones.md)
