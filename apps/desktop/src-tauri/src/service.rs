@@ -298,7 +298,7 @@ impl Services {
         let key = russh::keys::PrivateKey::random(&mut rng, algorithm)
             .map_err(|e| invalid_message(&e.to_string()))?;
         let pem = key
-            .to_openssh(russh::keys::LineEnding::LF)
+            .to_openssh(ssh_key::LineEnding::LF)
             .map_err(|e| invalid_message(&e.to_string()))?;
         let view = key_view(name, key.public_key());
         let id: HostId = view
