@@ -480,13 +480,13 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     }
   }
 
-  const decide = useCallback(async (approvalId: string, approve: boolean, sudo?: SudoAnswer) => {
+  const decide = useCallback(async (approvalId: string, approve: boolean, sudo?: SudoAnswer, approveRootForTask = false) => {
     const update = (state: 'sending' | 'approved' | 'denied' | 'pending', why: string | null = null) =>
       updateAllTurns((prev) => prev.map((t) => t.items.some((item) => item.kind === 'approval' && item.approvalId === approvalId)
         ? { ...t, items: setApprovalState(t.items, approvalId, state, why) } : t));
     update('sending');
     try {
-      await approvalDecide(approvalId, approve, sudo);
+      await approvalDecide(approvalId, approve, sudo, approveRootForTask);
       update(approve ? 'approved' : 'denied');
     } catch (err) {
       // The database refused it (expired or already decided). Show why.
@@ -877,7 +877,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
  *  not parse and render all earlier Markdown again. */
 const TurnEntry = memo(function TurnEntry({ turn, onDecide }: {
   turn: Turn;
-  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer) => void;
+  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer, approveRootForTask?: boolean) => void;
 }) {
   const awaitingApproval = turn.items.some((i) => i.kind === 'approval' && i.state === 'pending');
   const commandRunning = turn.items.some((i) => i.kind === 'tool' && (i.status === 'proposed' || i.status === 'running'));
@@ -972,7 +972,7 @@ function TranscriptRow({
 }: {
   item: TranscriptItem;
   items: TranscriptItem[];
-  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer) => void;
+  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer, approveRootForTask?: boolean) => void;
 }) {
   switch (item.kind) {
     case 'text':
@@ -1052,9 +1052,10 @@ function ApprovalCard({
   item: ApprovalItem;
   hostLabel: string | null;
   status: ToolItem | null;
-  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer) => void;
+  onDecide: (approvalId: string, approve: boolean, sudo?: SudoAnswer, approveRootForTask?: boolean) => void;
 }) {
   const [sudo, setSudo] = useState<SudoAnswer | null>(null);
+  const [approveRootForTask, setApproveRootForTask] = useState(false);
   const expired = Date.now() > item.expiresAtMs;
   const open = item.state === 'pending' && !expired;
   const asRoot = item.sudo !== null;
@@ -1086,11 +1087,23 @@ function ApprovalCard({
       {asRoot && !needsPassword && open && (
         <p className="sudo-note">This host's sudo does not ask for a password.</p>
       )}
+      {asRoot && open && (
+        <label className="check approval-task-root">
+          <input
+            type="checkbox"
+            checked={approveRootForTask}
+            onChange={(e) => setApproveRootForTask(e.target.checked)}
+          />
+          <span>Allow further root commands in this request on this host</span>
+        </label>
+      )}
       <div className="approval-foot">
         <span className="grow">
           {item.state === 'sending' && 'Sending your decision…'}
           {item.state === 'approved' &&
-            (status && status.status !== 'proposed' ? 'Approved by you.' : 'Approved. Waiting for the result.')}
+            (approveRootForTask
+              ? 'Root commands are approved until this request ends.'
+              : status && status.status !== 'proposed' ? 'Approved by you.' : 'Approved. Waiting for the result.')}
           {item.state === 'denied' && 'Denied. The command will not run.'}
           {item.state === 'pending' &&
             (expired ? 'Expired. The command will not run.' : `Expires at ${new Date(item.expiresAtMs).toLocaleTimeString()}`)}
@@ -1104,7 +1117,7 @@ function ApprovalCard({
               type="button"
               className="btn btn-primary btn-sm"
               disabled={!open || !ready}
-              onClick={() => onDecide(item.approvalId, true, needsPassword && sudo ? sudo : undefined)}
+              onClick={() => onDecide(item.approvalId, true, needsPassword && sudo ? sudo : undefined, approveRootForTask)}
             >
               {asRoot ? 'Approve as root' : 'Approve'}
             </button>

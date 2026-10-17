@@ -52,6 +52,11 @@ pub struct AgentRegistry {
     /// Sudo passwords given with an approval, held in memory until the task
     /// takes them for that one command.
     sudo_passwords: Mutex<HashMap<ApprovalId, SecretValue>>,
+    /// Explicit root-command grants last only for one running task.
+    root_approved_tasks: Mutex<HashMap<TaskId, selai_domain::ExecutionId>>,
+    /// When needed, the password attached to that grant stays in memory only
+    /// until the task ends or the vault locks.
+    task_sudo_passwords: Mutex<HashMap<TaskId, SecretValue>>,
 }
 
 impl AgentRegistry {
@@ -69,6 +74,12 @@ impl AgentRegistry {
     pub(crate) fn finish_task(&self, task: TaskId) {
         if let Ok(mut map) = self.tokens.lock() {
             map.remove(&task);
+        }
+        if let Ok(mut tasks) = self.root_approved_tasks.lock() {
+            tasks.remove(&task);
+        }
+        if let Ok(mut passwords) = self.task_sudo_passwords.lock() {
+            passwords.remove(&task);
         }
     }
 
@@ -101,6 +112,12 @@ impl AgentRegistry {
         if let Ok(mut passwords) = self.sudo_passwords.lock() {
             passwords.clear();
         }
+        if let Ok(mut passwords) = self.task_sudo_passwords.lock() {
+            passwords.clear();
+        }
+        if let Ok(mut tasks) = self.root_approved_tasks.lock() {
+            tasks.clear();
+        }
         if let Ok(mut approvals) = self.approvals.lock() {
             approvals.early.clear();
             approvals.waiters.clear();
@@ -115,6 +132,29 @@ impl AgentRegistry {
 
     fn take_sudo_password(&self, approval: ApprovalId) -> Option<SecretValue> {
         self.sudo_passwords.lock().ok()?.remove(&approval)
+    }
+
+    fn copy_sudo_password(&self, approval: ApprovalId) -> Option<SecretValue> {
+        let passwords = self.sudo_passwords.lock().ok()?;
+        passwords
+            .get(&approval)
+            .map(|password| SecretValue::new(password.expose_for_transport().to_vec()))
+    }
+
+    fn approve_root_for_task(
+        &self,
+        task: TaskId,
+        first_execution: selai_domain::ExecutionId,
+        password: Option<SecretValue>,
+    ) {
+        if let Ok(mut tasks) = self.root_approved_tasks.lock() {
+            tasks.insert(task, first_execution);
+        }
+        if let Some(password) = password {
+            if let Ok(mut passwords) = self.task_sudo_passwords.lock() {
+                passwords.insert(task, password);
+            }
+        }
     }
 
     fn deliver(&self, approval: ApprovalId, decision: ApprovalDecision) {
@@ -172,6 +212,20 @@ impl ApprovalWaiter for RegistryWaiter {
 
     fn take_sudo_password(&self, approval: ApprovalId) -> Option<SecretValue> {
         self.registry.take_sudo_password(approval)
+    }
+
+    fn task_root_approved(&self, task: TaskId, execution: selai_domain::ExecutionId) -> bool {
+        self.registry
+            .root_approved_tasks
+            .lock()
+            .map(|tasks| tasks.get(&task).is_some_and(|first| *first != execution))
+            .unwrap_or(false)
+    }
+
+    fn task_sudo_password(&self, task: TaskId) -> Option<SecretValue> {
+        let passwords = self.registry.task_sudo_passwords.lock().ok()?;
+        let password = passwords.get(&task)?;
+        Some(SecretValue::new(password.expose_for_transport().to_vec()))
     }
 }
 
@@ -560,6 +614,16 @@ impl Services {
         approve: bool,
         sudo: Option<SudoAnswerInput>,
     ) -> Result<(), CommandError> {
+        self.approval_decide_with_root_scope(approval_id, approve, sudo, false)
+    }
+
+    pub fn approval_decide_with_root_scope(
+        &self,
+        approval_id: &str,
+        approve: bool,
+        sudo: Option<SudoAnswerInput>,
+        approve_root_for_task: bool,
+    ) -> Result<(), CommandError> {
         let id: ApprovalId = approval_id
             .parse()
             .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid approval id"))?;
@@ -567,6 +631,32 @@ impl Services {
             ApprovalDecision::Approve
         } else {
             ApprovalDecision::Deny
+        };
+        let task_grant = if approve_root_for_task {
+            if !approve {
+                return Err(CommandError::new(
+                    ErrorCode::InvalidInput,
+                    "root commands can only be enabled when approving a command",
+                ));
+            }
+            let db = self.lock_db_pub()?;
+            let record = db
+                .get_approval(id)
+                .map_err(|e| storage(&e))?
+                .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "approval not found"))?;
+            let execution = db
+                .get_execution(record.execution)
+                .map_err(|e| storage(&e))?
+                .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "command not found"))?;
+            if !execution.command_redacted.starts_with("sudo ") {
+                return Err(CommandError::new(
+                    ErrorCode::InvalidInput,
+                    "task root approval can only be enabled from a sudo command",
+                ));
+            }
+            Some((record.task, record.execution))
+        } else {
+            None
         };
         let held = match (approve, sudo) {
             (true, Some(answer)) => {
@@ -577,14 +667,23 @@ impl Services {
             _ => false,
         };
         let recorded = self.lock_db_pub().and_then(|mut db| {
-            db.decide_approval(id, decision, now_ms())
-                .map_err(|e| storage(&e))
+            let result = if approve_root_for_task {
+                db.decide_approval_with_root_scope(id, decision, now_ms())
+            } else {
+                db.decide_approval(id, decision, now_ms())
+            };
+            result.map_err(|e| storage(&e))
         });
         if let Err(e) = recorded {
             if held {
                 drop(self.agent.take_sudo_password(id));
             }
             return Err(e);
+        }
+        if let Some((task, execution)) = task_grant {
+            let task_password = self.agent.copy_sudo_password(id);
+            self.agent
+                .approve_root_for_task(task, execution, task_password);
         }
         self.agent.deliver(id, decision);
         Ok(())

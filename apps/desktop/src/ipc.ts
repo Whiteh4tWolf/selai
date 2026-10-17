@@ -75,6 +75,12 @@ export interface HostInput {
   keyPassphrase?: string;
 }
 
+export interface SshKeyView { id: string; name: string; algorithm: string; publicKey: string; fingerprintSha256: string; createdAtMs: number }
+export function sshKeyList(): Promise<SshKeyView[]> { return invoke<SshKeyView[]>('ssh_key_list'); }
+export function sshKeyGenerate(name: string, algorithm: string): Promise<SshKeyView> { return invoke<SshKeyView>('ssh_key_generate', { name, algorithm }); }
+export function sshKeyImport(name: string, privateKeyBase64: string, passphrase?: string): Promise<SshKeyView> { return invoke<SshKeyView>('ssh_key_import', { name, privateKeyBase64, passphrase: passphrase ?? null }); }
+export function sshKeyDelete(id: string): Promise<void> { return invoke<void>('ssh_key_delete', { id }); }
+
 export interface ObservedKey {
   algorithm: string;
   fingerprintSha256: string;
@@ -142,6 +148,11 @@ export interface KdbxProfile {
 /** Decrypts a KDBX file locally and returns only entries with SSH/SFTP URLs. */
 export function kdbxPreview(fileBase64: string, passphrase: string): Promise<KdbxProfile[]> {
   return invoke<KdbxProfile[]>('kdbx_preview', { fileBase64, passphrase });
+}
+
+/** Reads only the current user's default ~/.ssh/config, bounded by the backend. */
+export function sshConfigRead(): Promise<string> {
+  return invoke<string>('ssh_config_read');
 }
 
 export function hostArchive(id: string): Promise<void> {
@@ -432,8 +443,13 @@ export interface SudoOptions {
   loginPassword: boolean;
 }
 
-export function approvalDecide(approvalId: string, approve: boolean, sudo?: SudoAnswer): Promise<void> {
-  return invoke<void>('approval_decide', { approvalId, approve, sudo: sudo ?? null });
+export function approvalDecide(
+  approvalId: string,
+  approve: boolean,
+  sudo?: SudoAnswer,
+  approveRootForTask = false,
+): Promise<void> {
+  return invoke<void>('approval_decide', { approvalId, approve, sudo: sudo ?? null, approveRootForTask });
 }
 
 export function sudoOptions(approvalId: string): Promise<SudoOptions> {

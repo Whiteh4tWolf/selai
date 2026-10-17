@@ -33,7 +33,10 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: COMMAND_TOOL.to_owned(),
             description: "Propose a shell command to run on the task's host. A person must approve \
-                each command before it runs. Keep commands short and read-only where possible. The \
+                each command before it runs unless they explicitly enable root-command approval for \
+                the rest of this request. Ordinary commands have a 60-second timeout; root commands \
+                after that approval can request up to 300 seconds for an installation step. Keep commands \
+                short and read-only where possible. The \
                 host cannot be chosen. To run as root, set as_root to true and leave sudo out of the \
                 command: Selai adds sudo itself, and you never need or receive a password."
                 .to_owned(),
@@ -41,7 +44,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "minLength": 1, "maxLength": 4000},
-                    "timeout_secs": {"type": "integer", "minimum": 1, "maximum": 60},
+                    "timeout_secs": {"type": "integer", "minimum": 1, "maximum": 300},
                     "as_root": {"type": "boolean", "description": "Run the command as root through sudo."}
                 },
                 "required": ["command"],

@@ -43,14 +43,7 @@
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
-        "uninstallerIcon": "icons/icon.ico",
-        "headerImage": "installer-art/nsis-header.bmp",
-        "sidebarImage": "installer-art/nsis-sidebar.bmp",
-        "uninstallerHeaderImage": "installer-art/nsis-header.bmp"
-      },
-      "wix": {
-        "bannerPath": "installer-art/wix-banner.bmp",
-        "dialogImagePath": "installer-art/wix-dialog.bmp"
+        "uninstallerIcon": "icons/icon.ico"
       }
     }
   }

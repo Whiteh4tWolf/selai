@@ -544,6 +544,27 @@ impl Database {
         decision: ApprovalDecision,
         now_ms: i64,
     ) -> Result<ApprovalRecord, StorageError> {
+        self.decide_approval_inner(id, decision, now_ms, false)
+    }
+
+    /// Atomically records the approval and the operator's task-scoped root
+    /// authorization in the same audit chain transaction.
+    pub fn decide_approval_with_root_scope(
+        &mut self,
+        id: ApprovalId,
+        decision: ApprovalDecision,
+        now_ms: i64,
+    ) -> Result<ApprovalRecord, StorageError> {
+        self.decide_approval_inner(id, decision, now_ms, true)
+    }
+
+    fn decide_approval_inner(
+        &mut self,
+        id: ApprovalId,
+        decision: ApprovalDecision,
+        now_ms: i64,
+        root_scope: bool,
+    ) -> Result<ApprovalRecord, StorageError> {
         let tx = now_tx(self.conn_mut())?;
         let record = approval_in(&tx, id)?
             .ok_or_else(|| StorageError::NotFound(format!("approval {id}")))?;
@@ -572,6 +593,16 @@ impl Database {
             &serde_json::json!({"approval_id": id.to_string(), "state": to.as_str()}),
             now_ms,
         )?;
+        if root_scope && to == ApprovalState::Approved {
+            append_audit(
+                &tx,
+                "task_root_approval_enabled",
+                Some(record.task),
+                Some(record.execution),
+                &serde_json::json!({"scope": "root_commands_for_task"}),
+                now_ms,
+            )?;
+        }
         tx.commit()?;
         if to == ApprovalState::Expired {
             return Err(StorageError::Conflict(

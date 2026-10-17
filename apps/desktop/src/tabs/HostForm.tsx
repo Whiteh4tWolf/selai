@@ -1,11 +1,16 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   describeError,
   hostForgetSudoPassword,
   hostSave,
+  sshKeyDelete,
+  sshKeyGenerate,
+  sshKeyImport,
+  sshKeyList,
   type AuthMethod,
   type HostInput,
   type HostView,
+  type SshKeyView,
 } from '../ipc';
 import { Field } from '../ui/Field';
 import { Drawer } from '../ui/Overlay';
@@ -68,6 +73,40 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sudoNote, setSudoNote] = useState<string | null>(null);
+  const [keys, setKeys] = useState<SshKeyView[]>([]);
+  const [manageKeys, setManageKeys] = useState(false);
+  const [keyName, setKeyName] = useState('');
+  const [keyPass, setKeyPass] = useState('');
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+
+  async function refreshKeys() { setKeys(await sshKeyList()); }
+  useEffect(() => { void refreshKeys().catch((err) => setKeyError(describeError(err))); }, []);
+
+  async function generateKey(algorithm: string) {
+    if (!keyName.trim()) { setKeyError('Enter a name for the key.'); return; }
+    setKeyBusy(true); setKeyError(null);
+    try { const key = await sshKeyGenerate(keyName, algorithm); await refreshKeys(); set('privateKeyPath')(`vault://key:${key.id}`); set('authMethod')('private_key'); setKeyName(''); }
+    catch (err) { setKeyError(describeError(err)); } finally { setKeyBusy(false); }
+  }
+
+  async function importKey(file?: File) {
+    if (!file) return;
+    if (!keyName.trim()) { setKeyError('Enter a name for the key before importing.'); return; }
+    setKeyBusy(true); setKeyError(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const key = await sshKeyImport(keyName, btoa(binary), keyPass || undefined);
+      await refreshKeys(); set('privateKeyPath')(`vault://key:${key.id}`); set('authMethod')('private_key'); setKeyName(''); setKeyPass('');
+    } catch (err) { setKeyError(describeError(err)); } finally { setKeyBusy(false); }
+  }
+
+  async function removeKey(key: SshKeyView) {
+    if (!window.confirm(`Delete key “${key.name}”?`)) return;
+    try { await sshKeyDelete(key.id); if (form.privateKeyPath === `vault://key:${key.id}`) set('privateKeyPath')(''); await refreshKeys(); }
+    catch (err) { setKeyError(describeError(err)); }
+  }
 
   async function forgetSudo() {
     if (!host) return;
@@ -211,26 +250,34 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
             </Field>
           ) : (
             <>
-              <label className="field">
-                {form.privateKeyPath.startsWith('vault://') ? 'Private key stored in vault' : 'Private key file path'}
-                <input
-                  aria-label="Private key file path"
-                  value={form.privateKeyPath}
-                  placeholder="~/.ssh/id_ed25519"
-                  onChange={(e) => set('privateKeyPath')(e.target.value)}
-                />
-                <span className="hint">Key contents are imported into your encrypted vault. Protect the original file separately. Enter a new path to replace a managed key.</span>
+              <label className="field">SSH key
+                <select aria-label="SSH key" value={form.privateKeyPath.startsWith('vault://key:') ? form.privateKeyPath : form.privateKeyPath.startsWith('vault://') ? form.privateKeyPath : ''} onChange={(e) => set('privateKeyPath')(e.target.value)}>
+                  <option value="">Choose a managed key…</option>
+                  {form.privateKeyPath.startsWith('vault://') && !form.privateKeyPath.startsWith('vault://key:') && <option value={form.privateKeyPath}>Existing key saved for this host</option>}
+                  {form.privateKeyPath && !form.privateKeyPath.startsWith('vault://') && <option value={form.privateKeyPath}>Existing file path: {form.privateKeyPath}</option>}
+                  {keys.map((key) => <option key={key.id} value={`vault://key:${key.id}`}>{key.name} · {key.algorithm}</option>)}
+                </select>
+                <span className="hint">Managed keys are stored in the encrypted vault and can be reused across hosts.</span>
               </label>
-              <label className="field">
-                Key passphrase (optional)
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={passphrase}
-                  placeholder={savedPlaceholder}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                />
-              </label>
+              {form.privateKeyPath && !form.privateKeyPath.startsWith('vault://') && <p className="hint">This profile uses a legacy key file path. Import it into key management to reuse it from other profiles.</p>}
+              <button className="btn btn-sm" type="button" onClick={() => setManageKeys((open) => !open)}>{manageKeys ? 'Hide key manager' : 'Manage SSH keys'}</button>
+              {manageKeys && <div className="form-section" aria-label="SSH key manager">
+                <h3>SSH keys</h3>
+                {keyError && <p role="alert" className="banner" data-tone="danger">{keyError}</p>}
+                <label className="field">Key name<input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="Work laptop" /></label>
+                <div className="field-row">
+                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ed25519')}>Generate Ed25519</button>
+                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ecdsa-p256')}>ECDSA P-256</button>
+                </div>
+                <div className="field-row">
+                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ecdsa-p384')}>ECDSA P-384</button>
+                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ecdsa-p521')}>ECDSA P-521</button>
+                </div>
+                <label className="field">Private key passphrase (if encrypted)<input type="password" autoComplete="off" value={keyPass} onChange={(e) => setKeyPass(e.target.value)} /></label>
+                <label className="field">Import private key<input type="file" accept=".pem,.key,id_*" disabled={keyBusy} onChange={(e) => { void importKey(e.target.files?.[0]); e.currentTarget.value = ''; }} /></label>
+                <span className="hint">Supports Ed25519 and ECDSA P-256/P-384/P-521. Imported private keys are encrypted in your vault. Generated private keys never leave the backend.</span>
+                {keys.map((key) => <div key={key.id} className="key-manager-row"><div><strong>{key.name}</strong><div className="hint">{key.algorithm} · {key.fingerprintSha256}</div><code>{key.publicKey}</code></div><div className="field-row"><button type="button" className="btn btn-sm" onClick={() => { void navigator.clipboard.writeText(key.publicKey); }}>Copy public key</button><button type="button" className="btn btn-sm" onClick={() => set('privateKeyPath')(`vault://key:${key.id}`)}>Use</button><button type="button" className="btn btn-sm btn-ghost" onClick={() => void removeKey(key)}>Delete</button></div></div>)}
+              </div>}
             </>
           )}
         </div>

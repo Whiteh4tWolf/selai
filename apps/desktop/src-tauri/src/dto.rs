@@ -144,6 +144,30 @@ pub struct HostInput {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SshKeyView {
+    pub id: String,
+    pub name: String,
+    pub algorithm: String,
+    pub public_key: String,
+    pub fingerprint_sha256: String,
+    pub created_at_ms: i64,
+}
+
+impl From<selai_storage::SshKeyRecord> for SshKeyView {
+    fn from(k: selai_storage::SshKeyRecord) -> Self {
+        Self {
+            id: k.id,
+            name: k.name,
+            algorithm: k.algorithm,
+            public_key: k.public_key,
+            fingerprint_sha256: k.fingerprint_sha256,
+            created_at_ms: k.created_at_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ObservedKeyView {
     pub algorithm: String,
     pub fingerprint_sha256: String,

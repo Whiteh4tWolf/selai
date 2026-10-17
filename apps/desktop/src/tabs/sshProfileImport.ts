@@ -52,6 +52,196 @@ export function guessMapping(headers: string[]): ColumnMapping {
   ])) as ColumnMapping;
 }
 
+function sshConfigFile(filename: string): boolean {
+  const base = filename.replace(/\\/g, '/').split('/').at(-1)?.toLowerCase() ?? '';
+  return base === 'config' || base === 'ssh_config' || base === 'ssh-config' || base.endsWith('.sshconfig');
+}
+
+function sshConfigWords(line: string): string[] {
+  const uncommented: string[] = [];
+  let quote = '';
+  let escaped = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]!;
+    if (escaped) {
+      uncommented.push(char);
+      escaped = false;
+    } else if (char === '\\') {
+      uncommented.push(char);
+      escaped = true;
+    } else if (quote) {
+      uncommented.push(char);
+      if (char === quote) quote = '';
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      uncommented.push(char);
+    } else if (char === '#' && (i === 0 || /\s/.test(line[i - 1]!))) {
+      break;
+    } else {
+      uncommented.push(char);
+    }
+  }
+  const source = uncommented.join('').replace(/^(\s*[A-Za-z][A-Za-z0-9]*)\s*=\s*/, '$1 ');
+  const words: string[] = [];
+  let word = '';
+  quote = '';
+  escaped = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i]!;
+    if (escaped) {
+      word += char;
+      escaped = false;
+    } else if (char === '\\') {
+      const next = source[i + 1];
+      if (next && (/[\s"'#\\]/.test(next))) escaped = true;
+      else word += char;
+    } else if (quote) {
+      if (char === quote) quote = '';
+      else word += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (/\s/.test(char)) {
+      if (word) words.push(word);
+      word = '';
+    } else {
+      word += char;
+    }
+  }
+  if (escaped) word += '\\';
+  if (word) words.push(word);
+  return words;
+}
+
+function globMatches(pattern: string, host: string): boolean {
+  const escaped = [...pattern].map((char) => {
+    if (char === '*') return '.*';
+    if (char === '?') return '.';
+    return '.^$+()[]{}|\\'.includes(char) ? `\\${char}` : char;
+  }).join('');
+  return new RegExp(`^${escaped}$`, 'i').test(host);
+}
+
+interface SshConfigBlock {
+  patterns: string[];
+  options: Map<string, string>;
+  identityFiles: string[];
+}
+
+function setSshOption(block: SshConfigBlock, key: string, value: string) {
+  if (key === 'identityfile') block.identityFiles.push(value);
+  else if (!block.options.has(key)) block.options.set(key, value);
+}
+
+function expandSshTokens(value: string, alias: string, hostname: string, username: string): string {
+  return value
+    .replaceAll('%%', '\u0000')
+    .replaceAll('%d', '~')
+    .replaceAll('%n', alias)
+    .replaceAll('%h', hostname)
+    .replaceAll('%r', username)
+    .replaceAll('\u0000', '%');
+}
+
+/** Converts common OpenSSH Host blocks to the same reviewable import table. */
+export function parseSshConfig(text: string): ProfileTable {
+  if (new TextEncoder().encode(text).length > MAX_IMPORT_BYTES) throw new Error('Import file is larger than 2 MB.');
+  const logicalLines: string[] = [];
+  let continuation = '';
+  for (const raw of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    let slashes = 0;
+    for (let i = line.length - 1; i >= 0 && line[i] === '\\'; i -= 1) slashes += 1;
+    if (slashes % 2 === 1) {
+      continuation += `${line.slice(0, -1)} `;
+      continue;
+    }
+    logicalLines.push(continuation + line);
+    continuation = '';
+  }
+  if (continuation) logicalLines.push(continuation);
+
+  const global: SshConfigBlock = { patterns: [], options: new Map(), identityFiles: [] };
+  const blocks: SshConfigBlock[] = [];
+  let current: SshConfigBlock | null = global;
+  const aliases: string[] = [];
+  const seenAliases = new Set<string>();
+  for (const line of logicalLines) {
+    const [rawKey, ...values] = sshConfigWords(line);
+    if (!rawKey || !values.length) continue;
+    const key = rawKey.toLowerCase();
+    if (key === 'host') {
+      current = { patterns: values, options: new Map(), identityFiles: [] };
+      blocks.push(current);
+      for (const pattern of values) {
+        if (pattern.startsWith('!') || /[*?]/.test(pattern)) continue;
+        const folded = pattern.toLowerCase();
+        if (!seenAliases.has(folded)) {
+          seenAliases.add(folded);
+          aliases.push(pattern);
+        }
+      }
+      continue;
+    }
+    if (key === 'match') {
+      current = null;
+      continue;
+    }
+    if (current) setSshOption(current, key, values.join(' '));
+  }
+
+  if (!aliases.length) throw new Error('No concrete Host aliases found. Host patterns, Include files, and Match blocks are not imported.');
+  if (aliases.length > MAX_IMPORT_ROWS) throw new Error(`Import is limited to ${MAX_IMPORT_ROWS} rows.`);
+
+  const headers = [
+    'label', 'hostname', 'port', 'username', 'auth_method', 'private_key_path',
+    'connect_timeout_seconds', 'keep_alive_seconds', 'ssh_config_issue',
+  ];
+  const rows = aliases.map((alias) => {
+    const options = new Map(global.options);
+    const identityFiles = [...global.identityFiles];
+    for (const block of blocks) {
+      const excluded = block.patterns.some((p) => p.startsWith('!') && globMatches(p.slice(1), alias));
+      const included = block.patterns.some((p) => !p.startsWith('!') && globMatches(p, alias));
+      if (excluded || !included) continue;
+      for (const [key, value] of block.options) if (!options.has(key)) options.set(key, value);
+      identityFiles.push(...block.identityFiles);
+    }
+    const username = options.get('user') ?? '';
+    const rawHostname = options.get('hostname') ?? alias;
+    const hostname = expandSshTokens(rawHostname, alias, rawHostname, username);
+    const identityFile = identityFiles.find((path) => path.toLowerCase() !== 'none') ?? '';
+    const expandedKeyPath = expandSshTokens(identityFile, alias, hostname, username);
+    const keyPath = expandedKeyPath && !/^(?:\/|~[\\/]|[A-Za-z]:[\\/]|\\\\)/.test(expandedKeyPath)
+      ? `~/${expandedKeyPath}` : expandedKeyPath;
+    const proxyJump = options.get('proxyjump');
+    const proxyCommand = options.get('proxycommand');
+    const unsupportedProxy = (proxyJump && proxyJump.toLowerCase() !== 'none') || (proxyCommand && proxyCommand.toLowerCase() !== 'none');
+    const unresolvedToken = /%[a-z]/i.test(keyPath) || /%[a-z]/i.test(hostname) || /%[a-z]/i.test(username);
+    const port = options.get('port') ?? '22';
+    const connectTimeout = options.get('connecttimeout') ?? '15';
+    const keepAlive = options.get('serveraliveinterval') ?? '30';
+    let issue = '';
+    if (unsupportedProxy) issue = 'ProxyJump/ProxyCommand is not supported by Selai; profile skipped.';
+    else if (unresolvedToken) issue = 'SSH config contains an unsupported % token in the host, user, or key path.';
+    else if (!username) issue = 'No User is configured for this host.';
+    else if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) issue = 'Port must be a number from 1 to 65535.';
+    else if (!/^\d+$/.test(connectTimeout) || Number(connectTimeout) < 1 || Number(connectTimeout) > 120) issue = 'ConnectTimeout must be from 1 to 120 seconds.';
+    else if (!/^\d+$/.test(keepAlive) || Number(keepAlive) > 300) issue = 'ServerAliveInterval must be from 0 to 300 seconds.';
+    return {
+      label: alias,
+      hostname,
+      port,
+      username,
+      auth_method: identityFile ? 'private_key' : 'password',
+      private_key_path: keyPath,
+      connect_timeout_seconds: connectTimeout,
+      keep_alive_seconds: keepAlive,
+      ssh_config_issue: issue,
+    };
+  });
+  return { headers, rows };
+}
+
 /** Parse RFC 4180-style CSV, including quoted commas, quotes and newlines. */
 function csvRecords(text: string): string[][] {
   const records: string[][] = [];
@@ -140,6 +330,7 @@ export function parseProfileTable(text: string, filename: string): ProfileTable 
   if (new TextEncoder().encode(text).length > MAX_IMPORT_BYTES) throw new Error('Import file is larger than 2 MB.');
   const source = text.replace(/^\uFEFF/, '');
   if (/\.kdbx$/i.test(filename)) throw new Error('Enter the KDBX passphrase to unlock this file.');
+  if (sshConfigFile(filename)) return parseSshConfig(source);
   if (/\.json$/i.test(filename)) {
     let data: unknown;
     try { data = JSON.parse(source); } catch { throw new Error('Invalid JSON file.'); }
@@ -213,8 +404,8 @@ export function prepareProfiles(table: ProfileTable, mapping: ColumnMapping, exi
       ? 'private_key' : 'password';
     const type = normalized(cell('type'));
     const displayLabel = safeLabel(sourceLabel || hostname, hostname);
-    let issue: string | null = null;
-    if (type && !['1', 'login', 'ssh', 'password', 'host'].includes(type)) issue = 'Not a login or SSH profile.';
+    let issue: string | null = row.ssh_config_issue || null;
+    if (!issue && type && !['1', 'login', 'ssh', 'password', 'host'].includes(type)) issue = 'Not a login or SSH profile.';
     else if (row.embedded_private_key || /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(privateKeyPath)) issue = 'Embedded private key cannot be imported; provide a local key file path.';
     else if (!hostname) issue = rawUri || rawHost ? 'Only SSH/SFTP addresses or hostnames are supported.' : 'Missing hostname or SSH URI.';
     else if (!validHostname(hostname)) issue = 'Invalid hostname or IP address.';
@@ -228,10 +419,14 @@ export function prepareProfiles(table: ProfileTable, mapping: ColumnMapping, exi
     else if (labels.has(displayLabel.toLocaleLowerCase())) issue = 'Label already exists.';
     else if (targets.has(`${hostname.toLocaleLowerCase()}|${port}|${username}`)) issue = 'Host and username already exist.';
 
+    const configuredConnectTimeout = Number(row.connect_timeout_seconds);
+    const configuredKeepAlive = Number(row.keep_alive_seconds);
     const input: HostInput | null = issue ? null : {
       label: displayLabel, hostname, port, username, authMethod,
       privateKeyPath: authMethod === 'private_key' ? privateKeyPath : null,
-      connectTimeoutSeconds: 15, keepAliveSeconds: 30, terminalType: 'xterm-256color',
+      connectTimeoutSeconds: Number.isInteger(configuredConnectTimeout) ? configuredConnectTimeout : 15,
+      keepAliveSeconds: Number.isInteger(configuredKeepAlive) ? configuredKeepAlive : 30,
+      terminalType: 'xterm-256color',
       notes: cell('notes') || null,
       password: authMethod === 'password' && password ? password : undefined,
       keyPassphrase: authMethod === 'private_key' && keyPassphrase ? keyPassphrase : undefined,

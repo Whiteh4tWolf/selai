@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use selai_domain::Page;
+use selai_domain::{ErrorCode, Page};
 use tauri::{ipc::Channel, State};
 
 use crate::{
@@ -265,6 +265,37 @@ pub fn host_save(state: State<'_, AppState>, input: HostInput) -> Result<HostVie
 }
 
 #[tauri::command]
+pub fn ssh_key_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::dto::SshKeyView>, CommandError> {
+    services(&state)?.ssh_key_list()
+}
+
+#[tauri::command]
+pub fn ssh_key_import(
+    state: State<'_, AppState>,
+    name: String,
+    private_key_base64: String,
+    passphrase: Option<String>,
+) -> Result<crate::dto::SshKeyView, CommandError> {
+    services(&state)?.ssh_key_import(name, private_key_base64, passphrase)
+}
+
+#[tauri::command]
+pub fn ssh_key_generate(
+    state: State<'_, AppState>,
+    name: String,
+    algorithm: String,
+) -> Result<crate::dto::SshKeyView, CommandError> {
+    services(&state)?.ssh_key_generate(name, algorithm)
+}
+
+#[tauri::command]
+pub fn ssh_key_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+    services(&state)?.ssh_key_delete(&id)
+}
+
+#[tauri::command]
 pub fn kdbx_preview(
     state: State<'_, AppState>,
     file_base64: String,
@@ -273,6 +304,42 @@ pub fn kdbx_preview(
     let _lease = services(&state)?;
     crate::kdbx_import::preview(&file_base64, passphrase)
         .map_err(|message| CommandError::new(selai_domain::ErrorCode::InvalidInput, message))
+}
+
+#[tauri::command]
+pub fn ssh_config_read() -> Result<String, CommandError> {
+    use std::{io::Read, path::PathBuf};
+
+    let home =
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok_or_else(|| {
+            CommandError::new(ErrorCode::InvalidInput, "home directory is unavailable")
+        })?;
+    let path = PathBuf::from(home).join(".ssh").join("config");
+    let file = std::fs::File::open(&path)
+        .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "could not read ~/.ssh/config"))?;
+    if file
+        .metadata()
+        .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "could not inspect ~/.ssh/config"))?
+        .len()
+        > 2 * 1024 * 1024
+    {
+        return Err(CommandError::new(
+            ErrorCode::InvalidInput,
+            "~/.ssh/config is larger than 2 MB",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "could not read ~/.ssh/config"))?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err(CommandError::new(
+            ErrorCode::InvalidInput,
+            "~/.ssh/config is larger than 2 MB",
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "~/.ssh/config is not UTF-8"))
 }
 
 #[tauri::command]
@@ -469,8 +536,14 @@ pub fn approval_decide(
     approval_id: String,
     approve: bool,
     sudo: Option<SudoAnswerInput>,
+    approve_root_for_task: bool,
 ) -> Result<(), CommandError> {
-    services(&state)?.approval_decide(&approval_id, approve, sudo)
+    services(&state)?.approval_decide_with_root_scope(
+        &approval_id,
+        approve,
+        sudo,
+        approve_root_for_task,
+    )
 }
 
 #[tauri::command]

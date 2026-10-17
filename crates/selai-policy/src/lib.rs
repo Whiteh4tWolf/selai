@@ -13,11 +13,13 @@ pub use diagnostics::{diagnostic_command, DiagnosticRequest, LogLines, ServiceNa
 pub use request::{parse_model_call, CommandRequest, ModelCallError, ToolRequest};
 
 /// Stored with every decision so a later change to the rules is visible in history.
-pub const POLICY_VERSION: &str = "policy-v1";
+pub const POLICY_VERSION: &str = "policy-v2";
 /// Approval tickets expire after this many milliseconds (spec section 9).
 pub const APPROVAL_TTL_MS: i64 = 5 * 60 * 1000;
 pub const MAX_COMMAND_BYTES: usize = 4000;
-pub const MAX_COMMAND_TIMEOUT_SECS: u32 = 60;
+/// Maximum timeout accepted from the model. The runner keeps ordinary commands
+/// at 60 seconds and permits the full bound only after task-scoped root approval.
+pub const MAX_COMMAND_TIMEOUT_SECS: u32 = 300;
 
 /// The scope a task was started with. Immutable for the life of the task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

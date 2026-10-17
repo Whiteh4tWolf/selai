@@ -44,7 +44,7 @@ impl CommandRequest {
         }
         if !(1..=MAX_COMMAND_TIMEOUT_SECS).contains(&timeout_secs) {
             return Err(ModelCallError::invalid(
-                "timeout_secs must be between 1 and 60",
+                "timeout_secs must be between 1 and 300",
             ));
         }
         Ok(Self {

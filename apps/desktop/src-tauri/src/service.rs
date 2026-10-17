@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 
 use crate::dto::{
     AppInfo, CommandError, GroupView, HostInput, HostView, KeyErrorDetails, ObservedKeyView,
-    ProbeView, StorageStatus, TerminalEvent, TrustMode, TrustView,
+    ProbeView, SshKeyView, StorageStatus, TerminalEvent, TrustMode, TrustView,
 };
 
 /// How long a probed key may be confirmed. Short on purpose.
@@ -191,6 +191,164 @@ impl Services {
         })
     }
 
+    pub fn ssh_key_list(&self) -> Result<Vec<SshKeyView>, CommandError> {
+        self.lock_db()?
+            .list_ssh_keys()
+            .map(|keys| keys.into_iter().map(SshKeyView::from).collect())
+            .map_err(storage_error)
+    }
+
+    pub fn ssh_key_import(
+        &self,
+        name: String,
+        private_key_base64: String,
+        passphrase: Option<String>,
+    ) -> Result<SshKeyView, CommandError> {
+        let name = valid_key_name(&name)?;
+        let private_key_base64 = zeroize::Zeroizing::new(private_key_base64);
+        let bytes = zeroize::Zeroizing::new(
+            B64.decode(private_key_base64.as_bytes())
+                .map_err(|_| invalid_message("Private key file is not valid base64."))?,
+        );
+        if bytes.len() > 1024 * 1024 {
+            return Err(invalid_message("Private key must be 1 MB or smaller."));
+        }
+        let pem = std::str::from_utf8(&bytes)
+            .map_err(|_| invalid_message("Private key must be a UTF-8 OpenSSH or PEM file."))?;
+        let passphrase = passphrase.filter(|p| !p.is_empty());
+        let parsed = russh::keys::decode_secret_key(pem, passphrase.as_deref()).map_err(|_| {
+            invalid_message("Could not read private key. Check the file and its passphrase.")
+        })?;
+        if matches!(
+            parsed.algorithm(),
+            russh::keys::Algorithm::Rsa { .. } | russh::keys::Algorithm::Dsa
+        ) {
+            return Err(invalid_message("RSA and DSA keys cannot be used by Selai. Import Ed25519 or ECDSA P-256/P-384/P-521."));
+        }
+        let view = key_view(name, parsed.public_key());
+        let id: HostId = view
+            .id
+            .parse()
+            .map_err(|_| invalid_message("Generated SSH key ID is invalid."))?;
+        let private_key = SecretValue::new(bytes.to_vec());
+        self.secrets
+            .put(
+                &SecretKey::managed_ssh_key(id, SshSecretKind::ManagedPrivateKey),
+                &private_key,
+            )
+            .map_err(secret_error)?;
+        if let Some(passphrase) = passphrase {
+            if let Err(err) = self.secrets.put(
+                &SecretKey::managed_ssh_key(id, SshSecretKind::ManagedKeyPassphrase),
+                &SecretValue::new(passphrase),
+            ) {
+                let _ = self.secrets.delete(&SecretKey::managed_ssh_key(
+                    id,
+                    SshSecretKind::ManagedPrivateKey,
+                ));
+                return Err(secret_error(err));
+            }
+        }
+        let record = selai_storage::SshKeyRecord {
+            id: view.id.clone(),
+            name: view.name.clone(),
+            algorithm: view.algorithm.clone(),
+            public_key: view.public_key.clone(),
+            fingerprint_sha256: view.fingerprint_sha256.clone(),
+            created_at_ms: now_ms(),
+        };
+        if let Err(err) = self.lock_db()?.create_ssh_key(&record) {
+            let _ = self.secrets.delete(&SecretKey::managed_ssh_key(
+                id,
+                SshSecretKind::ManagedPrivateKey,
+            ));
+            let _ = self.secrets.delete(&SecretKey::managed_ssh_key(
+                id,
+                SshSecretKind::ManagedKeyPassphrase,
+            ));
+            return Err(storage_error(err));
+        }
+        Ok(view)
+    }
+
+    pub fn ssh_key_generate(
+        &self,
+        name: String,
+        algorithm: String,
+    ) -> Result<SshKeyView, CommandError> {
+        let name = valid_key_name(&name)?;
+        let algorithm = match algorithm.as_str() {
+            "ed25519" => russh::keys::Algorithm::Ed25519,
+            "ecdsa-p256" => russh::keys::Algorithm::Ecdsa {
+                curve: russh::keys::EcdsaCurve::NistP256,
+            },
+            "ecdsa-p384" => russh::keys::Algorithm::Ecdsa {
+                curve: russh::keys::EcdsaCurve::NistP384,
+            },
+            "ecdsa-p521" => russh::keys::Algorithm::Ecdsa {
+                curve: russh::keys::EcdsaCurve::NistP521,
+            },
+            _ => {
+                return Err(invalid_message(
+                    "Choose Ed25519 or ECDSA P-256, P-384, or P-521.",
+                ))
+            }
+        };
+        let mut rng = rand::rng();
+        let key = russh::keys::PrivateKey::random(&mut rng, algorithm)
+            .map_err(|e| invalid_message(&e.to_string()))?;
+        let pem = key
+            .to_openssh(russh::keys::LineEnding::LF)
+            .map_err(|e| invalid_message(&e.to_string()))?;
+        let view = key_view(name, key.public_key());
+        let id: HostId = view
+            .id
+            .parse()
+            .map_err(|_| invalid_message("Generated SSH key ID is invalid."))?;
+        self.secrets
+            .put(
+                &SecretKey::managed_ssh_key(id, SshSecretKind::ManagedPrivateKey),
+                &SecretValue::new(pem.as_bytes().to_vec()),
+            )
+            .map_err(secret_error)?;
+        let record = selai_storage::SshKeyRecord {
+            id: view.id.clone(),
+            name: view.name.clone(),
+            algorithm: view.algorithm.clone(),
+            public_key: view.public_key.clone(),
+            fingerprint_sha256: view.fingerprint_sha256.clone(),
+            created_at_ms: now_ms(),
+        };
+        if let Err(err) = self.lock_db()?.create_ssh_key(&record) {
+            let _ = self.secrets.delete(&SecretKey::managed_ssh_key(
+                id,
+                SshSecretKind::ManagedPrivateKey,
+            ));
+            return Err(storage_error(err));
+        }
+        Ok(view)
+    }
+
+    pub fn ssh_key_delete(&self, id: &str) -> Result<(), CommandError> {
+        let id = parse_id::<HostId>(id, "SSH key")?;
+        self.lock_db()?
+            .delete_ssh_key(&id.to_string())
+            .map_err(storage_error)?;
+        self.secrets
+            .delete(&SecretKey::managed_ssh_key(
+                id,
+                SshSecretKind::ManagedPrivateKey,
+            ))
+            .map_err(secret_error)?;
+        self.secrets
+            .delete(&SecretKey::managed_ssh_key(
+                id,
+                SshSecretKind::ManagedKeyPassphrase,
+            ))
+            .map_err(secret_error)?;
+        Ok(())
+    }
+
     pub fn host_get(&self, id: &str) -> Result<HostView, CommandError> {
         let id = parse_id::<HostId>(id, "host")?;
         let db = self.lock_db()?;
@@ -240,7 +398,29 @@ impl Services {
                 })?
                 .as_str();
             let key = SecretKey::ssh(id, SshSecretKind::PrivateKey);
-            if path.starts_with("vault://") {
+            if let Some(key_id) = path.strip_prefix("vault://key:") {
+                let managed = parse_id::<HostId>(key_id, "SSH key")?;
+                if self
+                    .lock_db()?
+                    .ssh_key(&managed.to_string())
+                    .map_err(storage_error)?
+                    .is_none()
+                    || self
+                        .secrets
+                        .get(&SecretKey::managed_ssh_key(
+                            managed,
+                            SshSecretKind::ManagedPrivateKey,
+                        ))
+                        .map_err(secret_error)?
+                        .is_none()
+                {
+                    return Err(invalid_message(
+                        "Selected SSH key is unavailable in the vault.",
+                    ));
+                }
+                settings.private_key_path = Some(KeyPath::parse(path).map_err(invalid)?);
+                configured = true;
+            } else if path.starts_with("vault://") {
                 if path != format!("vault://{id}")
                     || self.secrets.get(&key).map_err(secret_error)?.is_none()
                 {
@@ -283,7 +463,11 @@ impl Services {
                 }
                 if auth_changed {
                     self.secrets.delete(&password_key).map_err(secret_error)?;
-                    configured = written.contains(&passphrase_key);
+                    configured = settings
+                        .private_key_path
+                        .as_ref()
+                        .is_some_and(|p| p.as_str().starts_with("vault://"))
+                        || written.contains(&passphrase_key);
                 }
             }
         }
@@ -725,6 +909,25 @@ impl Services {
                     .get(&SecretKey::ssh(id, SshSecretKind::KeyPassphrase))
                     .map_err(secret_error)?;
                 if path.starts_with("vault://") {
+                    if let Some(key_id) = path.strip_prefix("vault://key:") {
+                        let key_id = parse_id::<HostId>(key_id, "SSH key")?;
+                        let pem = self
+                            .secrets
+                            .get(&SecretKey::managed_ssh_key(
+                                key_id,
+                                SshSecretKind::ManagedPrivateKey,
+                            ))
+                            .map_err(secret_error)?
+                            .ok_or_else(|| invalid_message("Managed SSH key is missing."))?;
+                        let passphrase = self
+                            .secrets
+                            .get(&SecretKey::managed_ssh_key(
+                                key_id,
+                                SshSecretKind::ManagedKeyPassphrase,
+                            ))
+                            .map_err(secret_error)?;
+                        return Ok(Auth::PrivateKeyData { pem, passphrase });
+                    }
                     let pem = self
                         .secrets
                         .get(&SecretKey::ssh(id, SshSecretKind::PrivateKey))
@@ -828,6 +1031,33 @@ fn observed_view(k: &ObservedHostKey) -> ObservedKeyView {
     }
 }
 
+fn valid_key_name(name: &str) -> Result<String, CommandError> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
+        return Err(invalid_message(
+            "Key name must contain 1 to 80 printable characters.",
+        ));
+    }
+    Ok(name.to_owned())
+}
+
+fn key_view(name: String, public: &russh::keys::PublicKey) -> SshKeyView {
+    let public_key = public.to_openssh().unwrap_or_default();
+    let algorithm = public_key
+        .split_whitespace()
+        .next()
+        .unwrap_or("unknown")
+        .to_owned();
+    SshKeyView {
+        id: HostId::new().to_string(),
+        name,
+        algorithm,
+        public_key,
+        fingerprint_sha256: public.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
+        created_at_ms: now_ms(),
+    }
+}
+
 impl HostInput {
     fn to_settings(&self) -> Result<HostSettings, CommandError> {
         let auth = AuthMethod::parse(&self.auth_method).ok_or_else(|| {
@@ -904,6 +1134,10 @@ fn parse_id<T: std::str::FromStr>(raw: &str, what: &str) -> Result<T, CommandErr
 
 fn invalid(err: impl SelaiError + std::fmt::Display) -> CommandError {
     CommandError::new(err.code(), err.to_string())
+}
+
+fn invalid_message(message: &str) -> CommandError {
+    CommandError::new(ErrorCode::InvalidInput, message)
 }
 
 fn storage_error(err: StorageError) -> CommandError {

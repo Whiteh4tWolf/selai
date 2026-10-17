@@ -31,6 +31,8 @@ selai-platform = { version = "0.1.1", path = "../../../crates/selai-platform" }
 rfd = "0.15"
 fs2 = "0.4.3"
 sha2 = "0.11"
+rand = "0.10.3"
+ssh-key = { version = "=0.7.0-rc.11", features = ["rand_core"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2", features = [] }

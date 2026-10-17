@@ -11,6 +11,7 @@ mod hosts;
 mod migrate;
 mod providers;
 mod recovery;
+mod ssh_keys;
 mod vault_credentials;
 
 #[cfg(test)]
@@ -28,3 +29,4 @@ pub use hosts::{GroupRecord, HostRecord, PinOutcome, PinnedKey, LOCAL_HOST_ID};
 pub use migrate::{Migration, MIGRATIONS};
 pub use providers::ProviderRecord;
 pub use recovery::ReconcileReport;
+pub use ssh_keys::SshKeyRecord;

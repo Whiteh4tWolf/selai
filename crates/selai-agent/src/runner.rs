@@ -30,6 +30,9 @@ use crate::{
 
 /// How long the sudo check may take before it counts as a failure.
 const SUDO_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+/// A longer install step is allowed only after the operator enabled root
+/// approval for the rest of this task. The task's total wall time stays 10 min.
+const TASK_APPROVED_ROOT_COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 
 const SYSTEM_PROMPT: &str = "You are Selai's operations assistant for one remote host. \
 The operator chats with you while this host is selected, so not every message is about the host: \
@@ -401,8 +404,14 @@ where
 
     let command_text = request.command_text();
     let digest = request.digest();
-    let decision = evaluate(&scope, &request);
     let execution = ExecutionId::new();
+    let auto_approved_root =
+        request.runs_as_root() && ctx.waiter.task_root_approved(spec.task, execution);
+    let decision = if auto_approved_root {
+        Decision::Allow
+    } else {
+        evaluate(&scope, &request)
+    };
     let redacted = redact(&command_text, &[]).text;
 
     // Recorded before anything else happens. If this fails, nothing runs.
@@ -417,7 +426,11 @@ where
             tool_name: request.tool_name().to_owned(),
             command_redacted: redacted.clone(),
             command_sha256: digest.clone(),
-            policy_decision: decision.as_str().to_owned(),
+            policy_decision: if auto_approved_root {
+                "task_root_approval".to_owned()
+            } else {
+                decision.as_str().to_owned()
+            },
             now_ms: now_ms(),
         })
         .map_err(|e| {
@@ -482,6 +495,25 @@ where
             Ok(given) => password = given,
             Err(reply) => return Ok(reply),
         }
+    } else if auto_approved_root && sudo == Some(SudoStatus::PasswordRequired) {
+        password = ctx.waiter.task_sudo_password(spec.task);
+    }
+
+    if auto_approved_root {
+        ctx.store
+            .audit(
+                "task_root_approval_used",
+                Some(spec.task),
+                Some(execution),
+                &json!({"host_id": host.to_string()}),
+                now_ms(),
+            )
+            .map_err(|e| {
+                fatal(
+                    "AUDIT_WRITE_FAILED",
+                    format!("the root command was not run because its approval could not be audited: {e}"),
+                )
+            })?;
     }
 
     // Only a host that asks for a password gets one.
@@ -700,7 +732,13 @@ where
         return Err(Stop::Cancelled);
     }
     let limits = ctx.spec.limits;
-    let timeout = Duration::from_secs(u64::from(request.timeout_secs())).min(limits.max_command);
+    let command_limit =
+        if request.runs_as_root() && ctx.waiter.task_root_approved(ctx.spec.task, execution) {
+            TASK_APPROVED_ROOT_COMMAND_TIMEOUT
+        } else {
+            limits.max_command
+        };
+    let timeout = Duration::from_secs(u64::from(request.timeout_secs())).min(command_limit);
     let shell_command = request.shell_command();
     let result = if request.runs_as_root() {
         ctx.executor

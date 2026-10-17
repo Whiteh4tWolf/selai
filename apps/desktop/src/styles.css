@@ -831,6 +831,24 @@ button {
   font-size: 12px;
 }
 
+.key-manager-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.key-manager-row code {
+  display: block;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .icon-btn {
   display: inline-grid;
   place-items: center;
@@ -1697,6 +1715,14 @@ details.advanced > .form-section {
   gap: 0.5rem;
   padding: 0.6rem 0.75rem;
   font-size: 12.5px;
+}
+
+.approval-task-root {
+  margin: 0 0.75rem 0.7rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 
 .approval-foot .grow {

@@ -37,6 +37,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 7,
         sql: include_str!("../migrations/0007_vault_credentials.sql"),
     },
+    Migration {
+        version: 8,
+        sql: include_str!("../migrations/0008_ssh_keys.sql"),
+    },
 ];
 
 /// Applies every migration newer than the database's recorded version.

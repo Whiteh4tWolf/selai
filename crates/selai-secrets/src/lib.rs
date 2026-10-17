@@ -26,6 +26,8 @@ pub enum SshSecretKind {
     /// chose "Remember for this host".
     SudoPassword,
     PrivateKey,
+    ManagedPrivateKey,
+    ManagedKeyPassphrase,
 }
 
 impl SshSecretKind {
@@ -35,6 +37,8 @@ impl SshSecretKind {
             Self::KeyPassphrase => "key_passphrase",
             Self::SudoPassword => "sudo_password",
             Self::PrivateKey => "private_key",
+            Self::ManagedPrivateKey => "managed_private_key",
+            Self::ManagedKeyPassphrase => "managed_key_passphrase",
         }
     }
 }
@@ -52,9 +56,21 @@ impl SecretKey {
         let valid = match parts.as_slice() {
             ["ssh", id, kind] => {
                 id.parse::<HostId>().is_ok()
-                    && ["password", "key_passphrase", "sudo_password", "private_key"].contains(kind)
+                    && [
+                        "password",
+                        "key_passphrase",
+                        "sudo_password",
+                        "private_key",
+                        "managed_private_key",
+                        "managed_key_passphrase",
+                    ]
+                    .contains(kind)
             }
             ["provider", id, "api_key"] => id.parse::<ProviderId>().is_ok(),
+            ["ssh-key", id, kind] => {
+                id.parse::<HostId>().is_ok()
+                    && ["managed_private_key", "managed_key_passphrase"].contains(kind)
+            }
             _ => false,
         };
         valid.then(|| Self {
@@ -64,6 +80,12 @@ impl SecretKey {
     pub fn ssh(host: HostId, kind: SshSecretKind) -> Self {
         Self {
             account: format!("ssh/{host}/{}", kind.as_str()),
+        }
+    }
+
+    pub fn managed_ssh_key(id: HostId, kind: SshSecretKind) -> Self {
+        Self {
+            account: format!("ssh-key/{id}/{}", kind.as_str()),
         }
     }
 

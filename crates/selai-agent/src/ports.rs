@@ -4,7 +4,7 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use selai_domain::{ApprovalId, ExecutionId};
+use selai_domain::{ApprovalId, ExecutionId, TaskId};
 use selai_secrets::SecretValue;
 use selai_ssh::{ExecOutput, SshError, SudoStatus};
 use selai_storage::ApprovalDecision;
@@ -59,6 +59,18 @@ pub trait ApprovalWaiter: Send + Sync {
     /// The sudo password the operator gave with this approval, if any. Taking
     /// it removes it, so it is used for one command only.
     fn take_sudo_password(&self, _approval: ApprovalId) -> Option<SecretValue> {
+        None
+    }
+
+    /// Whether the operator enabled root-command approval for this live task.
+    fn task_root_approved(&self, _task: TaskId, _execution: ExecutionId) -> bool {
+        false
+    }
+
+    /// Returns the task-scoped sudo password, if one was provided with the
+    /// approval that enabled root commands. Implementations must keep it only
+    /// in memory and clear it when the task ends or the vault locks.
+    fn task_sudo_password(&self, _task: TaskId) -> Option<SecretValue> {
         None
     }
 }

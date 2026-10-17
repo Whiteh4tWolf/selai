@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { describeError, hostList, hostSave, kdbxPreview, type HostView } from '../ipc';
+import { describeError, hostList, hostSave, kdbxPreview, sshConfigRead, type HostView } from '../ipc';
 import { Drawer } from '../ui/Overlay';
 import { collectPages } from '../ui/collectPages';
 import {
-  FIELDS, MAX_IMPORT_BYTES, MAX_KDBX_BYTES, TEMPLATE, guessMapping, parseProfileTable, prepareProfiles,
+  FIELDS, MAX_IMPORT_BYTES, MAX_KDBX_BYTES, TEMPLATE, guessMapping, parseProfileTable, parseSshConfig, prepareProfiles,
   type ColumnMapping, type ImportField, type ProfileTable,
 } from './sshProfileImport';
 
@@ -74,6 +74,28 @@ export function HostImport({ onClose, onImported }: Props) {
       setExisting(hosts);
       setSelected(new Set(parsed.rows.map((_, index) => index)));
       setFileName(file.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadDefaultSshConfig() {
+    setTable(null);
+    setKdbxFile(null);
+    setKdbxPassphrase('');
+    setResult(null);
+    setError(null);
+    setBusy(true);
+    try {
+      const parsed = parseSshConfig(await sshConfigRead());
+      const hosts = await allHosts();
+      setTable(parsed);
+      setMapping(guessMapping(parsed.headers));
+      setExisting(hosts);
+      setSelected(new Set(parsed.rows.map((_, index) => index)));
+      setFileName('~/.ssh/config');
     } catch (err) {
       setError(err instanceof Error ? err.message : describeError(err));
     } finally {
@@ -158,12 +180,13 @@ export function HostImport({ onClose, onImported }: Props) {
       }
     >
       <div className="form-section">
-        <p className="muted">Choose a CSV or JSON export, or a password-protected KDBX file. Bitwarden SSH logins, Passbolt exports, and host lists using common column names are recognized. Other exports can use the Selai CSV template.</p>
+        <p className="muted">Choose a CSV or JSON export, a password-protected KDBX file, or import your OpenSSH config. Bitwarden SSH logins, Passbolt exports, and host lists using common column names are recognized. Other exports can use the Selai CSV template.</p>
         <p className="muted">Only SSH/SFTP addresses are taken from password-manager URI fields. Passwords are hidden here and saved in your encrypted vault. The source export file is not retained by Selai.</p>
         <a className="btn btn-sm" download="selai-ssh-profiles.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(TEMPLATE)}`}>Download CSV template</a>
+        <button type="button" className="btn btn-sm" onClick={() => void loadDefaultSshConfig()} disabled={busy}>Import ~/.ssh/config</button>
         <label className="field">
-          Profile export file
-          <input type="file" accept=".csv,.json,.kdbx,text/csv,application/json,application/octet-stream" disabled={busy} onChange={(event) => {
+          Profile export or SSH config file
+          <input type="file" accept=".csv,.json,.kdbx,.config,.sshconfig,config,ssh_config,text/csv,application/json,text/plain,application/octet-stream" disabled={busy} onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             event.currentTarget.value = '';
             void chooseFile(file);
@@ -193,6 +216,7 @@ export function HostImport({ onClose, onImported }: Props) {
           Imported {result.saved}; skipped {result.skipped}; failed {result.failures.length}.
         </p>}
         {result?.failures.map((failure) => <p key={failure} className="hint">{failure}</p>)}
+        <p className="hint">SSH config import uses concrete Host aliases and common options such as HostName, User, Port, IdentityFile, ConnectTimeout, and ServerAliveInterval. Include, Match, ProxyJump, and ProxyCommand are not applied. IdentityFile contents are read locally and stored in the encrypted vault when imported.</p>
       </div>
 
       {table && (
