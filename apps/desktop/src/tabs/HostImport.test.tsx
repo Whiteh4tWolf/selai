@@ -15,7 +15,7 @@ describe('HostImport', () => {
     const csv = 'type,name,login_uri,login_username,login_password,notes\nlogin,Website,https://example.com,web,web-secret,private note\nlogin,Production,ssh://prod.example.com,ops,ssh-secret,private note\n';
     const file = new File([csv], 'bitwarden.csv', { type: 'text/csv' });
     Object.defineProperty(file, 'text', { value: async () => csv });
-    fireEvent.change(screen.getByLabelText('Profile export file'), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText('Profile export or SSH config file'), { target: { files: [file] } });
 
     expect(await screen.findByText('ops@prod.example.com')).toBeInTheDocument();
     expect(screen.getByText('Only SSH/SFTP addresses or hostnames are supported.')).toBeInTheDocument();
@@ -38,7 +38,7 @@ describe('HostImport', () => {
     render(<HostImport onClose={() => undefined} onImported={vi.fn().mockResolvedValue(undefined)} />);
 
     const file = new File([new Uint8Array([1, 2, 3])], 'passbolt.kdbx');
-    fireEvent.change(screen.getByLabelText('Profile export file'), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText('Profile export or SSH config file'), { target: { files: [file] } });
     fireEvent.change(screen.getByLabelText('KDBX passphrase'), { target: { value: 'vault-passphrase' } });
     fireEvent.click(screen.getByRole('button', { name: 'Unlock KDBX' }));
 

@@ -371,7 +371,7 @@ describe('AgentPanel', () => {
     expect(card).toHaveTextContent('Run this command on production-web?');
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, undefined));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, undefined, false));
     expect(await screen.findByText('Approved. Waiting for the result.')).toBeInTheDocument();
   });
 
@@ -596,7 +596,7 @@ describe('AgentPanel', () => {
       expect(card).toHaveTextContent('Run this command as root on production-web?');
       expect(await screen.findByLabelText('Use my SSH login password')).toBeChecked();
       fireEvent.click(screen.getByRole('button', { name: 'Approve as root' }));
-      await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, { source: 'login' }));
+      await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, { source: 'login' }, false));
     });
 
     it('needs a typed password before approving, and can remember it', async () => {
@@ -610,7 +610,7 @@ describe('AgentPanel', () => {
       expect(approve).toBeEnabled();
       fireEvent.click(approve);
       await waitFor(() =>
-        expect(decide).toHaveBeenCalledWith('a1', true, { source: 'typed', password: 's3cret', remember: true }),
+        expect(decide).toHaveBeenCalledWith('a1', true, { source: 'typed', password: 's3cret', remember: true }, false),
       );
       expect(screen.queryByDisplayValue('s3cret')).not.toBeInTheDocument();
     });
@@ -621,7 +621,7 @@ describe('AgentPanel', () => {
       await rootApproval('no_password');
       expect(screen.getByText(/does not ask for a password/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Approve as root' }));
-      await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, undefined));
+      await waitFor(() => expect(decide).toHaveBeenCalledWith('a1', true, undefined, false));
       expect(options).not.toHaveBeenCalled();
     });
   });

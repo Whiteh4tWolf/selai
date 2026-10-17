@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ipc from '../ipc';
 import { HostForm } from './HostForm';
 
 afterEach(() => vi.restoreAllMocks());
+beforeEach(() => vi.spyOn(ipc, 'sshKeyList').mockResolvedValue([{
+  id: 'key1', name: 'Work key', algorithm: 'ssh-ed25519', publicKey: 'ssh-ed25519 AAAA',
+  fingerprintSha256: 'SHA256:example', createdAtMs: 1,
+}]));
 
 function fill(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -56,10 +60,11 @@ describe('HostForm', () => {
     fill('Username', 'ops');
     fill('Password', 'typed by mistake');
     fireEvent.click(screen.getByRole('button', { name: 'Private key' }));
-    fill('Private key file path', '/home/ops/.ssh/id_ed25519');
+    await screen.findByRole('option', { name: 'Work key · ssh-ed25519' });
+    fill('SSH key', 'vault://key:key1');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(save).toHaveBeenCalled());
-    expect(save.mock.calls[0]?.[0]).toMatchObject({ authMethod: 'private_key', password: undefined });
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ authMethod: 'private_key', privateKeyPath: 'vault://key:key1', password: undefined });
   });
 
   it('never prefills a saved secret when editing', () => {
