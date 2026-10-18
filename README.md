@@ -8,6 +8,7 @@ Terminals, an AI chat, and command history in one app. You choose where the assi
 <p align="center"><sub>Preview 0.1.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
 
 <p align="center">
+  <a href="#quick-demo">Demo</a> ·
   <a href="#screenshots">Screenshots</a> ·
   <a href="#features">Features</a> ·
   <a href="#get-started">Get started</a> ·
@@ -16,8 +17,10 @@ Terminals, an AI chat, and command history in one app. You choose where the assi
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/workspace-dark.png" alt="Selai workbench: the host explorer on the left, a terminal in the middle, and the AI assistant answering a disk usage question on the right" width="920">
+  <a href="docs/media/selai-ssh-ai-demo.mp4"><img src="docs/media/selai-ssh-ai-demo-poster.jpg" alt="Watch the Selai demo: add an SSH profile, connect, and use AI Assistant to inspect and restart nginx with command approval" width="920"></a>
 </p>
+
+<p align="center"><a href="docs/media/selai-ssh-ai-demo.mp4">Watch the 59-second demo</a> · English captions · Dark mode</p>
 
 Selai brings SSH hosts, terminal tabs, an AI chat, and command history into one
 desktop app. You choose the machine the assistant may work on. Routine
@@ -42,6 +45,16 @@ never included in requests to an AI provider.
 > provider coverage across all platforms is not established. See [current milestone evidence](docs/release/milestones.md)
 > and [known security limits](SECURITY.md) before using Selai with sensitive
 > systems.
+
+## Quick demo
+
+[Watch or download the walkthrough](docs/media/selai-ssh-ai-demo.mp4): add an SSH
+profile, review the server fingerprint, connect to the terminal, then select the
+host in AI Assistant, review a proposed command, approve it, and inspect the result.
+
+The video records Selai's frontend with simulated SSH and AI responses; it does
+not contact a live server. The AI provider is already configured for this demo.
+[English subtitles](docs/media/selai-ssh-ai-demo.en.srt) are also available.
 
 ## Screenshots
 

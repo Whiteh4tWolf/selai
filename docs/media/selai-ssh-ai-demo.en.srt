@@ -1,0 +1,39 @@
+1
+00:00:00,000 --> 00:00:10,234
+01 / SSH PROFILE: Add a deployment host with its address, SSH port, username, and authentication.
+
+2
+00:00:10,234 --> 00:00:11,359
+02 / CONNECT: Save & connect opens the terminal. Credentials are not sent until the server key is trusted.
+
+3
+00:00:11,359 --> 00:00:17,812
+VERIFY FINGERPRINT: Compare the Ed25519 SHA-256 fingerprint through a trusted channel before accepting.
+
+4
+00:00:17,812 --> 00:00:22,843
+SSH TERMINAL: Connected as deploy on staging-web. Confirm the hostname and current load.
+
+5
+00:00:22,843 --> 00:00:27,281
+03 / AI ASSISTANT: Open AI Assistant. The demo provider is already configured and tool-calling verified.
+
+6
+00:00:27,281 --> 00:00:36,359
+SELECT TARGET: Use @ to target staging-web explicitly; the selected host scopes this request.
+
+7
+00:00:36,359 --> 00:00:41,968
+RUN DIAGNOSTICS: The assistant checks disk space and service state before proposing a privileged change.
+
+8
+00:00:41,968 --> 00:00:47,828
+04 / REVIEW COMMAND: Review the host and exact command: sudo systemctl restart nginx. Approve only this command.
+
+9
+00:00:47,828 --> 00:00:54,531
+VERIFY RESULT: After approval, Selai runs the command and the assistant verifies nginx again.
+
+10
+00:00:54,531 --> 00:00:58,781
+COMPLETE: nginx is active; restart exit code is 0. The response includes disk usage and the target host.
