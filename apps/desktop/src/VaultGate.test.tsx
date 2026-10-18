@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { VaultGate } from './VaultGate';
@@ -11,7 +11,7 @@ describe('Vault gate', () => {
   afterEach(() => vi.clearAllMocks());
   it('does not mount or fetch workspace data before unlock', async () => {
     const load = vi.fn(); function Workspace() { useEffect(load, []); return <div>Private workspace</div>; }
-    render(<VaultGate><Workspace /></VaultGate>);
+    await act(async () => { render(<VaultGate><Workspace /></VaultGate>); });
     expect(await screen.findByText('Unlock Selai')).toBeInTheDocument(); expect(load).not.toHaveBeenCalled();
     vi.mocked(vault.vaultAction).mockImplementation(async () => { vi.mocked(vault.vaultStatus).mockResolvedValue(status('unlocked')); return null; });
     fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'forest river orange telescope' } }); fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
@@ -29,7 +29,7 @@ describe('Vault gate', () => {
   });
   it('keeps credentials out of the workspace on a failed unlock', async () => {
     vi.mocked(vault.vaultAction).mockRejectedValue({ code: 'INVALID_INPUT', message: 'Could not unlock the vault.' });
-    render(<VaultGate><div>Private workspace</div></VaultGate>); await screen.findByText('Unlock Selai');
+    await act(async () => { render(<VaultGate><div>Private workspace</div></VaultGate>); }); await screen.findByText('Unlock Selai');
     fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'wrong' } }); fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not unlock'); expect(screen.queryByText('Private workspace')).not.toBeInTheDocument();
   });

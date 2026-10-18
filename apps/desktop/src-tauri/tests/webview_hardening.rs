@@ -62,7 +62,7 @@ fn csp_is_set_and_refuses_remote_code_and_plugins() {
 }
 
 #[test]
-fn default_capability_grants_only_core_apis() {
+fn default_capability_grants_only_core_and_window_controls() {
     let capability = read_json("capabilities/default.json");
     let permissions: Vec<String> = capability["permissions"]
         .as_array()
@@ -70,7 +70,16 @@ fn default_capability_grants_only_core_apis() {
         .iter()
         .map(|p| p.as_str().unwrap_or_default().to_owned())
         .collect();
-    assert_eq!(permissions, vec!["core:default".to_owned()]);
+    assert_eq!(
+        permissions,
+        vec![
+            "core:default",
+            "core:window:allow-close",
+            "core:window:allow-minimize",
+            "core:window:allow-toggle-maximize",
+            "core:window:allow-start-dragging",
+        ]
+    );
     for forbidden in ["shell", "fs", "http", "dialog", "process", "opener"] {
         assert!(
             !permissions.iter().any(|p| p.starts_with(forbidden)),

@@ -15,6 +15,15 @@ use common::*;
 
 const LIMIT: Duration = Duration::from_secs(15);
 
+/// These tests exercise metadata, not SSH authentication; they must not create
+/// the root-only Linux sshd fixture on macOS.
+fn metadata_host(label: &str) -> HostInput {
+    serde_json::from_value(json!({"label":label,"hostname":"127.0.0.1","port":22,
+        "username":"fixture","authMethod":"password","connectTimeoutSeconds":15,
+        "keepAliveSeconds":30,"terminalType":"xterm-256color"}))
+    .expect("metadata-only profile")
+}
+
 /// A provider whose tool calling verified, without any SSH host.
 async fn provider(h: &Harness, mock: &MockServer) -> String {
     let p = h
@@ -48,7 +57,7 @@ async fn the_local_computer_is_listed_apart_and_cannot_be_edited_or_probed() {
         err_code(probe.expect_err("no host key")),
         ErrorCode::InvalidInput
     );
-    let mut edit = password_host("renamed", 22);
+    let mut edit = metadata_host("renamed");
     edit.id = Some(local.id.clone());
     edit.expected_updated_at_ms = Some(local.updated_at_ms);
     assert_eq!(
@@ -249,7 +258,7 @@ async fn a_pinned_server_is_remembered_and_archived_ones_cannot_be_pinned() {
 
     let ssh = h
         .services
-        .host_save(password_host("archived-box", 22))
+        .host_save(metadata_host("archived-box"))
         .expect("save");
     h.services.host_archive(&ssh.id).expect("archive");
     let refused = h.services.preferences_set(pin(Some(&ssh.id)));
