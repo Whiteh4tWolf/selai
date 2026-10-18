@@ -79,6 +79,7 @@ fn host() -> HostInput {
         expected_updated_at_ms: None,
         label: "synthetic-server".into(),
         group_id: None,
+        proxy_id: None,
         hostname: "example.test".into(),
         port: 22,
         username: "test".into(),

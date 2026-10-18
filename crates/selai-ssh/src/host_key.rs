@@ -84,7 +84,11 @@ pub(crate) enum Verdict {
 pub(crate) struct PinVerifier {
     pins: Vec<PinnedHostKey>,
     outcome: Arc<Mutex<Outcome>>,
+    pub(crate) remote: RemoteRoute,
 }
+
+pub(crate) type RemoteRoute =
+    Arc<Mutex<Option<(u32, tokio::sync::mpsc::Sender<russh::Channel<client::Msg>>)>>>;
 
 impl PinVerifier {
     pub(crate) fn new(pins: Vec<PinnedHostKey>) -> (Self, Arc<Mutex<Outcome>>) {
@@ -93,6 +97,7 @@ impl PinVerifier {
             Self {
                 pins,
                 outcome: Arc::clone(&outcome),
+                remote: Arc::new(Mutex::new(None)),
             },
             outcome,
         )
@@ -122,6 +127,30 @@ impl PinVerifier {
 impl Handler for PinVerifier {
     type Error = SshError;
 
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _address: &str,
+        port: u32,
+        _origin: &str,
+        _origin_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let sender = self.remote.lock().ok().and_then(|route| {
+            route
+                .as_ref()
+                .filter(|(p, _)| *p == 0 || *p == port)
+                .map(|(_, sender)| sender.clone())
+        });
+        if let Some(sender) = sender {
+            if sender.try_send(channel).is_ok() {
+                reply.accept().await;
+            }
+        }
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
@@ -150,9 +179,20 @@ pub async fn probe_host_key(
     endpoint: &Endpoint,
     timeout: std::time::Duration,
 ) -> Result<ObservedHostKey, SshError> {
+    probe_host_key_via(endpoint, timeout, None).await
+}
+
+pub async fn probe_host_key_via(
+    endpoint: &Endpoint,
+    timeout: std::time::Duration,
+    proxy: Option<crate::ProxyOptions>,
+) -> Result<ObservedHostKey, SshError> {
     let (verifier, outcome) = PinVerifier::new(Vec::new());
     let config = Arc::new(client::Config::default());
-    let attempt = client::connect(config, endpoint.socket_addr_pair(), verifier);
+    let attempt = async {
+        let stream = crate::proxy::transport(endpoint, proxy.as_ref()).await?;
+        client::connect_stream(config, stream, verifier).await
+    };
     let result = tokio::time::timeout(timeout, attempt).await;
 
     let guard = outcome

@@ -24,8 +24,8 @@ use selai_domain::{
 };
 use selai_secrets::{SecretKey, SecretStore, SecretValue, SshSecretKind};
 use selai_ssh::{
-    connect, probe_host_key, Auth, ConnectOptions, Endpoint, ObservedHostKey, PinnedHostKey,
-    Session, Shell, ShellEvent, SshError,
+    connect_via, probe_host_key_via, Auth, ConnectOptions, Endpoint, ObservedHostKey,
+    PinnedHostKey, Session, Shell, ShellEvent, SshError,
 };
 use selai_storage::{Database, PinOutcome, PinnedKey, ReconcileReport, StorageError};
 use tokio::sync::mpsc;
@@ -71,6 +71,7 @@ pub struct Services {
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
     pub(crate) document_sealer: Option<DocumentSealer>,
     pub(crate) vault_managed: bool,
+    pub(crate) network: Arc<crate::network_service::NetworkRegistry>,
     reconcile: ReconcileReport,
 }
 
@@ -123,6 +124,7 @@ impl Services {
             terminals: Arc::new(Mutex::new(HashMap::new())),
             document_sealer: None,
             vault_managed: false,
+            network: Arc::new(crate::network_service::NetworkRegistry::default()),
             reconcile,
         })
     }
@@ -186,7 +188,15 @@ impl Services {
             )
             .map_err(storage_error)?;
         Ok(Page {
-            items: page.items.into_iter().map(HostView::from).collect(),
+            items: page
+                .items
+                .into_iter()
+                .map(|host| {
+                    let mut view = HostView::from(host);
+                    view.proxy_id = db.host_proxy(&view.id).map_err(storage_error)?;
+                    Ok(view)
+                })
+                .collect::<Result<_, CommandError>>()?,
             next_cursor: page.next_cursor,
         })
     }
@@ -359,15 +369,28 @@ impl Services {
     pub fn host_get(&self, id: &str) -> Result<HostView, CommandError> {
         let id = parse_id::<HostId>(id, "host")?;
         let db = self.lock_db()?;
-        db.get_host(id)
+        let mut view = db
+            .get_host(id)
             .map_err(storage_error)?
             .map(HostView::from)
-            .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "host not found"))
+            .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "host not found"))?;
+        view.proxy_id = db.host_proxy(&view.id).map_err(storage_error)?;
+        Ok(view)
     }
 
     /// Creates or updates a host. Secrets are written to the active store first;
     /// the host row is committed after, so a failed store write changes nothing.
     pub fn host_save(&self, input: HostInput) -> Result<HostView, CommandError> {
+        if let Some(id) = &input.proxy_id {
+            if self
+                .lock_db()?
+                .network_profile(id, "proxy")
+                .map_err(storage_error)?
+                .is_none()
+            {
+                return Err(invalid_message("Select an existing proxy profile."));
+            }
+        }
         let mut settings = input.to_settings()?;
         let now = now_ms();
         let previous = match input.id.as_deref() {
@@ -510,6 +533,9 @@ impl Services {
         self.lock_db()?
             .set_credential_configured(id, configured, now)
             .map_err(storage_error)?;
+        self.lock_db()?
+            .set_host_proxy(&id.to_string(), input.proxy_id.as_deref())
+            .map_err(storage_error)?;
         self.host_get(&saved.id.to_string())
     }
 
@@ -518,6 +544,9 @@ impl Services {
         let id = parse_id::<HostId>(id, "host")?;
         self.lock_db()?
             .archive_host(id, now_ms())
+            .map_err(storage_error)?;
+        self.lock_db()?
+            .set_host_proxy(&id.to_string(), None)
             .map_err(storage_error)?;
         self.secrets
             .delete(&SecretKey::ssh(id, SshSecretKind::Password))
@@ -549,8 +578,8 @@ impl Services {
             .transpose()?;
         self.lock_db()?
             .move_host_to_group(id, group, expected_updated_at_ms, now_ms())
-            .map(HostView::from)
-            .map_err(storage_error)
+            .map_err(storage_error)?;
+        self.host_get(&id.to_string())
     }
 
     pub fn group_list(&self) -> Result<Vec<GroupView>, CommandError> {
@@ -619,9 +648,10 @@ impl Services {
         self.refuse_local(id)?;
         let (host, pins) = self.active_host_and_pins(id)?;
         let endpoint = Endpoint::new(host.hostname.clone(), host.port);
-        let observed = probe_host_key(
+        let observed = probe_host_key_via(
             &endpoint,
             Duration::from_secs(u64::from(host.connect_timeout_seconds)),
+            self.proxy_for_host(id)?,
         )
         .await
         .map_err(|e| ssh_error(&e))?;
@@ -752,7 +782,7 @@ impl Services {
                 s => Some(Duration::from_secs(u64::from(s))),
             },
         };
-        let session = match connect(options).await {
+        let session = match connect_via(options, self.proxy_for_host(id)?).await {
             Ok(session) => session,
             Err(e) => {
                 self.remember_observed_key(id, &e);

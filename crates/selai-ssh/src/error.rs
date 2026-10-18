@@ -67,3 +67,9 @@ impl From<russh::SendError> for SshError {
         Self::ChannelClosed
     }
 }
+
+impl From<std::io::Error> for SshError {
+    fn from(err: std::io::Error) -> Self {
+        Self::ConnectFailed(err.to_string())
+    }
+}

@@ -16,6 +16,7 @@ import { Field } from '../ui/Field';
 import { Drawer } from '../ui/Overlay';
 import { PasswordInput } from '../ui/PasswordInput';
 import { ChevronIcon, KeyIcon } from '../ui/icons';
+import { proxyList, type ProxyProfile } from '../network';
 
 interface Props {
   host: HostView | null;
@@ -23,12 +24,14 @@ interface Props {
   /** `connect` is true when the operator chose "Save & connect". */
   onSaved: (host: HostView, connect: boolean) => void;
   onManageKeys?: () => void;
+  onManageProxies?: () => void;
   suspended?: boolean;
 }
 
 interface FormState {
   label: string;
   groupId: string;
+  proxyId: string;
   hostname: string;
   port: string;
   username: string;
@@ -44,6 +47,7 @@ function initial(host: HostView | null): FormState {
   return {
     label: host?.label ?? '',
     groupId: host?.groupId ?? '',
+    proxyId: host?.proxyId ?? '',
     hostname: host?.hostname ?? '',
     port: String(host?.port ?? 22),
     username: host?.username ?? '',
@@ -69,7 +73,7 @@ function validate(form: FormState): string | null {
   return null;
 }
 
-export function HostForm({ host, onCancel, onSaved, onManageKeys, suspended = false }: Props) {
+export function HostForm({ host, onCancel, onSaved, onManageKeys, onManageProxies, suspended = false }: Props) {
   const [form, setForm] = useState<FormState>(() => initial(host));
   // Secrets live only in this component's local state until submit. They are
   // cleared right after a save. Saved values are revealed only on demand.
@@ -82,6 +86,10 @@ export function HostForm({ host, onCancel, onSaved, onManageKeys, suspended = fa
   const [keyError, setKeyError] = useState<string | null>(null);
   const [keysLoading, setKeysLoading] = useState(false);
   const [groups, setGroups] = useState<GroupView[]>([]);
+  const [proxyEnabled, setProxyEnabled] = useState(Boolean(host?.proxyId));
+  const [proxies, setProxies] = useState<ProxyProfile[]>([]);
+  const [proxyError, setProxyError] = useState<string | null>(null);
+  useEffect(() => { if (suspended || !proxyEnabled) return; let live = true; proxyList().then((rows) => { if (live) { setProxies(rows); setProxyError(null); } }).catch((e) => { if (live) setProxyError(describeError(e)); }); return () => { live = false; }; }, [suspended, proxyEnabled]);
 
 
   useEffect(() => {
@@ -115,12 +123,14 @@ export function HostForm({ host, onCancel, onSaved, onManageKeys, suspended = fa
     setForm((prev) => ({ ...prev, [key]: value }));
 
   async function save(connect: boolean) {
+    if (proxyEnabled && !form.proxyId) { setError('Choose a proxy profile or disable the proxy.'); return; }
     const problem = validate(form);
     if (problem) {
       setError(problem);
       return;
     }
     const input: HostInput = {
+      proxyId: proxyEnabled ? form.proxyId : null,
       id: host?.id,
       expectedUpdatedAtMs: host?.updatedAtMs,
       label: form.label.trim(),
@@ -217,7 +227,13 @@ export function HostForm({ host, onCancel, onSaved, onManageKeys, suspended = fa
         </div>
 
         <div className="form-section">
-          <h3>Credentials</h3>
+          <h3>Connection route</h3>
+          <label className="check"><input type="checkbox" checked={proxyEnabled} onChange={(e) => setProxyEnabled(e.target.checked)} />Connect through a proxy</label>{proxyEnabled && <>
+            <Field label="Proxy profile" hint="Used by terminal, AI Assistant, SFTP, and port forwarding."><select value={form.proxyId} onChange={(e) => set('proxyId')(e.target.value)}><option value="">Choose proxy</option>{proxies.map((proxy) => <option key={proxy.id} value={proxy.id}>{proxy.name} / {proxy.kind === 'http' ? 'HTTP CONNECT' : 'SOCKS5'}</option>)}</select></Field>
+            {proxyError && <p role="alert" className="banner" data-tone="danger">{proxyError}</p>}
+            {onManageProxies && <button type="button" className="btn btn-sm" onClick={onManageProxies}>{proxies.length ? 'Manage proxies' : 'Add a proxy'}<ChevronIcon size={14} /></button>}
+          </>}
+        </div><div className="form-section"><h3>Credentials</h3>
           <label className="field">
             Username
             <input value={form.username} placeholder="root" onChange={(e) => set('username')(e.target.value)} />

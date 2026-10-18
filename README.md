@@ -5,7 +5,7 @@
 <p align="center"><strong>A desktop SSH workbench with a host-scoped AI assistant.</strong><br>
 Terminals, an AI chat, and command history in one app. You choose where the assistant may work and approve its commands, with optional root approval for one request on one host.</p>
 
-<p align="center"><sub>Preview 0.1.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
+<p align="center"><sub>Preview 0.2.0 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
 
 <p align="center">
   <a href="#quick-demo">Demo</a> ·
@@ -39,7 +39,7 @@ never included in requests to an AI provider.
 - **Everything is recorded.** Each request, command, outcome, and token count is
   saved to History, with an audit record written before remote execution.
 
-> **Version 0.1.1 is a preview.** Automated coverage includes Linux SSH and agent
+> **Version 0.2.0 is a preview.** Automated coverage includes Linux SSH and agent
 > flows with an OpenSSH fixture and mock AI providers, plus Windows encryption
 > and vault checks in the release build profile. Full interactive SSH and live
 > provider coverage across all platforms is not established. See [current milestone evidence](docs/release/milestones.md)
@@ -108,6 +108,9 @@ not contact a live server. The AI provider is already configured for this demo.
 | --- | --- |
 | **SSH hosts** | Add, edit, filter, and archive profiles; organize them in collapsible groups; use a password or choose a managed SSH key; save a host and connect in one flow. Reveal a saved login password on demand from the profile editor. Labels can contain spaces. |
 | **SSH keys** | Generate named Ed25519, RSA (2048/3072/4096/8192 bits), or ECDSA P-256/P-384/P-521 key pairs; import existing keys with an optional passphrase; copy public keys and reuse a key across profiles. RSA login uses SHA-2 signatures. Private keys stay in the encrypted vault. |
+| **SFTP** | Browse local and remote folders side by side, upload/download files and folders recursively, and see progress, speed, remaining time, skips, failures, and cancellation. New-folder, rename, and empty-folder/file deletion are available in either panel. |
+| **Port forwarding** | Save and start local, remote, or dynamic SOCKS5 TCP tunnels from a UI. Choose an SSH host, bind address/port and destination, then inspect active connections and byte counts. |
+| **SSH proxies** | Save HTTP CONNECT or SOCKS5 profiles with optional authentication, then enable a proxy on any SSH profile. Terminal, AI, SFTP, forwarding and host-key checks use that route. |
 | **Host verification** | Inspect and explicitly trust a fingerprint on first connection. A changed host key blocks connection until you confirm its replacement. |
 | **Terminal** | Open interactive SSH terminals in tabs, resize them, adjust the terminal font with Ctrl+Plus or Ctrl+Minus, see connection and exit status, reconnect, and edit a host after a failed login. Open a terminal for **This computer** too. |
 | **AI chat** | Discuss a question without a server, or bind a task to one or more SSH hosts or This computer. Mention hosts with `@` for one message to run independent tasks in parallel, follow the focused terminal, or pin a server in the chat. Each host has its own output and change approvals. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
@@ -179,6 +182,72 @@ RSA authentication uses OpenSSL with **RSA-SHA2-256/512**; the server must suppo
 one of these signatures. Legacy RSA/SHA-1 and DSA authentication are unsupported.
 Key generation runs locally, one job at a time, without blocking the UI.
 RSA generation uses OpenSSL and can take longer at larger key sizes.
+
+### SFTP file manager
+
+1. Open **SFTP** in the left menu, choose an SSH profile, and click **Connect**.
+2. Review the SSH fingerprint on first connection, just as for a terminal.
+3. Navigate the local panel and the remote panel using folder names, the parent
+   button, or a path. Filter names, show hidden files, or sort the list.
+4. Select files or folders with checkboxes (Ctrl/Cmd and Shift selection also
+   work). **Upload** sends local selections into the current remote folder;
+   **Download** saves remote selections into the current local folder.
+5. Watch the transfer tray for percentage, bytes, speed, remaining time and file
+   counts. Cancel an active job or retry a failed/cancelled job in the same page.
+
+Folders are copied recursively; symbolic links are skipped. Matching files are
+skipped by default. Choose **Replace matching files** and confirm the transfer to
+replace them. Each file is published after its temporary copy finishes. Cancelling
+keeps completed files and removes the current partial file when the connection is
+available. Transfers continue when you switch or close the page, and the page
+restores active connections when reopened. Disconnecting cancels that connection's
+jobs. A vault lock closes all connections and cancels transfers. Transfer state
+is kept for the current unlocked session; interrupted jobs are not resumed.
+
+The folder toolbar creates folders, renames an entry, and deletes a file or an
+empty folder. Transfers use bounded native buffers with two concurrent jobs;
+file contents never pass through the webview. File lists are virtualized and
+limited to 20,000 entries per directory. A recursive job supports up to 100,000
+entries; select up to 256 top-level entries per job.
+
+### Port forwarding
+
+Open **Port forwarding**, choose **New tunnel**, and save a named configuration:
+
+| Mode | Listening port | Destination |
+| --- | --- | --- |
+| **Local** | This computer | Host/port reached from the SSH server, such as a private database. |
+| **Remote** | SSH server | Host/port reached from this computer, such as a development service. |
+| **Dynamic** | This computer | SOCKS5 TCP destinations selected by the application using the proxy. |
+
+Choose the SSH profile, bind address, and listen port. Local and remote modes
+also ask for destination host and port. Listen port `0` chooses an available
+port; the running card shows the actual port. **Save & start** starts it right
+away. Cards show active connections, sent/received bytes, errors, and a **Stop**
+button. Tunnels stay active while switching pages, and the page restores their
+live status when reopened. Saved tunnels start only when you choose Start.
+
+Bind defaults to `127.0.0.1`. An external bind can expose the listening service
+to other devices. Remote forwarding depends on the server's AllowTcpForwarding
+and GatewayPorts settings. Dynamic forwarding supports SOCKS5 TCP CONNECT,
+including remote DNS with `socks5h://127.0.0.1:<port>`; it has no listener
+authentication and does not carry UDP. Stopping a tunnel or locking the vault
+closes its listener and active connections.
+
+### Proxy profiles
+
+Open **Proxies**, add a named **HTTP CONNECT** or **SOCKS5** endpoint, and enter
+optional username/password authentication. In an SSH profile, enable **Connect
+through a proxy** and select that profile. **Add a proxy** opens management and
+preserves your SSH draft; return with **Back to SSH profile** after saving.
+
+The route applies to terminal, AI Assistant, SFTP, forwarding, and host-key
+probing. The SSH server still needs the same explicit fingerprint trust. Proxy
+passwords stay in the encrypted vault and are never returned with metadata or
+sent to an AI provider. HTTP uses CONNECT with optional Basic authentication;
+SOCKS5 supports username/password and remote DNS. These proxy transports do not
+add TLS for proxy authentication, so use a trusted connection to the proxy.
+ProxyCommand/ProxyJump directives from imported configs are not executed.
 
 ### Assistant and approvals
 
@@ -312,7 +381,7 @@ Keep the old folder until you have verified the restored hosts and history.
 
 ### Install a preview build
 
-Download [Selai 0.1.1 from GitHub Releases](https://github.com/f3ci/selai/releases/tag/v0.1.1).
+Download [Selai 0.2.0 from GitHub Releases](https://github.com/f3ci/selai/releases/tag/v0.2.0).
 Builds are also available from the **Release packaging** workflow artifacts.
 Packages are provided for:
 
@@ -338,7 +407,8 @@ commands, signing status, and workflow instructions.
 5. For AI features, open **Providers**, save a provider, choose a model, and run **Test**.
 6. Open the assistant with **Ctrl+Shift+L**. Select a server or type `@` to
    choose a host for one message. Review any command approval before accepting.
-7. Open **History** to inspect the task and command records.
+7. Use **SFTP** for files, **Port forwarding** for port forwarding, and **Proxies** for saved SSH routes.
+8. Open **History** to inspect the task and command records.
 
 **Ctrl+Shift+E** toggles the host explorer. The status bar lets you switch
 between dark, light, and system theme.

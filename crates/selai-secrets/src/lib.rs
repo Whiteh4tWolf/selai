@@ -67,6 +67,7 @@ impl SecretKey {
                     .contains(kind)
             }
             ["provider", id, "api_key"] => id.parse::<ProviderId>().is_ok(),
+            ["proxy", id, "password"] => id.parse::<HostId>().is_ok(),
             ["ssh-key", id, kind] => {
                 id.parse::<HostId>().is_ok()
                     && ["managed_private_key", "managed_key_passphrase"].contains(kind)
@@ -97,6 +98,12 @@ impl SecretKey {
 
     pub fn account(&self) -> &str {
         &self.account
+    }
+
+    pub fn proxy_password(id: HostId) -> Self {
+        Self {
+            account: format!("proxy/{id}/password"),
+        }
     }
 }
 

@@ -439,6 +439,7 @@ impl VaultManager {
         };
         let started = Instant::now();
         services.close_terminals().await;
+        services.close_network().await;
         let mut flush_started = None;
         loop {
             if started.elapsed() > Duration::from_secs(65) {
@@ -449,6 +450,7 @@ impl VaultManager {
                 if self.leases.load(Ordering::SeqCst) == 0
                     && services.agent.active_count() == 0
                     && services.terminal_count() == 0
+                    && services.network_active_count() == 0
                 {
                     i.flush_required = true;
                     let at = flush_started.get_or_insert_with(Instant::now);

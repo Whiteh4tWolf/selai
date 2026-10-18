@@ -33,6 +33,7 @@ export interface HostView {
   id: string;
   label: string;
   groupId: string | null;
+  proxyId?: string | null;
   hostname: string;
   port: number;
   username: string;
@@ -60,6 +61,7 @@ export interface HostInput {
   expectedUpdatedAtMs?: number;
   label: string;
   groupId?: string | null;
+  proxyId?: string | null;
   hostname: string;
   port: number;
   username: string;

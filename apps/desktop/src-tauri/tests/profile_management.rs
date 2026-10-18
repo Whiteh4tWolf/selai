@@ -12,6 +12,7 @@ fn input(label: &str) -> HostInput {
         expected_updated_at_ms: None,
         label: label.into(),
         group_id: None,
+        proxy_id: None,
         hostname: "example.test".into(),
         port: 22,
         username: "deploy".into(),

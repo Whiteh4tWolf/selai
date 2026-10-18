@@ -106,6 +106,14 @@ export const LockIcon = make(
 );
 export const ChevronIcon = make(<path d="m9 6 6 6-6 6" />);
 export const FolderIcon = make(<path d="M3 7V5a1 1 0 0 1 1-1h6l2 3h8a1 1 0 0 1 1 1v11H3z" />);
+export const ForwardIcon = make(<><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4" /><circle cx="4" cy="7" r="1" /><circle cx="20" cy="17" r="1" /></>);
+export const ProxyIcon = make(<><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="m8 11 8-5M8 13l8 5M19 8v8" /></>);
+export const FilesIcon = make(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16M6 8h3M15 8h3M6 12h3M15 12h3" /></>);
+export const FileIcon = make(<><path d="M14 3H5v18h14V8zM14 3v6h5M8 13h8M8 17h5" /></>);
+export const PlayIcon = make(<path d="m8 4 12 8-12 8z" />);
+export const CopyIcon = make(<><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V3H3v13h5" /></>);
+export const UploadIcon = make(<path d="M12 16V3m-4 4 4-4 4 4M4 15v6h16v-6" />);
+export const UpIcon = make(<path d="M12 20V4m-6 6 6-6 6 6" />);
 export const EyeIcon = make(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
 export const EyeOffIcon = make(<><path d="m3 3 18 18M10.6 5.1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3.1 3.8M6.1 6.1A21 21 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5.9-1.8M10 10a3 3 0 0 0 4 4" /></>);
 export const PinIcon = make(

@@ -48,6 +48,7 @@ fn password_host(label: &str, port: u16, password: &str) -> HostInput {
         expected_updated_at_ms: None,
         label: label.to_owned(),
         group_id: None,
+        proxy_id: None,
         hostname: "127.0.0.1".to_owned(),
         port: u32::from(port),
         username: USER.to_owned(),

@@ -10,8 +10,11 @@ pub mod history_service;
 pub mod kdbx_import;
 pub mod local_exec;
 mod local_terminal;
+mod network_commands;
+pub mod network_service;
 pub mod provider_service;
 pub mod service;
+pub mod sftp_service;
 pub mod vault_service;
 
 use std::sync::Arc;
@@ -62,6 +65,24 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            network_commands::proxy_list,
+            network_commands::forward_watch,
+            network_commands::transfer_watch,
+            network_commands::sftp_list,
+            network_commands::proxy_save,
+            network_commands::proxy_delete,
+            network_commands::forward_list,
+            network_commands::forward_save,
+            network_commands::forward_start,
+            network_commands::forward_stop,
+            network_commands::forward_delete,
+            network_commands::sftp_connect,
+            network_commands::sftp_disconnect,
+            network_commands::files_list,
+            network_commands::files_action,
+            network_commands::transfer_start,
+            network_commands::transfer_list,
+            network_commands::transfer_cancel,
             commands::app_info,
             commands::vault_status,
             commands::vault_activity,

@@ -7,7 +7,7 @@ import { HostsSidebar } from './tabs/HostsSidebar';
 import { ProvidersPanel } from './tabs/ProvidersPanel';
 import { appInfo, describeError, localHost, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
-import { ClockIcon, CloseIcon, KeyIcon, MaximizeIcon, MinimizeIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon } from './ui/icons';
+import { ClockIcon, CloseIcon, KeyIcon, MaximizeIcon, MinimizeIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon, FilesIcon, ForwardIcon, ProxyIcon } from './ui/icons';
 import { SelaiLogo } from './ui/SelaiLogo';
 import { VaultGate } from './VaultGate';
 
@@ -15,11 +15,15 @@ import { VaultGate } from './VaultGate';
 const TerminalStack = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalStack })));
 const SshKeysPage = lazy(() => import('./tabs/SshKeysPage').then((m) => ({ default: m.SshKeysPage })));
 
+const SftpPage = lazy(() => import('./tabs/SftpPage').then((m) => ({ default: m.SftpPage })));
+const ForwardingPage = lazy(() => import('./tabs/ForwardingPage').then((m) => ({ default: m.ForwardingPage })));
+const ProxiesPage = lazy(() => import('./tabs/ProxiesPage').then((m) => ({ default: m.ProxiesPage })));
+
 /** A tab in the centre area: a terminal, or one of the pages that open as a tab. */
-type PageId = 'history' | 'providers' | 'keys';
+type PageId = 'history' | 'providers' | 'keys' | 'sftp' | 'forwarding' | 'proxies';
 type EditorTab = ({ kind: 'terminal' } & TerminalSessionTab) | { kind: PageId; key: PageId };
 
-const PAGE_TITLES: Record<PageId, string> = { history: 'History', providers: 'Providers', keys: 'SSH Keys' };
+const PAGE_TITLES: Record<PageId, string> = { history: 'History', providers: 'Providers', keys: 'SSH Keys', sftp: 'SFTP', forwarding: 'Port forwarding', proxies: 'Proxies' };
 
 let nextTabNumber = 0;
 
@@ -356,12 +360,16 @@ export function Workbench() {
             else setSidebarOpen((o) => !o);
           }, 'Ctrl+Shift+E')}
           {activity('SSH Keys', <KeyIcon size={20} />, active?.kind === 'keys', () => openPage('keys'))}
+          {activity('SFTP', <FilesIcon size={20} />, active?.kind === 'sftp', () => openPage('sftp'))}
+          {activity('Port forwarding', <ForwardIcon size={20} />, active?.kind === 'forwarding', () => openPage('forwarding'))}
+          {activity('Proxies', <ProxyIcon size={20} />, active?.kind === 'proxies', () => openPage('proxies'))}
           {activity('History', <ClockIcon size={20} />, active?.kind === 'history', () => openPage('history'))}
           {activity('Providers', <PlugIcon size={20} />, active?.kind === 'providers', () => openPage('providers'))}
         </nav>
 
         <aside className="sidebar" hidden={!sidebarOpen} style={{ width: side.width }}>
           <HostsSidebar onConnect={openTerminal} sessions={sessions} editRequest={editRequest}
+            onManageProxies={() => { setProfilePaused(true); openPage('proxies'); if (window.innerWidth <= 1100) setChatOpen(false); }}
             profilePaused={profilePaused} onManageKeys={() => {
               setProfilePaused(true); openPage('keys');
               if (window.innerWidth <= 1100) setChatOpen(false);
@@ -388,7 +396,7 @@ export function Workbench() {
                         <span className="dot" data-status={statuses[tab.key] ?? 'connecting'} />
                       ) : tab.kind === 'keys' ? (
                         <KeyIcon size={13} />
-                      ) : tab.kind === 'history' ? (
+                      ) : tab.kind === 'sftp' ? (<FilesIcon size={13} />) : tab.kind === 'forwarding' ? (<ForwardIcon size={13} />) : tab.kind === 'proxies' ? (<ProxyIcon size={13} />) : tab.kind === 'history' ? (
                         <ClockIcon size={13} />
                       ) : (
                         <PlugIcon size={13} />
@@ -448,6 +456,9 @@ export function Workbench() {
                 </Suspense>
               </div>
             )}
+            {(['sftp', 'forwarding', 'proxies'] as const).filter((page) => tabs.some((t) => t.kind === page)).map((page) => <div className="editor-page" key={page} hidden={active?.kind !== page}><Suspense fallback={<div className="welcome"><span className="spinner spinner-lg" /></div>}>
+              {page === 'sftp' ? <SftpPage visible={active?.kind === page} /> : page === 'forwarding' ? <ForwardingPage visible={active?.kind === page} /> : <ProxiesPage visible={active?.kind === page} onReturnToProfile={profilePaused ? () => { setProfilePaused(false); setSidebarOpen(true); } : undefined} />}
+            </Suspense></div>)}
           </div>
         </main>
 

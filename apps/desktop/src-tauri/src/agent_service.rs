@@ -16,7 +16,7 @@ use selai_domain::{
     ApprovalId, ErrorCode, HostId, Page, PageRequest, ProviderId, SelaiError, TaskId,
 };
 use selai_secrets::{SecretKey, SecretValue, SshSecretKind};
-use selai_ssh::{connect, ConnectOptions, Endpoint, ExecOutput, Session, SshError, SudoStatus};
+use selai_ssh::{connect_via, ConnectOptions, Endpoint, ExecOutput, Session, SshError, SudoStatus};
 use selai_storage::{ApprovalDecision, Database};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -558,17 +558,22 @@ impl Services {
         }
 
         let auth = self.load_auth(host, &host_record)?;
-        let session = connect(ConnectOptions {
-            endpoint: Endpoint::new(host_record.hostname.clone(), host_record.port),
-            username: host_record.username.clone(),
-            auth,
-            pinned: pins,
-            connect_timeout: Duration::from_secs(u64::from(host_record.connect_timeout_seconds)),
-            keepalive: match host_record.keepalive_seconds {
-                0 => None,
-                s => Some(Duration::from_secs(u64::from(s))),
+        let session = connect_via(
+            ConnectOptions {
+                endpoint: Endpoint::new(host_record.hostname.clone(), host_record.port),
+                username: host_record.username.clone(),
+                auth,
+                pinned: pins,
+                connect_timeout: Duration::from_secs(u64::from(
+                    host_record.connect_timeout_seconds,
+                )),
+                keepalive: match host_record.keepalive_seconds {
+                    0 => None,
+                    s => Some(Duration::from_secs(u64::from(s))),
+                },
             },
-        })
+            self.proxy_for_host(host)?,
+        )
         .await
         .map_err(|e| {
             // Same review-and-trust path as the terminal: keep the presented key.

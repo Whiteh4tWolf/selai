@@ -273,6 +273,16 @@ upgraded from schema v4 to v5 on open.
 Not covered: local terminal and local agent on Windows and macOS (PowerShell and
 the macOS shell are not run here); sudo on hosts that need a TTY (`requiretty`).
 
-## M6 — Not planned
+## Network workspace - 0.2.0
 
-Nothing beyond M5 is started. The master plan lists v1.1 and later work (SFTP, tunnels, multi-host AI, and so on).
+SFTP, local/remote/dynamic TCP forwarding, and HTTP CONNECT/SOCKS5 routes are
+implemented. Native transport tests exercise all three forwarding modes and
+both proxy protocols against an isolated OpenSSH fixture, including host pin
+refusal and authenticated relays. Service tests cover recursive SFTP copies,
+byte accounting, replacement/skip behavior, cancellation cleanup, and write-only
+proxy credentials. UI flows cover saved routes, tunnel forms, upload progress,
+cancellation, and large-directory virtualization.
+
+See [ADR-0007](../adr/0007-network-workspace.md) for lifetimes, limits, storage,
+and upgrade behavior. Packaging alone does not prove interactive SSH operation
+on every supported OS or every external proxy implementation.

@@ -62,6 +62,7 @@ pub struct ConnectOptions {
 pub struct Session {
     pub(crate) handle: client::Handle<PinVerifier>,
     endpoint: Endpoint,
+    remote: crate::host_key::RemoteRoute,
 }
 
 impl std::fmt::Debug for Session {
@@ -73,6 +74,78 @@ impl std::fmt::Debug for Session {
 }
 
 impl Session {
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_closed()
+    }
+    pub async fn close(&self) {
+        let _ = self
+            .handle
+            .disconnect(Disconnect::ByApplication, "", "en")
+            .await;
+    }
+
+    pub async fn open_sftp(&self) -> Result<russh_sftp::client::SftpSession, SshError> {
+        let stream = self.sftp_stream().await?;
+        russh_sftp::client::SftpSession::new(stream)
+            .await
+            .map_err(|e| SshError::Protocol(format!("SFTP could not start: {e}")))
+    }
+    pub async fn sftp_stream(&self) -> Result<russh::ChannelStream<client::Msg>, SshError> {
+        let channel = self.handle.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        Ok(channel.into_stream())
+    }
+
+    pub async fn direct_tcpip(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<russh::ChannelStream<client::Msg>, SshError> {
+        Ok(self
+            .handle
+            .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
+            .await?
+            .into_stream())
+    }
+
+    pub async fn remote_forward(
+        &self,
+        bind: &str,
+        port: u16,
+    ) -> Result<
+        (
+            u16,
+            tokio::sync::mpsc::Receiver<russh::Channel<client::Msg>>,
+        ),
+        SshError,
+    > {
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        if let Ok(mut route) = self.remote.lock() {
+            *route = Some((u32::from(port), tx));
+        }
+        let assigned = self.handle.tcpip_forward(bind, u32::from(port)).await?;
+        let actual = if port == 0 {
+            u16::try_from(assigned).map_err(|_| SshError::Protocol("Invalid remote port".into()))?
+        } else {
+            port
+        };
+        if let Ok(mut route) = self.remote.lock() {
+            if let Some((p, _)) = route.as_mut() {
+                *p = u32::from(actual);
+            }
+        }
+        Ok((actual, rx))
+    }
+
+    pub async fn cancel_remote_forward(&self, bind: &str, port: u16) {
+        let _ = self
+            .handle
+            .cancel_tcpip_forward(bind, u32::from(port))
+            .await;
+        if let Ok(mut route) = self.remote.lock() {
+            *route = None;
+        }
+    }
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
@@ -100,23 +173,35 @@ impl Session {
 /// The whole sequence (TCP, key exchange, authentication) is bounded by
 /// `connect_timeout`.
 pub async fn connect(opts: ConnectOptions) -> Result<Session, SshError> {
+    connect_via(opts, None).await
+}
+
+pub async fn connect_via(
+    opts: ConnectOptions,
+    proxy: Option<crate::ProxyOptions>,
+) -> Result<Session, SshError> {
     let (verifier, outcome) = PinVerifier::new(opts.pinned.clone());
+    let remote = verifier.remote.clone();
     let config = Arc::new(client::Config {
         keepalive_interval: opts.keepalive,
         ..client::Config::default()
     });
-    let addr = opts.endpoint.socket_addr_pair();
     let endpoint = opts.endpoint.clone();
 
     let attempt = async {
-        let mut handle = client::connect(config, addr, verifier).await?;
+        let stream = crate::proxy::transport(&endpoint, proxy.as_ref()).await?;
+        let mut handle = client::connect_stream(config, stream, verifier).await?;
         authenticate(&mut handle, &opts.username, &opts.auth).await?;
         Ok::<_, SshError>(handle)
     };
 
     match tokio::time::timeout(opts.connect_timeout, attempt).await {
         Err(_) => Err(SshError::ConnectTimeout),
-        Ok(Ok(handle)) => Ok(Session { handle, endpoint }),
+        Ok(Ok(handle)) => Ok(Session {
+            handle,
+            endpoint,
+            remote,
+        }),
         Ok(Err(err)) => Err(explain(err, &outcome)),
     }
 }

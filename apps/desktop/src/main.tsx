@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import './styles.css';
+import './network.css';
 
 // Apply the display preference before mounting the vault screen. Workbench
 // applies later theme changes after unlock, but is not mounted while locked.

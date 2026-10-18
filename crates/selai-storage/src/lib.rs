@@ -9,6 +9,7 @@ mod error;
 mod history;
 mod hosts;
 mod migrate;
+mod network;
 mod providers;
 mod recovery;
 mod ssh_keys;

@@ -7,27 +7,36 @@ fixtures and mock providers. Windows packaging also checks encryption and the
 vault in the release build profile. This is not complete interactive coverage
 of every platform and live AI provider. The installers are not code-signed.
 
-**New in 0.1.1:** a passphrase vault with a recovery key, saved chat sessions,
-tasks across several hosts, SSH profile import (CSV, JSON, KeePass `.kdbx`,
-and OpenSSH config), a reusable SSH key manager, optional root approval for
-one request on one host, Markdown and Mermaid in chat, and a refreshed desktop
-layout. Windows fixes cover the vault-setup stack overflow, installer artwork
-overlapping default text, and startup background/theme handling to reduce
-white WebView flashes around the passphrase screen.
+**New in 0.2.0:** a network workspace with SFTP, saved port forwarding, and
+reusable HTTP CONNECT/SOCKS5 proxies.
 
-## Unreleased source changes
+- **SFTP:** local/remote file browsers, recursive upload/download, byte and file
+  progress, speed and ETA, a bounded queue, cancellation, retry, hidden files,
+  filtering, folder creation, rename, and file/empty-folder deletion. Existing
+  files are skipped by default; replacements require confirmation. Symlinks are
+  skipped, and each file is finalized only after its temporary copy finishes.
+- **Port forwarding:** saved Local, Remote, and Dynamic SOCKS5 TCP tunnels;
+  SSH profile selection; bind and destination fields; automatic free ports;
+  start/stop; live connection counts, traffic counters, and error status.
+- **Proxies:** named HTTP CONNECT and SOCKS5 profiles with optional authentication;
+  select a proxy in an SSH profile for terminal, AI, SFTP, and tunnels. Host-key
+  verification is preserved. Proxy passwords are write-only and stored in the vault.
+- **Lifecycle/performance:** file bytes stay in Rust, copy buffers are bounded,
+  transfer progress is throttled, directory rows are virtualized, and new pages
+  are lazy-loaded. Vault locking closes SFTP transports, cancels transfers, and
+  stops tunnels. Tunnels never restart automatically after unlock or app restart.
+- **SSH key management:** dedicated sidebar page, named key selection in profiles,
+  Ed25519/RSA 2048/3072/4096/8192/ECDSA generation, encrypted private-key import,
+  and RSA SHA-2 authentication. DSA and RSA/SHA-1 remain unsupported.
+- **Host improvements:** create groups with + beside SSH hosts, drag profiles into
+  groups, reveal saved passwords explicitly, preserve drafts while visiting key
+  or proxy management, and close terminal tabs when their shell exits.
 
-- Terminal tabs close when their shell exits. SSH workers stop at the exit
-  status instead of waiting for a second channel-close message.
-- Saved SSH login passwords can be revealed explicitly with the eye button in
-  the unlocked profile editor, with automatic hiding and no change-on-save.
-- SSH groups: create/select groups in the host editor, collapse groups in the
-  sidebar, search by group, and rename or delete groups without deleting hosts.
-
-- Import and authenticate with existing RSA private keys (2048-8192 bits),
-  including passphrase-protected keys. Signing uses OpenSSL with RSA-SHA2-256/512;
-  legacy RSA/SHA-1 and DSA authentication remain unsupported. This change requires
-  a new build and is not included in the original 0.1.1 installers.
+Upgrading migrates the encrypted database to schema 9. Saved profiles and vault
+credentials are retained. Create an encrypted backup before a version downgrade;
+older builds cannot open a schema newer than they support. Transfer state and
+running listeners are session-only. Full interactive platform/provider coverage
+is not established; automated SSH network tests use local OpenSSH fixtures.
 
 ## Download
 

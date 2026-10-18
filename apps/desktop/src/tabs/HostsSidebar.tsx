@@ -15,13 +15,14 @@ interface Props {
   /** Another view asked to edit this host, for example after a failed login. */
   editRequest?: { hostId: string; n: number } | null;
   onManageKeys?: () => void;
+  onManageProxies?: () => void;
   profilePaused?: boolean;
 }
 
 const HOST_DRAG_TYPE = 'application/x-selai-host-id';
 
 /** The host explorer in the left sidebar: this computer and the saved SSH hosts. */
-export function HostsSidebar({ onConnect, sessions = {}, editRequest, onManageKeys, profilePaused }: Props) {
+export function HostsSidebar({ onConnect, sessions = {}, editRequest, onManageKeys, onManageProxies, profilePaused }: Props) {
   const [hosts, setHosts] = useState<HostView[]>([]);
   const [groups, setGroups] = useState<GroupView[]>([]);
   const [groupDialog, setGroupDialog] = useState<'create' | 'manage' | null>(null);
@@ -268,6 +269,7 @@ export function HostsSidebar({ onConnect, sessions = {}, editRequest, onManageKe
           key={editing === 'new' ? 'new' : editing.id}
           host={editing === 'new' ? null : editing}
           onManageKeys={onManageKeys}
+          onManageProxies={onManageProxies}
           suspended={profilePaused}
           onCancel={() => setEditing(null)}
           onSaved={async (saved, connect) => {

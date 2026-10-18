@@ -85,6 +85,30 @@ this in-memory grant is described below. Reports about
 behaviour that is documented as planned (for example encrypted audit blobs, S-040)
 are handled as design feedback.
 
+## Network workspace
+
+SFTP and port forwarding use the saved SSH credentials and pinned host keys.
+Proxy profiles route host-key probes, terminals, AI SSH tasks, SFTP, and tunnel
+transports through HTTP CONNECT or SOCKS5; proxy acceptance cannot trust an SSH
+key. Proxy passwords use the encrypted credential store and are write-only over
+IPC. They are never sent to AI providers. HTTP Basic and SOCKS5 authentication
+have no additional TLS transport to the proxy; use a trusted network route.
+
+File browsing/transfers run as your local user and the remote SSH user, without
+sudo. Downloaded files are ordinary plaintext files outside the vault. Symlinks
+are skipped during recursive transfers; unsafe Windows filenames are rejected.
+Cancellation keeps completed files and attempts to remove the current temporary
+file. A lost connection, process termination, or storage error can leave a
+`.selai-part-*` temporary file or a `.selai-backup-*` replacement backup, which
+must be reviewed before removal. Copies are not a transactional directory sync.
+
+Forwarding defaults to loopback and carries TCP only. Binding externally can
+expose a service to other devices. Dynamic SOCKS5 listeners have no authentication;
+keep them on loopback unless you deliberately want to share access. The SSH
+server controls TCP forwarding/GatewayPorts permissions. Stopping a tunnel or
+locking the vault cancels child sockets and releases listeners. Transfers and
+live tunnels are not restored automatically after restart or unlock.
+
 ## Known limits (v1 design)
 
 - Provider API keys are kept in the encrypted vault and sent only in the
