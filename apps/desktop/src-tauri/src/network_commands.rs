@@ -142,6 +142,10 @@ pub fn transfer_list(state: State<'_, AppState>) -> Result<Vec<TransferView>, Co
     state.services()?.transfer_list()
 }
 #[tauri::command]
+pub fn transfer_clear(state: State<'_, AppState>) -> Result<Vec<String>, CommandError> {
+    state.services()?.transfer_clear()
+}
+#[tauri::command]
 pub fn transfer_cancel(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
     state.services()?.transfer_cancel(&id)
 }

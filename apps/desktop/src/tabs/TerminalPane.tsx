@@ -7,6 +7,7 @@ import {
   hostKeyProblem,
   isCommandError,
   terminalConnect,
+  terminalAck,
   terminalDisconnect,
   terminalInput,
   terminalResize,
@@ -18,8 +19,10 @@ import {
 import { HostKeyDialog } from '../ui/HostKeyDialog';
 import { AlertIcon, EditIcon, RefreshIcon } from '../ui/icons';
 import type { SessionStatus } from './TerminalTab';
+import type { ResolvedTheme } from '../theme';
 
 interface Props {
+  theme?: ResolvedTheme;
   host: HostView;
   hidden: boolean;
   onStatus?: (status: SessionStatus) => void;
@@ -29,7 +32,7 @@ interface Props {
   onFontSizeChange?: (step: number) => void;
 }
 
-const THEME = {
+const DARK_THEME = {
   background: '#141618',
   foreground: '#d8dbe8',
   cursor: '#a8c7b8',
@@ -53,6 +56,15 @@ const THEME = {
   brightWhite: '#ffffff',
 };
 
+const LIGHT_THEME = {
+  background: '#fafaf8', foreground: '#333b35', cursor: '#38634f', cursorAccent: '#fafaf8',
+  selectionBackground: 'rgba(56, 99, 79, 0.22)',
+  black: '#26302a', red: '#a62e2a', green: '#246b3d', yellow: '#806000',
+  blue: '#245cb0', magenta: '#813e9f', cyan: '#006c7a', white: '#58665d',
+  brightBlack: '#65736a', brightRed: '#b23730', brightGreen: '#28713e', brightYellow: '#866000',
+  brightBlue: '#295cc1', brightMagenta: '#853ba8', brightCyan: '#007080', brightWhite: '#1b241e',
+};
+
 const FAILURE_TITLES: Record<string, string> = {
   SSH_AUTH_FAILED: 'Authentication failed',
   SSH_DNS: 'Host name not found',
@@ -68,11 +80,12 @@ const FAILURE_TITLES: Record<string, string> = {
  * stops at an unknown or changed server key asks for approval here and then
  * connects again; nothing is sent to the server before the key is trusted.
  */
-export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, fontSize = 13.5, onFontSizeChange }: Props) {
+export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, fontSize = 13.5, onFontSizeChange, theme = 'dark' }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const initialFontSize = useRef(fontSize);
+  const initialTheme = useRef(theme);
   const sessionRef = useRef<string | null>(null);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
@@ -101,7 +114,8 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
       fontSize: initialFontSize.current,
       lineHeight: 1.25,
       letterSpacing: 0,
-      theme: THEME,
+      theme: initialTheme.current === 'light' ? LIGHT_THEME : DARK_THEME,
+      minimumContrastRatio: initialTheme.current === 'light' ? 4.5 : 1,
       allowProposedApi: false,
     });
     const fit = new FitAddon();
@@ -138,6 +152,13 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
   }, []);
 
   useEffect(() => {
+    if (termRef.current) {
+      termRef.current.options.theme = theme === 'light' ? LIGHT_THEME : DARK_THEME;
+      termRef.current.options.minimumContrastRatio = theme === 'light' ? 4.5 : 1;
+    }
+  }, [theme]);
+
+  useEffect(() => {
     const term = termRef.current;
     if (term && term.options.fontSize !== fontSize) {
       term.options.fontSize = fontSize;
@@ -151,27 +172,63 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
     if (!term) return;
     let disposed = false;
     let ended = false;
+    let pendingWrites = 0;
+    let closeSent = false;
     let sessionId: string | null = null;
+    let pendingAck = 0;
+    let ackTimer: number | null = null;
+    const acknowledge = () => {
+      if (ackTimer !== null) window.clearTimeout(ackTimer);
+      ackTimer = null;
+      if (!sessionId || !pendingAck || disposed || ended) return;
+      const bytes = pendingAck;
+      pendingAck = 0;
+      void terminalAck(sessionId, bytes).catch(() => {
+        // An IPC failure must not silently leave the output pump blocked forever.
+        if (!disposed && !ended && sessionId) {
+          void terminalDisconnect(sessionId).catch(() => undefined);
+          setFailure({ code: 'ERROR', message: 'Terminal output acknowledgement failed. Reconnect to continue.' });
+          setStatus('failed');
+        }
+      });
+    };
     setStatus('connecting');
     setFailure(null);
     setKeyProblem(null);
     setExitStatus(null);
     if (attempt > 0) term.write('\r\n\x1b[2m── reconnecting ──\x1b[0m\r\n');
 
+    const closeFinished = () => {
+      if (disposed || closeSent || !ended || pendingWrites > 0) return;
+      closeSent = true;
+      setStatus('closed');
+      closeCallback.current?.();
+    };
     const finish = (code: number | null) => {
       if (ended) return;
       ended = true;
       sessionRef.current = null;
       setExitStatus(code);
-      setStatus('closed');
-      closeCallback.current?.();
+      // Keep the pane alive until its final queued output has been parsed.
+      closeFinished();
     };
 
     const onEvent = (event: TerminalEvent) => {
       if (disposed || ended) return;
       switch (event.type) {
         case 'data':
-          term.write(decodeBase64(event.data));
+          {
+            const bytes = decodeBase64(event.data);
+            pendingWrites += 1;
+            term.write(bytes, () => {
+              pendingWrites -= 1;
+              if (disposed) return;
+              if (ended) { closeFinished(); return; }
+              pendingAck += bytes.length;
+              if (pendingAck >= 32 * 1024) acknowledge();
+              else if (ackTimer === null) ackTimer = window.setTimeout(acknowledge, 8);
+            });
+          }
           break;
         case 'exit':
           finish(event.status);
@@ -192,6 +249,7 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
           return;
         }
         sessionId = id;
+        acknowledge();
         sessionRef.current = id;
         setStatus('connected');
         fitRef.current?.fit();
@@ -211,6 +269,7 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
 
     return () => {
       disposed = true;
+      if (ackTimer !== null) window.clearTimeout(ackTimer);
       if (sessionId) void terminalDisconnect(sessionId).catch(() => undefined);
       sessionRef.current = null;
     };

@@ -1,6 +1,7 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 
 export interface VaultStatus {
+  revision?: number;
   phase: 'setup' | 'locked' | 'unlocked' | 'locking';
   legacyFound: boolean;
   timeoutMinutes: number;
@@ -11,6 +12,11 @@ export interface VaultStatus {
   flushRequired: boolean;
 }
 export const vaultStatus = () => invoke<VaultStatus>('vault_status');
+export const vaultWatch = (callback: (status: VaultStatus) => void) => {
+  const onEvent = new Channel<VaultStatus>();
+  onEvent.onmessage = callback;
+  return invoke<VaultStatus>('vault_watch', { onEvent });
+};
 export const vaultActivity = () => invoke<void>('vault_activity');
 export const vaultLock = (force: boolean) => invoke<void>('vault_lock', { force });
 export const vaultFlushComplete = () => invoke<void>('vault_flush_complete');

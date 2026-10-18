@@ -7,8 +7,60 @@ fixtures and mock providers. Windows packaging also checks encryption and the
 vault in the release build profile. This is not complete interactive coverage
 of every platform and live AI provider. The installers are not code-signed.
 
-**New in 0.2.0:** a network workspace with SFTP, saved port forwarding, and
-reusable HTTP CONNECT/SOCKS5 proxies.
+## New in 0.2.1
+
+This patch improves transfer stability, the network workspace, terminal themes,
+and resource management introduced in 0.2.0.
+
+- **Transfer startup fix:** upload/download jobs now use Tauri's async runtime
+  when submitted through synchronous desktop IPC, avoiding a native runtime panic.
+  Regression coverage exercises both directions without an entered Tokio runtime.
+- **Transfers tray:** collapse/expand the tray and clear completed, failed, or
+  cancelled jobs. Clear preserves active jobs and transferred files; late events
+  cannot restore cleared records.
+- **Compact port forwarding:** shorter cards retain the SSH route, tunnel mode,
+  listener/destination, status, active connections, byte counts, errors and actions.
+- **Light terminals:** terminal backgrounds, ANSI palettes, toolbar and overlays
+  follow light/dark/system theme without reconnecting or clearing output. Explicit
+  RGB colors chosen by terminal programs can still override their own backgrounds.
+- **Bounded output:** terminal IPC waits for xterm to consume output, with a
+  256 KiB raw-output credit window per session and up to 16 sessions including
+  connecting terminals. Hidden panes still acknowledge output. Closing wakes
+  blocked producers, and the pane drains final output before closing.
+- **Lighter chat rendering and autosave:** show 40 turns at once with navigation
+  to all older turns, preserve your position while reading history, and coalesce
+  autosaves behind one pending write per session. Vault locking waits for the
+  latest revision. The existing transcript size limit remains unchanged.
+- **Network and disk budgets:** shared 128-connection forwarding limit, retaining
+  64 per tunnel; 8 MiB directory and 32 MiB transfer-plan metadata limits; and
+  free-space checks for download temporary files and encrypted backups.
+- **Vault maintenance:** output-preview retention runs periodically while unlocked.
+  **Security → Storage** shows allocated/reusable space and offers manual
+  compaction for idle vaults up to 128 MiB. Compaction retains credentials, chat,
+  and history. Encryption and durability settings remain enabled.
+- **Idle updates and package size:** versioned vault-status notifications reduce
+  UI polling while preserving auto-lock checks; CI gates frontend and Windows
+  package sizes. No runtime dependency was added for these controls.
+
+**File conflicts:** the default **Skip matching files** skips existing names
+without a prompt. **Replace matching files** asks **Transfer & replace** once for
+the selected transfer, including nested files; it does not prompt per conflict.
+Retry reuses the original transfer's replacement choice. A completed job may
+contain skipped files. This conflict policy is unchanged from 0.2.0.
+
+Validation includes frontend regression tests, native transfer/runtime and credit
+tests, a Windows PTY stream larger than one credit window, encrypted vault
+compaction/backup tests, type checking, lint and Clippy. These controls have not
+yet been compared in a before/after Windows WebView CPU/RAM benchmark; no specific
+memory or CPU reduction is claimed. See `docs/release/performance.md` for limits
+and the scope of older measurements.
+
+Upgrading from 0.2.0 keeps schema 9, saved profiles, credentials and history. No
+new schema migration is included in this patch.
+
+## Network workspace (introduced in 0.2.0)
+
+SFTP, saved port forwarding, and reusable HTTP CONNECT/SOCKS5 proxies:
 
 - **SFTP:** local/remote file browsers, recursive upload/download, byte and file
   progress, speed and ETA, a bounded queue, cancellation, retry, hidden files,
@@ -32,7 +84,7 @@ reusable HTTP CONNECT/SOCKS5 proxies.
   groups, reveal saved passwords explicitly, preserve drafts while visiting key
   or proxy management, and close terminal tabs when their shell exits.
 
-Upgrading migrates the encrypted database to schema 9. Saved profiles and vault
+Upgrading from versions before 0.2.0 migrates the encrypted database to schema 9. Saved profiles and vault
 credentials are retained. Create an encrypted backup before a version downgrade;
 older builds cannot open a schema newer than they support. Transfer state and
 running listeners are session-only. Full interactive platform/provider coverage

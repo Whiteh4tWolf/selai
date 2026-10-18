@@ -43,6 +43,7 @@ vi.mock('@xterm/addon-fit', () => ({
 
 describe('App shell', () => {
   beforeEach(() => {
+    vi.spyOn(ipc, 'terminalAck').mockResolvedValue();
     windowApi.isTauri.mockReturnValue(false);
     windowApi.getCurrentWindow.mockReset();
     window.localStorage.clear();

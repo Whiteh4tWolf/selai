@@ -17,6 +17,7 @@ use crate::{
     dto::{CommandError, TerminalEvent},
     local_exec::home_dir,
     service::{EventSink, TerminalInput},
+    terminal_flow::{TerminalFlow, OUTPUT_CHUNK},
 };
 
 fn pty_size(cols: u32, rows: u32) -> PtySize {
@@ -58,6 +59,7 @@ pub(crate) fn spawn_local_shell(
     rows: u32,
     mut input: mpsc::Receiver<TerminalInput>,
     sink: EventSink,
+    flow: Option<Arc<TerminalFlow>>,
     on_end: Box<dyn FnOnce() + Send>,
 ) -> Result<Arc<dyn Fn() + Send + Sync>, CommandError> {
     let pair = native_pty_system()
@@ -85,7 +87,11 @@ pub(crate) fn spawn_local_shell(
     // the output stream once its master is closed.
     let master = Arc::new(Mutex::new(Some(pair.master)));
     let killer = Arc::new(Mutex::new(child.clone_killer()));
+    let stop_flow = flow.clone();
     let stop: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        if let Some(flow) = &stop_flow {
+            flow.close();
+        }
         if let Ok(mut killer) = killer.lock() {
             let _ = killer.kill();
         }
@@ -128,14 +134,23 @@ pub(crate) fn spawn_local_shell(
         let _ = exited_tx.send(status);
     });
 
+    let reader_stop = stop.clone();
     std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; OUTPUT_CHUNK];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => sink(TerminalEvent::Data {
-                    data: B64.encode(&buf[..n]),
-                }),
+                Ok(n) => {
+                    if let Some(flow) = &flow {
+                        if !flow.reserve_blocking(n) {
+                            reader_stop();
+                            break;
+                        }
+                    }
+                    sink(TerminalEvent::Data {
+                        data: B64.encode(&buf[..n]),
+                    });
+                }
             }
         }
         let exit_status = exited_rx.recv().ok().flatten();
@@ -143,6 +158,9 @@ pub(crate) fn spawn_local_shell(
             sink(TerminalEvent::Exit { status });
         }
         on_end();
+        if let Some(flow) = &flow {
+            flow.close();
+        }
         sink(TerminalEvent::Closed { exit_status });
     });
     Ok(stop)

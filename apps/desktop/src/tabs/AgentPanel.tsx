@@ -26,6 +26,7 @@ import { HostAvatar } from '../ui/HostAvatar';
 import { collectPages } from '../ui/collectPages';
 import { HostKeyDialog } from '../ui/HostKeyDialog';
 import { Markdown } from '../ui/Markdown';
+import { TranscriptWindow } from '../ui/TranscriptWindow';
 import {
   AlertIcon,
   AtIcon,
@@ -116,6 +117,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   const keyPromptQueue = useRef<PendingKey[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const browsingHistory = useRef(false);
   const pendingText = useRef(new Map<string, string>());
   const textFlushTimer = useRef<number | null>(null);
 
@@ -215,8 +217,12 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   }, [contextRequest]);
 
   useEffect(() => {
+    browsingHistory.current = false;
+  }, [sessions.current.id]);
+
+  useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && !browsingHistory.current) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
   // A query that already holds a space and matches nothing is plain text, not a mention.
@@ -627,7 +633,10 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
           </div>
         ) : (
           <ol className="thread" aria-label="Transcript">
-            {turns.map((turn) => <TurnEntry key={turn.id} turn={turn} onDecide={decide} />)}
+            <TranscriptWindow key={sessions.current.id} items={turns} onBrowse={(older) => {
+              browsingHistory.current = older;
+              if (!older) requestAnimationFrame(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; });
+            }} render={(turn) => <TurnEntry turn={turn} onDecide={decide} />} />
           </ol>
         )}
       </div>

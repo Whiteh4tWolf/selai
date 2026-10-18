@@ -21,6 +21,9 @@ const MODE_INFO = {
   remote: ['Remote', 'Open a port on the server that reaches this computer.'],
   dynamic: ['Dynamic', 'Use the SSH server as a SOCKS5 TCP proxy.'],
 } as const;
+function endpoint(host: string, port: number | string) {
+  return `${host.includes(':') ? `[${host}]` : host}:${port}`;
+}
 export function ForwardingPage({ visible }: { visible: boolean }) {
   const { hosts, error: hostError } = useSshHosts(visible);
   const [items, setItems] = useState<ForwardView[]>([]);
@@ -117,114 +120,102 @@ export function ForwardingPage({ visible }: { visible: boolean }) {
           {error || hostError}
         </p>
       )}
-      <div className="network-cards">
+      <div className="tunnel-list">
         {items.map((view) => {
           const p = view.profile;
           const host = hosts.find((h) => h.id === p.hostId);
           const running = view.status === 'running';
           const active = running || view.status === 'connecting';
           return (
-            <article className="network-card" key={p.id}>
-              <div className="network-card-head">
-                <span className="network-symbol">
-                  <ForwardIcon size={22} />
-                </span>
-                <div className="grow">
-                  <h2>{p.name}</h2>
-                  <p className="muted">via {host?.label ?? 'Unavailable SSH profile'}</p>
-                </div>
-                <span className="badge">{MODE_INFO[p.mode][0]}</span>
+            <article className="network-card tunnel-card" key={p.id} aria-label={p.name}>
+              <div className="tunnel-card-head">
+                <h2 title={p.name}>{p.name}</h2>
+                <span className="tunnel-mode">{MODE_INFO[p.mode][0]}</span>
                 <span className="network-status" data-state={view.status}>
                   <i />
                   {view.status === 'connecting' ? 'Connecting…' : view.status}
                 </span>
+                <span className="tunnel-via" title={`SSH profile: ${host?.label ?? 'Unavailable'}`}>
+                  via {host?.label ?? 'Unavailable SSH profile'}
+                </span>
               </div>
               <div className="tunnel-route">
-                <div>
-                  <span>{p.mode === 'remote' ? (host?.label ?? 'Remote server') : 'This computer'}</span>
-                  <code>
-                    {p.bindAddress}:{running ? view.actualPort : p.bindPort || 'auto'}
+                <span className="tunnel-endpoint">
+                  <span>{p.mode === 'remote' ? 'Server' : 'Local'}</span>
+                  <code title={`Listening on ${p.mode === 'remote' ? (host?.label ?? 'remote server') : 'this computer'}`}>
+                    {endpoint(p.bindAddress, running ? view.actualPort : p.bindPort || 'auto')}
                   </code>
-                  <small>Listening port</small>
-                </div>
-                <span className="tunnel-arrow">→</span>
-                <div>
-                  <span>
-                    {p.mode === 'dynamic'
-                      ? 'SOCKS5 destinations'
-                      : p.mode === 'local'
-                        ? 'Reached from server'
-                        : 'Reached from this computer'}
-                  </span>
-                  <code>
-                    {p.mode === 'dynamic' ? 'Any TCP destination' : `${p.targetHost}:${p.targetPort}`}
+                </span>
+                <span className="tunnel-arrow" aria-hidden="true">→</span>
+                <span className="tunnel-endpoint">
+                  <span>{p.mode === 'dynamic' ? 'SOCKS5' : p.mode === 'local' ? 'Remote' : 'Local'}</span>
+                  <code title={p.mode === 'dynamic' ? 'Remote DNS · TCP CONNECT' : `Destination reached from ${p.mode === 'local' ? 'the SSH server' : 'this computer'}`}>
+                    {p.mode === 'dynamic' ? 'Any TCP destination' : endpoint(p.targetHost, p.targetPort)}
                   </code>
-                  <small>{p.mode === 'dynamic' ? 'Remote DNS · TCP CONNECT' : 'Destination'}</small>
-                </div>
+                </span>
               </div>
               {view.error && (
-                <p className="banner" data-tone="danger">
+                <p className="tunnel-error" role="alert">
                   {view.error}
                 </p>
               )}
-              <div className="network-card-foot">
-                <div className="tunnel-metrics">
-                  <span>
-                    <strong>{view.connections}</strong> connections
-                  </span>
-                  <span>↑ {bytes(view.sent)}</span>
-                  <span>↓ {bytes(view.received)}</span>
-                  {view.connectionErrors > 0 && (
-                    <span data-tone="warning">{view.connectionErrors} connection errors</span>
-                  )}
-                </div>
-                <div className="row">
-                  {running && (
-                    <button
-                      className="icon-btn"
-                      aria-label={`Copy endpoint for ${p.name}`}
-                      title={copied === p.id ? 'Copied' : 'Copy endpoint'}
-                      onClick={() => {
-                        const host = p.bindAddress.includes(':') ? `[${p.bindAddress}]` : p.bindAddress;
-                        void navigator.clipboard
-                          .writeText(`${p.mode === 'dynamic' ? 'socks5h://' : ''}${host}:${view.actualPort}`)
-                          .then(() => setCopied(p.id))
-                          .catch((e) => setError(describeError(e)));
-                      }}
-                    >
-                      <CopyIcon />
-                    </button>
-                  )}
+              <div className="tunnel-metrics">
+                <span>
+                  <strong>{view.connections}</strong> connections
+                </span>
+                <span title="Sent">↑ {bytes(view.sent)}</span>
+                <span title="Received">↓ {bytes(view.received)}</span>
+                {view.connectionErrors > 0 && (
+                  <span data-tone="warning">{view.connectionErrors} connection errors</span>
+                )}
+              </div>
+              <div className="tunnel-actions">
+                {running && (
                   <button
                     className="icon-btn"
-                    aria-label={`Edit ${p.name}`}
-                    disabled={active}
-                    onClick={() => setEditor(p)}
+                    aria-label={`Copy endpoint for ${p.name}`}
+                    title={copied === p.id ? 'Copied' : 'Copy endpoint'}
+                    onClick={() => {
+                      void navigator.clipboard
+                        .writeText(`${p.mode === 'dynamic' ? 'socks5h://' : ''}${endpoint(p.bindAddress, view.actualPort)}`)
+                        .then(() => setCopied(p.id))
+                        .catch((e) => setError(describeError(e)));
+                    }}
                   >
-                    <EditIcon />
+                    <CopyIcon />
                   </button>
+                )}
+                <button
+                  className="icon-btn"
+                  aria-label={`Edit ${p.name}`}
+                  title="Edit tunnel"
+                  disabled={active}
+                  onClick={() => setEditor(p)}
+                >
+                  <EditIcon />
+                </button>
+                <button
+                  className="icon-btn"
+                  aria-label={`Delete ${p.name}`}
+                  title="Delete tunnel"
+                  disabled={active}
+                  onClick={() => setDeleting(view)}
+                >
+                  <TrashIcon />
+                </button>
+                {active ? (
+                  <button className="btn" onClick={() => void stop(view)}>
+                    <StopIcon /> Stop
+                  </button>
+                ) : (
                   <button
-                    className="icon-btn"
-                    aria-label={`Delete ${p.name}`}
-                    disabled={active}
-                    onClick={() => setDeleting(view)}
+                    className="btn btn-primary"
+                    disabled={pending === p.id || !host}
+                    onClick={() => void start(view)}
                   >
-                    <TrashIcon />
+                    <PlayIcon /> Start
                   </button>
-                  {active ? (
-                    <button className="btn" onClick={() => void stop(view)}>
-                      <StopIcon /> Stop
-                    </button>
-                  ) : (
-                    <button
-                      className="btn btn-primary"
-                      disabled={pending === p.id || !host}
-                      onClick={() => void start(view)}
-                    >
-                      <PlayIcon /> Start
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
             </article>
           );

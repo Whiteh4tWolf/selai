@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   transferWatch: vi.fn(),
   transferStart: vi.fn(),
   transferCancel: vi.fn(),
+  transferClear: vi.fn(),
   hostSave: vi.fn(),
 }));
 const host = {
@@ -60,6 +61,7 @@ vi.mock('../ipc', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   api.transferCancel.mockResolvedValue(undefined);
+  api.transferClear.mockResolvedValue([]);
   api.forwardStop.mockResolvedValue(undefined);
   api.proxyList.mockResolvedValue([]);
   api.forwardWatch.mockResolvedValue([]);
@@ -82,6 +84,39 @@ beforeEach(() => {
   }));
 });
 describe('network management flows', () => {
+  it('collapses transfers and clears finished history while retaining active jobs and ignoring late events', async () => {
+    const job: TransferView = {
+      id: 'active', connectionId: 'sftp-1', direction: 'upload', status: 'transferring',
+      currentFile: 'active.bin', destination: '/home/deploy', totalBytes: 2048,
+      transferredBytes: 1024, totalFiles: 1, completedFiles: 0, skippedFiles: 0,
+      bytesPerSecond: 1024, error: null,
+    };
+    const done: TransferView = { ...job, id: 'done', status: 'completed', currentFile: 'done.bin' };
+    let update: (job: TransferView) => void = () => {};
+    let history = [job, done];
+    api.transferWatch.mockImplementation(async (callback) => { update = callback; return history; });
+    api.transferClear.mockImplementation(async () => { history = [job]; return [done.id]; });
+    const { rerender } = render(<SftpPage visible />);
+    await screen.findByText('done.bin');
+    const toggle = screen.getByRole('button', { name: /Transfers/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('active.bin')).not.toBeVisible();
+    expect(api.transferCancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear finished transfers' }));
+    await waitFor(() => expect(screen.queryByText('done.bin')).not.toBeInTheDocument());
+    fireEvent.click(toggle);
+    expect(screen.getByText('active.bin')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Cancel transfer' })).toBeEnabled();
+    act(() => update(done));
+    expect(screen.queryByText('done.bin')).not.toBeInTheDocument();
+    rerender(<SftpPage visible={false} />);
+    rerender(<SftpPage visible />);
+    await waitFor(() => expect(api.transferWatch).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('done.bin')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear finished transfers' })).toBeDisabled();
+  });
   it('creates an authenticated HTTP proxy from the UI and submits credentials only as input', async () => {
     api.proxySave.mockImplementation(async (input) => ({
       ...input,

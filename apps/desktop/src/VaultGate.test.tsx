@@ -3,12 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { VaultGate } from './VaultGate';
 import * as vault from './vault';
-vi.mock('./vault', async (original) => ({ ...await original<typeof import('./vault')>(), vaultStatus: vi.fn(), vaultAction: vi.fn(), vaultLock: vi.fn(), vaultActivity: vi.fn(), vaultFlushComplete: vi.fn() }));
+vi.mock('./vault', async (original) => ({ ...await original<typeof import('./vault')>(), vaultStatus: vi.fn(), vaultWatch: vi.fn(), vaultAction: vi.fn(), vaultLock: vi.fn(), vaultActivity: vi.fn(), vaultFlushComplete: vi.fn() }));
 vi.mock('./App', () => ({ WindowControls: () => <span>Window controls</span> }));
 const status = (phase: vault.VaultStatus['phase']): vault.VaultStatus => ({ phase, legacyFound: false, timeoutMinutes: 15, activeTasks: 0, terminals: 0, cleanupPending: false, retryAfterMs: 0, flushRequired: false });
 describe('Vault gate', () => {
-  beforeEach(() => { vi.mocked(vault.vaultStatus).mockResolvedValue(status('locked')); vi.mocked(vault.vaultAction).mockResolvedValue(null); vi.mocked(vault.vaultActivity).mockResolvedValue(); vi.mocked(vault.vaultLock).mockResolvedValue(); });
+  beforeEach(() => { vi.mocked(vault.vaultWatch).mockRejectedValue(new Error('legacy fixture')); vi.mocked(vault.vaultStatus).mockResolvedValue(status('locked')); vi.mocked(vault.vaultAction).mockResolvedValue(null); vi.mocked(vault.vaultActivity).mockResolvedValue(); vi.mocked(vault.vaultLock).mockResolvedValue(); });
   afterEach(() => vi.clearAllMocks());
+  it('uses pushed status and ignores a delayed status from before the lock', async () => {
+    let deliver: (next: vault.VaultStatus) => void = () => {};
+    vi.mocked(vault.vaultWatch).mockImplementation(async (callback) => { deliver = callback; return { ...status('unlocked'), revision: 1 }; });
+    render(<VaultGate><div>Private workspace</div></VaultGate>);
+    await screen.findByText('Private workspace');
+    act(() => deliver({ ...status('locked'), revision: 3 }));
+    expect(screen.queryByText('Private workspace')).not.toBeInTheDocument();
+    act(() => deliver({ ...status('unlocked'), revision: 2 }));
+    expect(screen.queryByText('Private workspace')).not.toBeInTheDocument();
+    expect(vault.vaultStatus).not.toHaveBeenCalled();
+  });
   it('does not mount or fetch workspace data before unlock', async () => {
     const load = vi.fn(); function Workspace() { useEffect(load, []); return <div>Private workspace</div>; }
     await act(async () => { render(<VaultGate><Workspace /></VaultGate>); });

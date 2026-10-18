@@ -4,8 +4,10 @@ import * as ipc from '../ipc';
 import { TerminalPane } from './TerminalPane';
 
 const written: unknown[] = [];
-const terminals: { options: { cursorBlink: boolean; fontSize: number }; focus: ReturnType<typeof vi.fn> }[] = [];
+const terminals: { options: { cursorBlink: boolean; fontSize: number; theme?: { background?: string; foreground?: string } }; focus: ReturnType<typeof vi.fn> }[] = [];
 const fits: ReturnType<typeof vi.fn>[] = [];
+let deferWrites = false;
+const writeCallbacks: (() => void)[] = [];
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -20,8 +22,9 @@ vi.mock('@xterm/xterm', () => ({
     loadAddon() {}
     open() {}
     focus = vi.fn();
-    write(data: unknown) {
+    write(data: unknown, callback?: () => void) {
       written.push(data);
+      if (callback) { if (deferWrites) writeCallbacks.push(callback); else callback(); }
     }
     writeln(text: string) {
       written.push(text);
@@ -51,6 +54,9 @@ const host = {
 } as ipc.HostView;
 
 beforeEach(() => {
+  deferWrites = false;
+  writeCallbacks.length = 0;
+  vi.spyOn(ipc, 'terminalAck').mockResolvedValue();
   written.length = 0;
   terminals.length = 0;
   fits.length = 0;
@@ -58,6 +64,31 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('TerminalPane', () => {
+  it('changes the palette of an existing terminal without reconnecting or clearing it', async () => {
+    const connect = vi.spyOn(ipc, 'terminalConnect').mockResolvedValue('theme-session');
+    const { rerender } = render(<TerminalPane host={host} hidden={false} theme="dark" />);
+    await screen.findByText('Connected');
+    expect(terminals[0]?.options.theme?.background).toBe('#141618');
+    rerender(<TerminalPane host={host} hidden={false} theme="light" />);
+    expect(terminals[0]?.options.theme).toMatchObject({ background: '#fafaf8', foreground: '#333b35' });
+    expect(terminals).toHaveLength(1);
+    expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it('acknowledges decoded bytes only after xterm consumes output, including hidden panes', async () => {
+    let deliver: (event: ipc.TerminalEvent) => void = () => {};
+    vi.spyOn(ipc, 'terminalConnect').mockImplementation((_host, _cols, _rows, onEvent) => {
+      deliver = onEvent;
+      return Promise.resolve('flow-session');
+    });
+    render(<TerminalPane host={host} hidden />);
+    await screen.findByText('Connected');
+    deferWrites = true;
+    act(() => deliver({ type: 'data', data: btoa('hello') }));
+    expect(ipc.terminalAck).not.toHaveBeenCalled();
+    act(() => writeCallbacks.splice(0).forEach((callback) => callback()));
+    await waitFor(() => expect(ipc.terminalAck).toHaveBeenCalledWith('flow-session', 5));
+  });
   it('closes a finished shell once without waiting for the channel close', async () => {
     let deliver: (event: ipc.TerminalEvent) => void = () => {};
     vi.spyOn(ipc, 'terminalConnect').mockImplementation((_host, _c, _r, onEvent) => {
@@ -72,6 +103,27 @@ describe('TerminalPane', () => {
     act(() => deliver({ type: 'exit', status: 0 }));
     expect(onClose).toHaveBeenCalledOnce();
     act(() => deliver({ type: 'closed', exitStatus: 0 }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the final output alive until xterm has consumed it before closing', async () => {
+    let deliver: (event: ipc.TerminalEvent) => void = () => {};
+    vi.spyOn(ipc, 'terminalConnect').mockImplementation((_host, _cols, _rows, onEvent) => {
+      deliver = onEvent;
+      return Promise.resolve('drain-session');
+    });
+    vi.spyOn(ipc, 'terminalDisconnect').mockResolvedValue();
+    const onClose = vi.fn();
+    render(<TerminalPane host={host} hidden={false} onClose={onClose} />);
+    await screen.findByText('Connected');
+    deferWrites = true;
+    act(() => {
+      deliver({ type: 'data', data: btoa('final output') });
+      deliver({ type: 'exit', status: 0 });
+      deliver({ type: 'closed', exitStatus: 0 });
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => writeCallbacks.splice(0).forEach((callback) => callback()));
     expect(onClose).toHaveBeenCalledOnce();
   });
 

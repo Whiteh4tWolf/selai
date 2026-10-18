@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { describeError, hostKeyProblem, type HostKeyProblem } from '../ipc';
 import {
   bytes,
@@ -9,6 +9,7 @@ import {
   sftpList,
   transferStart,
   transferCancel,
+  transferClear,
   transferWatch,
   type DirectoryView,
   type FileEntry,
@@ -32,6 +33,7 @@ import {
   ImportIcon,
   CloseIcon,
   SearchIcon,
+  ChevronIcon,
 } from '../ui/icons';
 
 type Side = 'local' | 'remote';
@@ -53,6 +55,10 @@ export function SftpPage({ visible }: { visible: boolean }) {
   const [selected, setSelected] = useState<Record<Side, FileEntry[]>>({ local: [], remote: [] });
   const [refresh, setRefresh] = useState(0);
   const [jobs, setJobs] = useState<TransferView[]>([]);
+  const [transfersExpanded, setTransfersExpanded] = useState(true);
+  const [clearing, setClearing] = useState(false);
+  const transferPanelId = useId();
+  const clearedJobs = useRef(new Set<string>());
   const [overwrite, setOverwrite] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trust, setTrust] = useState<HostKeyProblem | null>(null);
@@ -65,6 +71,7 @@ export function SftpPage({ visible }: { visible: boolean }) {
   const connectionRef = useRef(connection);
   connectionRef.current = connection;
   const updateJob = useCallback((job: TransferView) => {
+    if (clearedJobs.current.has(job.id)) return;
     setJobs((rows) =>
       rows.some((j) => j.id === job.id)
         ? rows.map((j) => (j.id === job.id ? job : j))
@@ -80,7 +87,7 @@ export function SftpPage({ visible }: { visible: boolean }) {
       if (live) updateJob(job);
     })
       .then((rows) => {
-        if (live) setJobs(rows);
+        if (live) setJobs(rows.filter((job) => !clearedJobs.current.has(job.id)));
       })
       .catch((e) => {
         if (live) setError(describeError(e));
@@ -104,8 +111,24 @@ export function SftpPage({ visible }: { visible: boolean }) {
     if (!hostId && hosts[0]) setHostId(hosts[0].id);
   }, [hosts, hostId]);
   const host = hosts.find((h) => h.id === hostId);
-  const currentJobs = [...jobs.filter(activeTransfer), ...jobs.filter((j) => !activeTransfer(j))];
+  const activeJobs = jobs.filter(activeTransfer);
+  const currentJobs = [...activeJobs, ...jobs.filter((j) => !activeTransfer(j))];
   const running = jobs.filter((j) => j.connectionId === connection?.id && activeTransfer(j));
+  async function clearTransfers() {
+    setClearing(true);
+    try {
+      const cleared = await transferClear();
+      for (const id of cleared) {
+        clearedJobs.current.add(id);
+        retryInputs.current.delete(id);
+      }
+      setJobs((rows) => rows.filter((job) => !clearedJobs.current.has(job.id)));
+    } catch (e) {
+      setError(describeError(e));
+    } finally {
+      setClearing(false);
+    }
+  }
   async function connect() {
     if (!hostId) return;
     setConnecting(true);
@@ -140,6 +163,7 @@ export function SftpPage({ visible }: { visible: boolean }) {
     setReplace(null);
     try {
       const job = await transferStart(input, updateJob);
+      if (clearedJobs.current.has(job.id)) return;
       retryInputs.current.set(job.id, input);
       if (retryInputs.current.size > 100) {
         const oldest = retryInputs.current.keys().next().value;
@@ -315,96 +339,117 @@ export function SftpPage({ visible }: { visible: boolean }) {
       <section className="transfer-tray" aria-label="File transfers">
         <header>
           <h2>
-            Transfers{' '}
-            <span className="count">{running.length ? `${running.length} active` : currentJobs.length}</span>
+            <button
+              className="transfer-toggle"
+              aria-expanded={transfersExpanded}
+              aria-controls={transferPanelId}
+              onClick={() => setTransfersExpanded((expanded) => !expanded)}
+            >
+              <ChevronIcon size={14} />
+              Transfers
+              <span className="count">{activeJobs.length ? `${activeJobs.length} active` : currentJobs.length}</span>
+            </button>
           </h2>
-          <span className="hint">2 transfers at a time · symbolic links are skipped</span>
+          <div className="transfer-tray-actions">
+            <span className="hint">2 transfers at a time · symbolic links are skipped</span>
+            <button
+              className="btn btn-sm"
+              aria-label="Clear finished transfers"
+              title="Clear completed, failed, and cancelled transfers"
+              disabled={clearing || !jobs.some((job) => !activeTransfer(job))}
+              onClick={() => void clearTransfers()}
+            >
+              <TrashIcon size={13} /> {clearing ? 'Clearing…' : 'Clear'}
+            </button>
+          </div>
         </header>
-        {!currentJobs.length ? (
-          <p className="transfer-empty">
-            Select files or folders in either panel, then choose Upload or Download.
-          </p>
-        ) : (
-          <div className="transfer-list">
-            {currentJobs.slice(0, 30).map((job) => {
-              const progress =
-                job.status === 'completed'
-                  ? 100
-                  : job.totalBytes
-                    ? Math.min(99, Math.round((job.transferredBytes / job.totalBytes) * 100))
-                    : 0;
-              const seconds =
-                job.bytesPerSecond > 0
-                  ? Math.ceil(Math.max(0, job.totalBytes - job.transferredBytes) / job.bytesPerSecond)
-                  : null;
-              return (
-                <article className="transfer-job" key={job.id}>
-                  <span className="transfer-direction">
-                    {job.direction === 'upload' ? <UploadIcon /> : <ImportIcon />}
-                  </span>
-                  <div className="grow">
-                    <div className="transfer-job-title">
-                      <strong title={job.currentFile}>
-                        {job.currentFile
-                          ? job.currentFile.split(/[\\/]/).pop()
-                          : job.direction === 'upload'
-                            ? 'Upload'
-                            : 'Download'}
-                      </strong>
-                      <span data-state={job.status}>
-                        {job.status === 'transferring' ? `${progress}%` : job.status}
-                      </span>
-                    </div>
-                    <progress
-                      aria-label={`${job.direction} progress`}
-                      max={100}
-                      value={['queued', 'scanning'].includes(job.status) ? undefined : progress}
-                    />
-                    <div className="transfer-job-detail">
-                      <span>
-                        {bytes(job.transferredBytes)} / {bytes(job.totalBytes)} · {job.completedFiles}/
-                        {job.totalFiles} files{job.skippedFiles > 0 ? ` · ${job.skippedFiles} skipped` : ''}
-                      </span>
-                      {job.status === 'transferring' && (
-                        <span>
-                          {bytes(job.bytesPerSecond)}/s
-                          {seconds !== null
-                            ? ` · ${seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}m`} left`
-                            : ''}
+        <div id={transferPanelId} hidden={!transfersExpanded}>
+          {!currentJobs.length ? (
+            <p className="transfer-empty">
+              Select files or folders in either panel, then choose Upload or Download.
+            </p>
+          ) : (
+            <div className="transfer-list">
+              {currentJobs.slice(0, 30).map((job) => {
+                const progress =
+                  job.status === 'completed'
+                    ? 100
+                    : job.totalBytes
+                      ? Math.min(99, Math.round((job.transferredBytes / job.totalBytes) * 100))
+                      : 0;
+                const seconds =
+                  job.bytesPerSecond > 0
+                    ? Math.ceil(Math.max(0, job.totalBytes - job.transferredBytes) / job.bytesPerSecond)
+                    : null;
+                return (
+                  <article className="transfer-job" key={job.id}>
+                    <span className="transfer-direction">
+                      {job.direction === 'upload' ? <UploadIcon /> : <ImportIcon />}
+                    </span>
+                    <div className="grow">
+                      <div className="transfer-job-title">
+                        <strong title={job.currentFile}>
+                          {job.currentFile
+                            ? job.currentFile.split(/[\\/]/).pop()
+                            : job.direction === 'upload'
+                              ? 'Upload'
+                              : 'Download'}
+                        </strong>
+                        <span data-state={job.status}>
+                          {job.status === 'transferring' ? `${progress}%` : job.status}
                         </span>
+                      </div>
+                      <progress
+                        aria-label={`${job.direction} progress`}
+                        max={100}
+                        value={['queued', 'scanning'].includes(job.status) ? undefined : progress}
+                      />
+                      <div className="transfer-job-detail">
+                        <span>
+                          {bytes(job.transferredBytes)} / {bytes(job.totalBytes)} · {job.completedFiles}/
+                          {job.totalFiles} files{job.skippedFiles > 0 ? ` · ${job.skippedFiles} skipped` : ''}
+                        </span>
+                        {job.status === 'transferring' && (
+                          <span>
+                            {bytes(job.bytesPerSecond)}/s
+                            {seconds !== null
+                              ? ` · ${seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}m`} left`
+                              : ''}
+                          </span>
+                        )}
+                      </div>
+                      {job.error && (
+                        <p role="alert" className="transfer-error">
+                          {job.error}
+                        </p>
                       )}
                     </div>
-                    {job.error && (
-                      <p role="alert" className="transfer-error">
-                        {job.error}
-                      </p>
-                    )}
-                  </div>
-                  {activeTransfer(job) ? (
-                    <button
-                      className="icon-btn"
-                      aria-label="Cancel transfer"
-                      title="Cancel transfer"
-                      onClick={() => void transferCancel(job.id).catch((e) => setError(describeError(e)))}
-                    >
-                      <CloseIcon />
-                    </button>
-                  ) : (
-                    job.status !== 'completed' &&
-                    retryInputs.current.has(job.id) && (
+                    {activeTransfer(job) ? (
                       <button
-                        className="btn btn-sm"
-                        onClick={() => void begin(retryInputs.current.get(job.id)!)}
+                        className="icon-btn"
+                        aria-label="Cancel transfer"
+                        title="Cancel transfer"
+                        onClick={() => void transferCancel(job.id).catch((e) => setError(describeError(e)))}
                       >
-                        Retry
+                        <CloseIcon />
                       </button>
-                    )
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        )}
+                    ) : (
+                      job.status !== 'completed' &&
+                      retryInputs.current.has(job.id) && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => void begin(retryInputs.current.get(job.id)!)}
+                        >
+                          Retry
+                        </button>
+                      )
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </section>
       {trust && host && (
         <HostKeyDialog

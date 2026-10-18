@@ -185,43 +185,118 @@
   line-height: 1.7;
   font-size: 12px;
 }
-.tunnel-route {
+.tunnel-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr);
+  gap: 8px;
+}
+.tunnel-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px 20px;
+  padding: 14px 16px;
+}
+.tunnel-card:has([data-state='running']) {
+  border-left-color: var(--success);
+}
+.tunnel-card-head {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.tunnel-card-head h2 {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--fg-strong);
+  font-size: 13px;
+}
+.tunnel-mode {
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 9px;
+  font-weight: 550;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.tunnel-via {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--faint);
+}
+.tunnel-route {
+  grid-column: 1;
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 18px 20px;
+  flex-wrap: wrap;
 }
-.tunnel-route > div {
+.tunnel-endpoint {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 12px 14px;
-  display: grid;
+  display: inline-flex;
+  align-items: baseline;
   gap: 6px;
+  max-width: 100%;
 }
-.tunnel-route span,
-.tunnel-route small {
+.tunnel-endpoint > span {
   font-size: 10px;
   color: var(--muted);
+  flex: none;
 }
 .tunnel-route code {
-  font-size: 12px;
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 .tunnel-route .tunnel-arrow {
-  text-align: center;
   color: var(--accent);
-  font-size: 22px;
+  font-size: 15px;
 }
 .tunnel-metrics {
+  grid-column: 1;
   display: flex;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 .tunnel-metrics strong {
   color: var(--fg);
   font-weight: 500;
+}
+.tunnel-metrics [data-tone='warning'] {
+  color: var(--warning);
+}
+.tunnel-actions {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+}
+.tunnel-actions .btn {
+  padding: 6px 10px;
+  font-size: 11px;
+  min-width: 70px;
+  margin-left: 6px;
+}
+.tunnel-actions .icon-btn {
+  width: 27px;
+  height: 27px;
+}
+.tunnel-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
 }
 .mode-picker {
   display: grid;
@@ -578,6 +653,37 @@
 .transfer-tray h2 {
   font-size: 12px;
 }
+.transfer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.transfer-toggle[aria-expanded='true'] > svg {
+  transform: rotate(90deg);
+}
+.transfer-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.transfer-toggle .count {
+  margin-left: 0;
+}
+.transfer-tray-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .transfer-tray .hint {
   font-size: 10px;
 }
@@ -680,14 +786,6 @@
   .network-card-foot {
     padding: 10px 14px;
   }
-  .tunnel-route {
-    padding-inline: 14px;
-    gap: 5px;
-    grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1fr);
-  }
-  .tunnel-route > div {
-    padding: 10px;
-  }
 }
 @container (max-width: 540px) {
   .sftp-page {
@@ -725,13 +823,15 @@
   .network-card-head .network-status {
     margin-left: auto;
   }
-  .tunnel-route {
+  .tunnel-card {
     grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+    gap: 10px;
   }
-  .tunnel-route .tunnel-arrow {
-    transform: rotate(90deg);
-    font-size: 16px;
-    line-height: 12px;
+  .tunnel-actions {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: end;
   }
 }
 @media (prefers-reduced-motion: reduce) {

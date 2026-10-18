@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type FormEvent } from 'react';
 import { describeError } from './ipc';
-import { flushVaultViews, vaultAction, vaultActivity, vaultLock, vaultStatus, vaultFlushComplete, type VaultStatus } from './vault';
+import { flushVaultViews, vaultAction, vaultActivity, vaultLock, vaultStatus, vaultWatch, vaultFlushComplete, type VaultStatus } from './vault';
 import { SelaiLogo } from './ui/SelaiLogo';
 import { WindowControls } from './App';
 import './vault.css';
@@ -20,16 +20,37 @@ export function VaultGate({ children }: { children: ReactNode }) {
   const [lockChoice, setLockChoice] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const lastActivity = useRef(0);
-  const refresh = useCallback(async () => {
-    try { const next = await vaultStatus(); setStatus(next); }
-    catch (e) { setError(describeError(e)); }
+  const statusRevision = useRef(0);
+  const acceptStatus = useCallback((next: VaultStatus) => {
+    if (next.revision !== undefined && next.revision < statusRevision.current) return;
+    statusRevision.current = next.revision ?? statusRevision.current;
+    setStatus(next);
   }, []);
+  const refresh = useCallback(async () => {
+    try { const next = await vaultStatus(); acceptStatus(next); }
+    catch (e) { setError(describeError(e)); }
+  }, [acceptStatus]);
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => { void refresh(); }, 500);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    let live = true;
+    let receivedEvent = false;
+    let timer: number | undefined;
+    const visibility = () => { if (!document.hidden) void refresh(); };
+    void vaultWatch((next) => { if (live) { receivedEvent = true; acceptStatus(next); } })
+      .then((next) => {
+        if (!live) return;
+        if (!receivedEvent) acceptStatus(next);
+        // Sparse recovery polling, not two IPC round trips per second at idle.
+        timer = window.setInterval(() => { void refresh(); }, 10000);
+      })
+      .catch(() => {
+        if (!live) return;
+        void refresh();
+        timer = window.setInterval(() => { void refresh(); }, 500);
+      });
+    document.addEventListener('visibilitychange', visibility);
+    return () => { live = false; window.clearInterval(timer); document.removeEventListener('visibilitychange', visibility); };
+  }, [refresh, acceptStatus]);
   useEffect(() => {
     if (status?.phase !== 'unlocked' || recovery) return;
     const activity = () => {
@@ -92,7 +113,7 @@ export function VaultGate({ children }: { children: ReactNode }) {
     finally { setBusy(false); }
   }
   const requestLock = async () => {
-    try { const current = await vaultStatus(); setStatus(current); if (current.activeTasks || current.terminals) setLockChoice(true); else await lock(false); }
+    try { const current = await vaultStatus(); acceptStatus(current); if (current.activeTasks || current.terminals) setLockChoice(true); else await lock(false); }
     catch (e) { setError(describeError(e)); }
   };
   useEffect(() => {
@@ -160,12 +181,20 @@ function SecuritySettings({ status, close, refresh }: {status: VaultStatus; clos
   const [code, setCode] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [storage, setStorage] = useState<{ databaseBytes: number; reclaimableBytes: number } | null>(null);
+  useEffect(() => {
+    let live = true;
+    void vaultAction('storageStatus').then((result) => { if (live && result) setStorage(JSON.parse(result)); }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
   async function act(action: string, minutes?: number) {
     setError(null); setMessage(null); setBusy(true);
     try {
       if (action === 'change' && next !== confirm) throw new Error('New passphrases do not match.');
       const result = await vaultAction(action, current, next, minutes);
+      if (action === 'compact' && result) { setStorage(JSON.parse(result)); setMessage('Vault compacted. Chat, history, and credentials were retained.'); }
       if (action === 'rotateRecovery') { setCode(result); setSaved(false); }
+      else if (action === 'compact') { /* Storage result was rendered above. */ }
       else setMessage(result || (action === 'change' ? 'Passphrase changed. Existing backups still use their original passphrase.' : action === 'timeout' ? 'Auto-lock updated.' : 'Done.'));
       setCurrent(''); setNext(''); setConfirm(''); await refresh();
     } catch (e) { setError(describeError(e)); }
@@ -179,6 +208,11 @@ function SecuritySettings({ status, close, refresh }: {status: VaultStatus; clos
     <p>Your database, credentials, private keys, chat, and history are encrypted. Locking disconnects terminals and releases the vault key.</p>
     <label>Auto-lock after inactivity<select aria-label="Auto-lock timeout" disabled={busy} value={status.timeoutMinutes} onChange={(e) => void act('timeout', Number(e.target.value))}>{[5,15,30,60].map((n) => <option key={n} value={n}>{n} minutes</option>)}</select></label>
     <p className="muted">Only your interaction with Selai resets this timer. Terminal output and AI replies do not.</p>
+    {storage && <details><summary>Storage</summary>
+      <p>Vault: {(storage.databaseBytes / 1048576).toFixed(1)} MiB · Reusable space: {(storage.reclaimableBytes / 1048576).toFixed(1)} MiB</p>
+      <p className="muted">Compaction reclaims unused space without removing history. Close active tasks, terminals, transfers, and tunnels first. Available for vaults up to 128 MiB.</p>
+      <button disabled={busy || status.activeTasks > 0 || status.terminals > 0 || storage.reclaimableBytes === 0 || storage.databaseBytes > 128 * 1048576} onClick={() => void act('compact')}>Compact vault</button>
+    </details>}
     {status.cleanupPending && <div role="alert" className="vault-warning">Some old files or Credential Manager entries still need removal. Close older Selai instances and retry.<button disabled={busy} onClick={() => void act('cleanup')}>Retry legacy cleanup</button></div>}
     {code ? <><h3>New recovery key</h3><p>Your previous recovery key no longer opens this vault. Existing backups retain their earlier recovery key.</p><textarea aria-label="New recovery key" rows={3} readOnly value={code} /><label className="vault-check"><input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />I saved this recovery key separately.</label><button disabled={!saved} onClick={() => { setCode(null); setSaved(false); }}>Continue</button></> : <>
       <label>Current passphrase<input aria-label="Current passphrase" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} maxLength={1024} /></label>

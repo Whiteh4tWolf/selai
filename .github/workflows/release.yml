@@ -105,7 +105,6 @@ jobs:
           cargo test --release --locked -p selai-storage encrypted_memory_security_does_not_reenter_native_logging
           cargo test --release --locked -p selai-vault --test vault -- --test-threads=1
           cargo test --release --locked -p selai-desktop --lib vault_service::tests -- --test-threads=1
-
       # Optional Apple signing and notarization. Tauri reads these variables itself.
       # A variable whose secret is empty is unset, because Tauri treats an empty
       # string as configured and would then try to use it.
@@ -135,6 +134,14 @@ jobs:
         run: >-
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/sign-windows.ps1
           -BundleDir target/release/bundle
+
+      - name: Check frontend and Windows package size budgets
+        run: |
+          if [[ "${{ matrix.platform }}" == "windows" ]]; then
+            node scripts/ci/check-size-budget.mjs --windows
+          else
+            node scripts/ci/check-size-budget.mjs
+          fi
 
       - name: Stage installers and write SHA256SUMS (Linux and macOS)
         if: matrix.platform != 'windows'

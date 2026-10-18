@@ -29,14 +29,24 @@ async fn trusted(services: &Services, server: &Sshd) -> String {
 }
 async fn copy(services: &Services, input: TransferInput, cancel_after_data: bool) -> TransferView {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let initial = services
-        .transfer_start(
-            input,
-            Arc::new(move |event| {
-                let _ = tx.send(event);
-            }),
-        )
-        .unwrap();
+    // Production submits this from synchronous IPC, outside an entered Tokio
+    // runtime. Calling it directly in #[tokio::test] hid the desktop crash.
+    let initial = std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                services
+                    .transfer_start(
+                        input,
+                        Arc::new(move |event| {
+                            let _ = tx.send(event);
+                        }),
+                    )
+                    .unwrap()
+            })
+            .join()
+            .expect("synchronous transfer submission must not panic")
+    });
     tokio::time::timeout(LIMIT, async {
         loop {
             let view = rx.recv().await.unwrap();

@@ -41,6 +41,20 @@ pub async fn vault_status(
         .map_err(|_| CommandError::new(selai_domain::ErrorCode::Internal, "Vault status failed."))?
 }
 #[tauri::command]
+pub async fn vault_watch(
+    state: State<'_, AppState>,
+    on_event: Channel<crate::vault_service::VaultStatus>,
+) -> Result<crate::vault_service::VaultStatus, CommandError> {
+    let manager = state.vault()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        manager.watch_status(Arc::new(move |status| {
+            let _ = on_event.send(status);
+        }))
+    })
+    .await
+    .map_err(|_| CommandError::new(ErrorCode::Internal, "Vault status subscription failed."))?
+}
+#[tauri::command]
 pub fn vault_flush_complete(state: State<'_, AppState>) -> Result<(), CommandError> {
     state.vault()?.flush_complete()
 }
@@ -198,6 +212,8 @@ pub async fn vault_action(
             "change" => manager.change(phrase,replacement).map(|_|None),
             "rotateRecovery" => manager.rotate(phrase).map(Some),
             "timeout" => manager.timeout(minutes.unwrap_or(15)).map(|_|None),
+            "storageStatus" => manager.storage_usage().map(Some),
+            "compact" => manager.compact().map(Some),
             "cleanup" => manager.retry_cleanup().map(|ok|Some(if ok {"Cleanup complete"}else{"Some legacy files or credentials could not be removed. Close older Selai instances, then retry."}.into())),
             "archives" => manager.archives().and_then(|names|serde_json::to_string(&names).map(Some).map_err(|e|CommandError::new(selai_domain::ErrorCode::Internal,e.to_string()))),
             "exportArchive" => {
@@ -431,14 +447,26 @@ pub async fn terminal_connect(
     rows: u32,
     on_event: Channel<TerminalEvent>,
 ) -> Result<String, CommandError> {
+    let flow = Arc::new(crate::terminal_flow::TerminalFlow::default());
+    let event_flow = flow.clone();
     let sink: EventSink = Arc::new(move |event| {
-        // A closed channel means the window went away; the session ends on its own.
-        let _ = on_event.send(event);
+        if on_event.send(event).is_err() {
+            event_flow.close();
+        }
     });
     let lease = services(&state)?;
     lease
-        .run(lease.terminal_connect(&host_id, cols, rows, sink))
+        .run(lease.terminal_connect_with_flow(&host_id, cols, rows, sink, flow))
         .await
+}
+
+#[tauri::command]
+pub fn terminal_ack(
+    state: State<'_, AppState>,
+    session_id: String,
+    bytes: usize,
+) -> Result<(), CommandError> {
+    services(&state)?.terminal_ack(&session_id, bytes)
 }
 
 #[tauri::command]

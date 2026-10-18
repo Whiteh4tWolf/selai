@@ -114,19 +114,21 @@ export function useChatSessions() {
     if (mounted.current) setRecords(next);
   }, []);
 
-  const flush = useCallback((id: string) => {
+  const flush = useCallback((id: string): Promise<void> => {
     const timer = timers.current.get(id);
     if (timer !== undefined) window.clearTimeout(timer);
     timers.current.delete(id);
+    // One in-flight snapshot per session. Newer revisions remain in recordsRef,
+    // not in a chain of serialized transcripts waiting behind a slow IPC call.
+    const previous = chains.current.get(id);
+    if (previous) return previous;
     const record = recordsRef.current[id];
-    if (!record || record.revision <= record.savedRevision || (inFlight.current.get(id) ?? -1) >= record.revision) return;
+    if (!record || record.revision <= record.savedRevision) return Promise.resolve();
     const revision = record.revision;
     inFlight.current.set(id, revision);
     const input = { id, title: record.title.trim() || 'New session',
       transcript: JSON.stringify({ version: 1, turns: record.turns }) };
-    const previous = chains.current.get(id);
-    const request = previous ? previous.catch(() => undefined).then(() => chatSessionSave(input)) : chatSessionSave(input);
-    const job = request
+    const job = chatSessionSave(input)
       .then(() => {
         failed.current.delete(id);
         mutate((prev) => prev[id] ? { ...prev, [id]: { ...prev[id]!, savedRevision: Math.max(prev[id]!.savedRevision, revision) } } : prev);
@@ -141,17 +143,29 @@ export function useChatSessions() {
         if (mounted.current) setSaveError(`Session history could not be saved: ${describeError(error)}`);
       })
       .finally(() => {
-        if (inFlight.current.get(id) === revision) inFlight.current.delete(id);
-        if (chains.current.get(id) === job) chains.current.delete(id);
+        inFlight.current.delete(id);
+        chains.current.delete(id);
+        const latest = recordsRef.current[id];
+        if (latest && latest.revision > latest.savedRevision && failed.current.get(id) !== latest.revision && mounted.current && !timers.current.has(id)) {
+          timers.current.set(id, window.setTimeout(() => { void flush(id); }, 1000));
+        }
       });
     chains.current.set(id, job);
+    return job;
   }, [mutate]);
 
-  useEffect(() => registerVaultFlusher(async () => {
-    Object.keys(recordsRef.current).forEach(flush);
-    await Promise.all([...chains.current.values()]);
-    if (failed.current.size) throw new Error('Session history could not be saved. Retry saving before locking.');
-  }), [flush]);
+  const flushLatest = useCallback(async () => {
+    // A vault lock must wait for the newest revision, including changes made
+    // while an older snapshot was being written.
+    for (;;) {
+      const dirty = Object.values(recordsRef.current).filter((record) => record.revision > record.savedRevision);
+      if (!dirty.length) return;
+      await Promise.all(dirty.map((record) => flush(record.id)));
+      if (failed.current.size) throw new Error('Session history could not be saved. Retry saving before locking.');
+    }
+  }, [flush]);
+
+  useEffect(() => registerVaultFlusher(flushLatest), [flushLatest]);
 
   useEffect(() => {
     mounted.current = true;
@@ -176,7 +190,7 @@ export function useChatSessions() {
         if (live) setReady(true);
       }
     })();
-    const flushAll = () => Object.keys(recordsRef.current).forEach(flush);
+    const flushAll = () => { void flushLatest().catch(() => undefined); };
     window.addEventListener('pagehide', flushAll);
     return () => {
       live = false;
@@ -184,7 +198,7 @@ export function useChatSessions() {
       window.removeEventListener('pagehide', flushAll);
       flushAll();
     };
-  }, [flush, mutate]);
+  }, [flush, flushLatest, mutate]);
 
   useEffect(() => {
     for (const record of Object.values(records)) {

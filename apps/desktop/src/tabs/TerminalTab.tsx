@@ -1,5 +1,6 @@
 import type { HostView } from '../ipc';
 import { TerminalPane } from './TerminalPane';
+import type { ResolvedTheme } from '../theme';
 
 export type SessionStatus = 'connecting' | 'connected' | 'hostkey' | 'failed' | 'closed';
 
@@ -9,6 +10,7 @@ export interface TerminalSessionTab {
 }
 
 interface Props {
+  theme: ResolvedTheme;
   tabs: TerminalSessionTab[];
   activeKey: string | null;
   visible: boolean;
@@ -20,11 +22,12 @@ interface Props {
 }
 
 /** The open terminals. Panes stay mounted while hidden so their sessions survive tab changes. */
-export function TerminalStack({ tabs, activeKey, visible, onClose, onStatus, onEditHost, fontSize, onFontSizeChange }: Props) {
+export function TerminalStack({ tabs, activeKey, visible, onClose, onStatus, onEditHost, fontSize, onFontSizeChange, theme }: Props) {
   return (
     <div className="term-stack" hidden={!visible}>
       {tabs.map((tab) => (
         <TerminalPane
+          theme={theme}
           key={tab.key}
           host={tab.host}
           hidden={!visible || tab.key !== activeKey}

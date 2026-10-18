@@ -10,6 +10,7 @@ import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
 import { ClockIcon, CloseIcon, KeyIcon, MaximizeIcon, MinimizeIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon, FilesIcon, ForwardIcon, ProxyIcon } from './ui/icons';
 import { SelaiLogo } from './ui/SelaiLogo';
 import { VaultGate } from './VaultGate';
+import { useResolvedTheme, type Theme } from './theme';
 
 // xterm.js is large; load it only when a terminal is first needed.
 const TerminalStack = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalStack })));
@@ -27,7 +28,6 @@ const PAGE_TITLES: Record<PageId, string> = { history: 'History', providers: 'Pr
 
 let nextTabNumber = 0;
 
-type Theme = 'dark' | 'light' | 'system';
 const THEMES: Theme[] = ['dark', 'light', 'system'];
 const THEME_KEY = 'selai.theme';
 const TERMINAL_FONT_KEY = 'selai.terminal.fontSize';
@@ -154,6 +154,7 @@ export function Workbench() {
   const [editRequest, setEditRequest] = useState<{ hostId: string; n: number } | null>(null);
   const [profilePaused, setProfilePaused] = useState(false);
   const [theme, setTheme] = useState<Theme>(storedTheme);
+  const terminalTheme = useResolvedTheme(theme);
   const [terminalFontSize, setTerminalFontSize] = useState(storedTerminalFontSize);
   const [sidebarOpen, setSidebarOpen] = useState(() => stored('selai.sidebar') !== 'closed');
   const [chatOpen, setChatOpen] = useState(() => {
@@ -426,6 +427,7 @@ export function Workbench() {
             {terminals.length > 0 && (
               <Suspense fallback={<div className="welcome"><span className="spinner spinner-lg" /></div>}>
                 <TerminalStack
+                  theme={terminalTheme}
                   tabs={terminals}
                   activeKey={activeKey}
                   visible={active?.kind === 'terminal'}

@@ -5,7 +5,7 @@
 <p align="center"><strong>A desktop SSH workbench with a host-scoped AI assistant.</strong><br>
 Terminals, an AI chat, and command history in one app. You choose where the assistant may work and approve its commands, with optional root approval for one request on one host.</p>
 
-<p align="center"><sub>Preview 0.2.0 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
+<p align="center"><sub>Preview 0.2.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
 
 <p align="center">
   <a href="#quick-demo">Demo</a> ·
@@ -39,12 +39,29 @@ never included in requests to an AI provider.
 - **Everything is recorded.** Each request, command, outcome, and token count is
   saved to History, with an audit record written before remote execution.
 
-> **Version 0.2.0 is a preview.** Automated coverage includes Linux SSH and agent
+> **Version 0.2.1 is a preview.** Automated coverage includes Linux SSH and agent
 > flows with an OpenSSH fixture and mock AI providers, plus Windows encryption
 > and vault checks in the release build profile. Full interactive SSH and live
 > provider coverage across all platforms is not established. See [current milestone evidence](docs/release/milestones.md)
 > and [known security limits](SECURITY.md) before using Selai with sensitive
 > systems.
+
+## New in 0.2.1
+
+- Fixed a native transfer-start panic affecting uploads and downloads.
+- A collapsible **Transfers** tray with **Clear** for finished jobs. Clearing
+  removes session transfer records; it does not delete transferred files or cancel active jobs.
+- More compact port-forwarding cards retain route, status, connection and traffic details.
+- Terminal backgrounds and ANSI colors now follow light, dark, or system theme
+  without reconnecting. Programs using explicit RGB colors can still choose their own colors.
+- Bounded terminal output queues and forwarding connections, smaller rendered chat
+  history, and coalesced autosaves keep background work and queued data under control.
+- Disk-space checks for downloads/backups, periodic output-preview retention, and
+  optional idle vault compaction under **Security → Storage**.
+
+These changes add resource limits; they do not establish a measured CPU/RAM
+reduction. See [resource limits and performance evidence](docs/release/performance.md)
+and the [release notes](docs/release/RELEASE_NOTES.md).
 
 ## Quick demo
 
@@ -108,18 +125,18 @@ not contact a live server. The AI provider is already configured for this demo.
 | --- | --- |
 | **SSH hosts** | Add, edit, filter, and archive profiles; organize them in collapsible groups; use a password or choose a managed SSH key; save a host and connect in one flow. Reveal a saved login password on demand from the profile editor. Labels can contain spaces. |
 | **SSH keys** | Generate named Ed25519, RSA (2048/3072/4096/8192 bits), or ECDSA P-256/P-384/P-521 key pairs; import existing keys with an optional passphrase; copy public keys and reuse a key across profiles. RSA login uses SHA-2 signatures. Private keys stay in the encrypted vault. |
-| **SFTP** | Browse local and remote folders side by side, upload/download files and folders recursively, and see progress, speed, remaining time, skips, failures, and cancellation. New-folder, rename, and empty-folder/file deletion are available in either panel. |
+| **SFTP** | Browse local and remote folders side by side, upload/download files and folders recursively, and see progress, speed, remaining time, skips, failures, and cancellation. Collapse the transfer tray or clear finished jobs. Matching files are skipped by default; replacement needs confirmation for the selected transfer. New-folder, rename, and empty-folder/file deletion are available in either panel. |
 | **Port forwarding** | Save and start local, remote, or dynamic SOCKS5 TCP tunnels from a UI. Choose an SSH host, bind address/port and destination, then inspect active connections and byte counts. |
 | **SSH proxies** | Save HTTP CONNECT or SOCKS5 profiles with optional authentication, then enable a proxy on any SSH profile. Terminal, AI, SFTP, forwarding and host-key checks use that route. |
 | **Host verification** | Inspect and explicitly trust a fingerprint on first connection. A changed host key blocks connection until you confirm its replacement. |
-| **Terminal** | Open interactive SSH terminals in tabs, resize them, adjust the terminal font with Ctrl+Plus or Ctrl+Minus, see connection and exit status, reconnect, and edit a host after a failed login. Open a terminal for **This computer** too. |
+| **Terminal** | Open interactive SSH terminals in tabs, resize them, adjust the terminal font with Ctrl+Plus or Ctrl+Minus, see connection and exit status, reconnect, and edit a host after a failed login. Terminal colors follow the light/dark/system theme without reconnecting. Open a terminal for **This computer** too. |
 | **AI chat** | Discuss a question without a server, or bind a task to one or more SSH hosts or This computer. Mention hosts with `@` for one message to run independent tasks in parallel, follow the focused terminal, or pin a server in the chat. Each host has its own output and change approvals. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
 | **Command control** | Fixed diagnostics may run without a prompt. Other commands need approval; a root approval can optionally cover further root commands in the same request on the same host. Denied, expired, and interrupted work is not replayed automatically. |
 | **Providers** | Configure OpenAI Responses, OpenAI Chat Completions and compatible endpoints, or Anthropic Messages. Check an API key, choose or enter a model ID, and test a real tool-call round trip. |
 | **History** | Search saved AI sessions by title, then open a session to review its requests and command executions across servers, including status, exit codes and stored output. Browse by host for older tasks, provider token counts, timeline filters, encrypted history exports and output retention. |
 | **Profile import** | Preview CSV, JSON, password-protected KDBX, or OpenSSH config profiles before import. Upload a config file or read `~/.ssh/config` directly. Use the shared CSV template for exports from other tools. Existing hosts are not replaced. |
 | **Workbench** | Use the host explorer, terminal and History/Providers tabs, and the assistant side by side. Toggle the right-hand Assistant panel from the header and drag its divider to give it more room. The window controls are integrated into the workbench header. Choose dark, light, or system theme. |
-| **Encrypted vault** | Protect credentials, managed private keys, host metadata, chat, and history with one passphrase. Use automatic locking, a separate recovery key, encrypted backup/restore, and encrypted history exports. |
+| **Encrypted vault** | Protect credentials, managed private keys, host metadata, chat, and history with one passphrase. Use automatic locking, a separate recovery key, encrypted backup/restore, encrypted history exports, and manual compaction of unused database space while idle. |
 
 ### SSH hosts and terminals
 
@@ -194,10 +211,16 @@ RSA generation uses OpenSSL and can take longer at larger key sizes.
    **Download** saves remote selections into the current local folder.
 5. Watch the transfer tray for percentage, bytes, speed, remaining time and file
    counts. Cancel an active job or retry a failed/cancelled job in the same page.
+   Click its header to collapse/expand it. **Clear** removes completed, failed,
+   and cancelled records while preserving active transfers and transferred files.
 
 Folders are copied recursively; symbolic links are skipped. Matching files are
-skipped by default. Choose **Replace matching files** and confirm the transfer to
-replace them. Each file is published after its temporary copy finishes. Cancelling
+skipped by default, with no conflict dialog. Choose **Replace matching files** and
+confirm **Transfer & replace** to replace them. Confirmation covers the selected
+transfer, including matching files inside folders; it is not a prompt for each
+conflicting file. Retry reuses the original transfer's replacement choice.
+**Completed** can include skipped files; check the skipped count.
+Each file is published after its temporary copy finishes. Cancelling
 keeps completed files and removes the current partial file when the connection is
 available. Transfers continue when you switch or close the page, and the page
 restores active connections when reopened. Disconnecting cancels that connection's
@@ -208,7 +231,10 @@ The folder toolbar creates folders, renames an entry, and deletes a file or an
 empty folder. Transfers use bounded native buffers with two concurrent jobs;
 file contents never pass through the webview. File lists are virtualized and
 limited to 20,000 entries per directory. A recursive job supports up to 100,000
-entries; select up to 256 top-level entries per job.
+entries; select up to 256 top-level entries per job. Directory metadata is also
+limited to 8 MiB and transfer-plan metadata to 32 MiB; unusually long paths can
+reach these budgets before the entry limit. Downloads check local free space
+before creating a temporary file.
 
 ### Port forwarding
 
@@ -226,6 +252,9 @@ port; the running card shows the actual port. **Save & start** starts it right
 away. Cards show active connections, sent/received bytes, errors, and a **Stop**
 button. Tunnels stay active while switching pages, and the page restores their
 live status when reopened. Saved tunnels start only when you choose Start.
+Compact cards keep each route, status and counters together. Up to 64 connections
+per tunnel and 128 connections across all tunnels are allowed; excess connections
+are closed and counted as errors.
 
 Bind defaults to `127.0.0.1`. An external bind can expose the listening service
 to other devices. Remote forwarding depends on the server's AllowTcpForwarding
@@ -271,6 +300,10 @@ history displays previous commands and decisions without executing them again;
 unfinished runs are marked as detached and old approval controls are inactive.
 Credential input fields, including sudo passwords, are excluded from the saved
 transcript. Session transcripts are limited to 2 MB and 1,000 task replies.
+The view renders up to 40 turns at once; **Earlier messages**, **Next messages**
+and **Latest messages** navigate saved history. Reading older messages does not
+delete them. Autosave keeps one snapshot in flight per session and saves the
+latest revision after that write finishes.
 
 Assistant replies support GitHub Flavored Markdown, including headings, lists,
 tables, task lists, links, and fenced code blocks. A fenced `mermaid` block is
@@ -367,6 +400,14 @@ Selai data directory; existing vaults are not overwritten. Backups and history
 exports retain the passphrase/recovery key from when they were created. Changing
 the current passphrase does not invalidate older copies.
 
+**Security → Storage** shows allocated and reusable database space. **Compact vault**
+reclaims unused pages without deleting chat, history, or credentials. Stop active
+tasks, terminals, transfers, and tunnels first. Interactive compaction supports
+vaults up to 128 MiB and checks free disk space. The configured output-preview
+retention policy runs at unlock and every six hours while unlocked; it preserves
+command metadata and does not remove chat or audit records. Freed pages can be
+reused even before compaction.
+
 History exports now use `.selai-history` and are encrypted by default. The
 explicit **Decrypt a history export** action saves readable JSON after you enter
 the export's passphrase and choose a destination outside Selai's app directory.
@@ -381,7 +422,7 @@ Keep the old folder until you have verified the restored hosts and history.
 
 ### Install a preview build
 
-Download [Selai 0.2.0 from GitHub Releases](https://github.com/f3ci/selai/releases/tag/v0.2.0).
+Download [Selai 0.2.1 from GitHub Releases](https://github.com/f3ci/selai/releases/tag/v0.2.1).
 Builds are also available from the **Release packaging** workflow artifacts.
 Packages are provided for:
 

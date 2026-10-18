@@ -1,7 +1,62 @@
 # Performance measurements (S-043)
 
-Numbers in this file were measured by `apps/desktop/src-tauri/tests/perf_pty.rs`.
-Nothing here is estimated or copied from another machine.
+The benchmark table below was measured by
+`apps/desktop/src-tauri/tests/perf_pty.rs`. Resource limits are source contracts,
+not measurements of desktop memory or CPU.
+
+## Resource controls (2026-10-18)
+
+These changes have not yet been measured in a new executable or installer:
+
+- Terminal panes follow light, dark, or system theme without reconnecting.
+  The light palette adjusts ANSI colors and uses a minimum contrast ratio of
+  4.5. Programs that explicitly paint RGB backgrounds can still choose their own
+  colors. Changing the palette does not change shell commands or remote state.
+- Production terminal IPC holds at most 256 KiB of unacknowledged raw output per
+  session, in chunks up to 32 KiB. Credits return after xterm's write callback,
+  including hidden panes. This bounds that output queue, not SSH transport,
+  WebView, PTY, or scrollback memory. Closing wakes blocked producers. Admission
+  allows at most 16 terminal sessions, including connections in progress.
+- Forwarding permits at most 128 concurrent connections across all tunnels and
+  modes, retaining the existing 64-connection limit per tunnel. Excess sockets
+  are closed and counted as errors; connection buffers are not queued indefinitely.
+- SFTP directory metadata is limited to 8 MiB / 20,000 entries, and transfer plan
+  metadata to 32 MiB / 100,000 discovered entries. File contents remain streamed
+  in 64 KiB buffers with two transfers at a time. A download checks local free
+  space for its temporary copy plus 8 MiB headroom. This is a preflight rather
+  than a disk reservation; later write errors are still handled.
+- Chat autosave keeps one snapshot in flight per session and coalesces newer
+  revisions. Lock flushing waits for the latest revision. The visible transcript
+  renders up to 40 turns, with navigation to older turns. Saved history remains
+  intact. Persistence still writes full JSON snapshots and retains its existing
+  size limit; this is not incremental transcript storage.
+- Vault status notifications carry monotonically increasing revisions so a late
+  snapshot cannot reopen a locked view. The UI uses notifications and a 10-second
+  recovery poll; if subscription fails, it falls back to the former 500 ms poll.
+  Native auto-lock checks still run once per second.
+- The existing output-preview retention policy runs on production vault
+  activation, with a new sweep every six hours while unlocked. It does not delete chat or audit
+  records. SQLite reuses freed pages; automatic retention does not shrink the file.
+- Vault security settings show allocated/reusable database bytes and offer manual
+  compaction while work is idle. Native admission excludes active operations,
+  tasks, terminals, transfers, and tunnels. Interactive compaction is limited to
+  vaults up to 128 MiB, with free-space checks. SQLCipher, secure deletion,
+  durability, and memory-only temporary storage remain enabled. Encrypted backup
+  creation also checks space for its temporary database and destination.
+
+`scripts/ci/check-size-budget.mjs` gates frontend assets after CI builds and
+Windows packages before release staging. Limits are 6.5 MiB raw frontend,
+2 MiB gzip (a regression proxy, not the installer's compression), 1.5 MiB per
+asset, 450 KiB startup JS, 40 MiB Windows executable, and 16 MiB per Windows
+installer. Mermaid remains lazy-loaded with its supported diagram types. No
+runtime dependency was added for these controls. Development `target/` and
+`node_modules/` directories are separate from installed application disk usage.
+
+Native contract tests cover credit exhaustion, acknowledgement and cancellation;
+a real local PTY test exercises output larger than one credit window. Synthetic
+vault tests verify idle compaction preserves readable encrypted data. A new
+Windows/WebView workload benchmark and fresh package-size measurement remain
+necessary before claiming a particular CPU, RAM, or installer-size reduction.
 
 ## Frontend review (2026-10-16)
 
@@ -19,9 +74,9 @@ These are source-level changes, **not new CPU or RAM measurements**:
 
 The measurements below predate these changes. A full desktop CPU/RAM comparison
 still needs the native app and webview running on the same machine before and
-after the change. The terminal event path still has no UI acknowledgement or
-backpressure; a producer that outruns the webview can grow queued output in
-memory. This remains the main unbounded-RAM risk under sustained output.
+after the change. At the time of these measurements, terminal output had no UI
+acknowledgement or backpressure. The October 18 controls above address that queue;
+the old measurements do not establish their performance.
 
 ## Machine
 
@@ -63,7 +118,6 @@ cargo test -p selai-desktop --test perf_pty --locked -- --ignored --nocapture
 - Not measured: `top` and `vim` redraw correctness (T-SSH-006 asks for them),
   input responsiveness while an AI stream is running, macOS and Windows, and
   memory on those platforms.
-- Output backpressure is still not implemented on the terminal event channel
-  (see milestones M1 gaps). Under sustained flooding the channel is unbounded.
+- Output backpressure was not implemented in the measured terminal event path.
   The numbers above are for the 7 to 8 MiB/s the harness can drain, not for a
   producer that outruns the UI.

@@ -115,6 +115,7 @@ export const filesAction = (
     newName: newName ?? null,
   });
 export const transferList = () => invoke<TransferView[]>('transfer_list');
+export const transferClear = () => invoke<string[]>('transfer_clear');
 export const transferCancel = (id: string) => invoke<void>('transfer_cancel', { id });
 export const transferStart = (input: TransferInput, callback: (event: TransferView) => void) => {
   const onEvent = new Channel<TransferView>();

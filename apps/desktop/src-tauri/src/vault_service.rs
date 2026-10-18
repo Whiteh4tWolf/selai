@@ -68,6 +68,7 @@ struct Inner {
     vault: Option<Vault>,
     services: Option<Arc<Services>>,
     locking: bool,
+    maintaining: bool,
     activity: Instant,
     timeout_minutes: u32,
     failures: u32,
@@ -76,11 +77,16 @@ struct Inner {
     flush_required: bool,
     flush_complete: bool,
 }
+type StatusSink = Arc<dyn Fn(VaultStatus) + Send + Sync>;
+
 pub struct VaultManager {
     _process_lock: std::fs::File,
     dir: PathBuf,
     inner: Mutex<Inner>,
     leases: AtomicUsize,
+    status_sink: Mutex<Option<StatusSink>>,
+    last_status: Mutex<Option<VaultStatus>>,
+    last_published: std::sync::atomic::AtomicU64,
 }
 pub struct ServiceLease {
     services: Arc<Services>,
@@ -108,9 +114,21 @@ impl Drop for ServiceLease {
     }
 }
 
-#[derive(Serialize)]
+struct MaintenanceLease {
+    lease: ServiceLease,
+}
+impl Drop for MaintenanceLease {
+    fn drop(&mut self) {
+        if let Ok(mut inner) = self.lease.manager.inner.lock() {
+            inner.maintaining = false;
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultStatus {
+    pub revision: u64,
     pub phase: &'static str,
     pub legacy_found: bool,
     pub timeout_minutes: u32,
@@ -140,10 +158,14 @@ impl VaultManager {
             _process_lock: file,
             dir,
             leases: AtomicUsize::new(0),
+            status_sink: Mutex::new(None),
+            last_status: Mutex::new(None),
+            last_published: std::sync::atomic::AtomicU64::new(0),
             inner: Mutex::new(Inner {
                 vault: None,
                 services: None,
                 locking: false,
+                maintaining: false,
                 activity: Instant::now(),
                 timeout_minutes: 15,
                 failures: 0,
@@ -155,8 +177,10 @@ impl VaultManager {
         }))
     }
     pub fn status(&self) -> Result<VaultStatus, CommandError> {
+        let mut last = self.last_status.lock().map_err(error)?;
         let i = self.inner.lock().map_err(error)?;
-        Ok(VaultStatus {
+        let mut status = VaultStatus {
+            revision: last.as_ref().map_or(0, |status| status.revision),
             phase: if i.locking {
                 "locking"
             } else if i.services.is_some() {
@@ -176,7 +200,33 @@ impl VaultManager {
                 .saturating_duration_since(Instant::now())
                 .as_millis() as u64,
             flush_required: i.flush_required,
-        })
+        };
+        if last.as_ref() != Some(&status) {
+            status.revision = status.revision.saturating_add(1);
+            *last = Some(status.clone());
+        }
+        Ok(status)
+    }
+    pub fn watch_status(&self, sink: StatusSink) -> Result<VaultStatus, CommandError> {
+        *self.status_sink.lock().map_err(error)? = Some(sink);
+        self.last_published.store(0, Ordering::SeqCst);
+        self.status()
+    }
+    pub(crate) fn publish_status(&self) {
+        let Ok(status) = self.status() else {
+            return;
+        };
+        if self
+            .last_published
+            .fetch_max(status.revision, Ordering::SeqCst)
+            >= status.revision
+        {
+            return;
+        }
+        let sink = self.status_sink.lock().ok().and_then(|sink| sink.clone());
+        if let Some(sink) = sink {
+            sink(status);
+        }
     }
     /// Only chat snapshot persistence can enter during draining. This admits no
     /// reads, credentials, or executable work, and is serialized with DB sealing.
@@ -198,6 +248,11 @@ impl VaultManager {
     }
     pub fn services(self: &Arc<Self>) -> Result<ServiceLease, CommandError> {
         let i = self.inner.lock().map_err(error)?;
+        if i.maintaining {
+            return Err(invalid(
+                "Vault maintenance is in progress. Try again shortly.",
+            ));
+        }
         if i.locking
             || system_lock_required()
             || i.activity.elapsed() >= Duration::from_secs(u64::from(i.timeout_minutes) * 60)
@@ -437,6 +492,7 @@ impl VaultManager {
             }
             s
         };
+        self.publish_status();
         let started = Instant::now();
         services.close_terminals().await;
         services.close_network().await;
@@ -535,7 +591,48 @@ impl VaultManager {
             .db
             .lock()
             .map_err(error)?;
+        let (allocated, _) = db.storage_usage().map_err(error)?;
+        crate::resource_limits::check_space(&self.dir, allocated.saturating_mul(2))?;
+        crate::resource_limits::check_space(
+            path.parent()
+                .ok_or_else(|| invalid("Choose a backup folder."))?,
+            allocated,
+        )?;
         vault.backup(&db, path).map_err(error)
+    }
+
+    pub fn storage_usage(self: &Arc<Self>) -> Result<String, CommandError> {
+        let lease = self.services()?;
+        let usage = lease
+            .db
+            .lock()
+            .map_err(error)?
+            .storage_usage()
+            .map_err(error)?;
+        Ok(serde_json::json!({"databaseBytes": usage.0, "reclaimableBytes": usage.1}).to_string())
+    }
+
+    pub fn compact(self: &Arc<Self>) -> Result<String, CommandError> {
+        let lease = self.services()?;
+        {
+            let mut i = self.inner.lock().map_err(error)?;
+            if i.locking
+                || i.maintaining
+                || self.leases.load(Ordering::SeqCst) != 1
+                || lease.agent.active_count() != 0
+                || lease.terminal_count() != 0
+                || lease.network_active_count() != 0
+            {
+                return Err(invalid("Stop active tasks, terminals, transfers, and tunnels before compacting the vault."));
+            }
+            i.maintaining = true;
+        }
+        let maintenance = MaintenanceLease { lease };
+        let db = maintenance.lease.db.lock().map_err(error)?;
+        let (allocated, _) = db.storage_usage().map_err(error)?;
+        crate::resource_limits::check_space(&self.dir, allocated.saturating_mul(2))?;
+        let usage = db.compact().map_err(error)?;
+        Ok(serde_json::json!({"databaseBytes":usage.0,"reclaimableBytes":usage.1}).to_string())
     }
     pub fn restore(
         self: &Arc<Self>,

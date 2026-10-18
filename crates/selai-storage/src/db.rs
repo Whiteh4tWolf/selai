@@ -18,6 +18,52 @@ pub struct Database {
 }
 
 impl Database {
+    /// Allocated and reusable bytes; this does not expose any vault contents.
+    pub fn storage_usage(&self) -> Result<(u64, u64), StorageError> {
+        // SQLCipher aliases page_size to cipher_page_size, which returns TEXT
+        // on Windows; ordinary SQLite and the count pragmas return INTEGER.
+        fn count(row: &rusqlite::Row<'_>) -> rusqlite::Result<u64> {
+            use rusqlite::types::{Type, Value};
+            let value: Value = row.get(0)?;
+            let text = match value {
+                Value::Integer(value) => value.to_string(),
+                Value::Text(value) => value,
+                _ => {
+                    return Err(rusqlite::Error::InvalidColumnType(
+                        0,
+                        "page count".into(),
+                        value.data_type(),
+                    ))
+                }
+            };
+            text.parse().map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(0, Type::Integer, Box::new(error))
+            })
+        }
+        let page_size = self.conn.query_row("PRAGMA page_size", [], count)?;
+        let pages = self.conn.query_row("PRAGMA page_count", [], count)?;
+        let free = self.conn.query_row("PRAGMA freelist_count", [], count)?;
+        Ok((
+            pages.saturating_mul(page_size),
+            free.saturating_mul(page_size),
+        ))
+    }
+
+    pub fn compact(&self) -> Result<(u64, u64), StorageError> {
+        let (allocated, _) = self.storage_usage()?;
+        // temp_store remains MEMORY so SQLCipher never spills plaintext temp
+        // data. Bound interactive compaction rather than risk a huge RAM spike.
+        if allocated > 128 * 1024 * 1024 {
+            return Err(StorageError::Io(
+                "Vault is too large for interactive compaction. Use encrypted offline maintenance."
+                    .into(),
+            ));
+        }
+        self.checkpoint()?;
+        self.conn.execute_batch("VACUUM")?;
+        self.checkpoint()?;
+        self.storage_usage()
+    }
     /// Uses a raw random key, already unwrapped by the passphrase vault. Refuses
     /// to run if a build accidentally links an SQLite without SQLCipher.
     pub fn open_encrypted(path: &Path, key: &[u8; 32]) -> Result<Self, StorageError> {

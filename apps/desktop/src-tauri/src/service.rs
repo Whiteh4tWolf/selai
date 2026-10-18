@@ -16,6 +16,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::terminal_flow::{TerminalFlow, OUTPUT_CHUNK};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use selai_domain::{
     AuthMethod, ConnectTimeout, ErrorCode, GroupName, HostGroupId, HostId, HostLabel, HostSettings,
@@ -56,6 +57,8 @@ struct TerminalHandle {
     host_id: HostId,
     input: mpsc::Sender<TerminalInput>,
     stop: Arc<dyn Fn() + Send + Sync>,
+    flow: Option<Arc<TerminalFlow>>,
+    _slot: Arc<tokio::sync::OwnedSemaphorePermit>,
 }
 
 pub(crate) type DocumentSealer = Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, CommandError> + Send + Sync>;
@@ -69,6 +72,7 @@ pub struct Services {
     pub(crate) export_dir: Option<std::path::PathBuf>,
     probes: Mutex<HashMap<HostId, CachedProbe>>,
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
+    terminal_slots: Arc<tokio::sync::Semaphore>,
     pub(crate) document_sealer: Option<DocumentSealer>,
     pub(crate) vault_managed: bool,
     pub(crate) network: Arc<crate::network_service::NetworkRegistry>,
@@ -122,6 +126,7 @@ impl Services {
             export_dir: None,
             probes: Mutex::new(HashMap::new()),
             terminals: Arc::new(Mutex::new(HashMap::new())),
+            terminal_slots: Arc::new(tokio::sync::Semaphore::new(16)),
             document_sealer: None,
             vault_managed: false,
             network: Arc::new(crate::network_service::NetworkRegistry::default()),
@@ -762,12 +767,47 @@ impl Services {
         rows: u32,
         sink: EventSink,
     ) -> Result<String, CommandError> {
+        // Headless consumers drain synchronously; desktop IPC uses byte credits.
+        self.connect_terminal(host_id, cols, rows, sink, None).await
+    }
+
+    pub async fn terminal_connect_with_flow(
+        &self,
+        host_id: &str,
+        cols: u32,
+        rows: u32,
+        sink: EventSink,
+        flow: Arc<TerminalFlow>,
+    ) -> Result<String, CommandError> {
+        self.connect_terminal(host_id, cols, rows, sink, Some(flow))
+            .await
+    }
+
+    async fn connect_terminal(
+        &self,
+        host_id: &str,
+        cols: u32,
+        rows: u32,
+        sink: EventSink,
+        flow: Option<Arc<TerminalFlow>>,
+    ) -> Result<String, CommandError> {
+        let slot = Arc::new(
+            self.terminal_slots
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| {
+                    CommandError::new(
+                        ErrorCode::InvalidInput,
+                        "Close a terminal before opening another (limit 16).",
+                    )
+                })?,
+        );
         let id = parse_id::<HostId>(host_id, "host")?;
         let cols = bounded_dim(cols)?;
         let rows = bounded_dim(rows)?;
         let (host, pins) = self.active_host_and_pins(id)?;
         if host.is_local {
-            return self.open_local_terminal(id, cols, rows, sink);
+            return self.open_local_terminal(id, cols, rows, sink, flow, slot);
         }
         let auth = self.load_auth(id, &host)?;
 
@@ -798,12 +838,20 @@ impl Services {
         let (tx, rx) = mpsc::channel(64);
         let shutdown = tokio_util::sync::CancellationToken::new();
         let stop = shutdown.clone();
+        let stop_flow = flow.clone();
         self.terminals.lock().map_err(|_| poisoned())?.insert(
             session_id.clone(),
             TerminalHandle {
                 host_id: id,
                 input: tx,
-                stop: Arc::new(move || stop.cancel()),
+                stop: Arc::new(move || {
+                    if let Some(flow) = &stop_flow {
+                        flow.close();
+                    }
+                    stop.cancel();
+                }),
+                flow: flow.clone(),
+                _slot: slot,
             },
         );
         let _ = self.lock_db()?.mark_connected(id, now_ms());
@@ -816,6 +864,7 @@ impl Services {
             sink,
             Arc::clone(&self.terminals),
             shutdown,
+            flow,
         ));
         Ok(session_id)
     }
@@ -827,6 +876,8 @@ impl Services {
         cols: u32,
         rows: u32,
         sink: EventSink,
+        flow: Option<Arc<TerminalFlow>>,
+        slot: Arc<tokio::sync::OwnedSemaphorePermit>,
     ) -> Result<String, CommandError> {
         let session_id = HostId::new().to_string();
         let (tx, rx) = mpsc::channel(64);
@@ -838,6 +889,7 @@ impl Services {
             rows,
             rx,
             sink,
+            flow.clone(),
             Box::new(move || {
                 if let Ok(mut map) = terminals.lock() {
                     map.remove(&ended);
@@ -850,6 +902,8 @@ impl Services {
                 host_id: id,
                 input: tx,
                 stop,
+                flow,
+                _slot: slot,
             },
         );
         drop(map);
@@ -873,6 +927,19 @@ impl Services {
             .map_err(|_| {
                 CommandError::new(ErrorCode::SshChannelClosed, "terminal session has ended")
             })
+    }
+
+    pub fn terminal_ack(&self, session_id: &str, bytes: usize) -> Result<(), CommandError> {
+        let sessions = self.terminals.lock().map_err(|_| poisoned())?;
+        if let Some(flow) = sessions
+            .get(session_id)
+            .and_then(|handle| handle.flow.as_ref())
+        {
+            if !flow.acknowledge(bytes) {
+                return Err(invalid_message("Invalid terminal output acknowledgement."));
+            }
+        }
+        Ok(())
     }
 
     pub async fn terminal_resize(
@@ -1042,6 +1109,7 @@ impl Services {
 
 /// One terminal session: pumps input to the PTY and PTY output to the sink.
 /// It owns the session, so the session always closes when the loop ends.
+#[allow(clippy::too_many_arguments)]
 async fn run_terminal(
     session_id: String,
     session: Session,
@@ -1050,6 +1118,7 @@ async fn run_terminal(
     sink: EventSink,
     terminals: Arc<Mutex<HashMap<String, TerminalHandle>>>,
     shutdown: tokio_util::sync::CancellationToken,
+    flow: Option<Arc<TerminalFlow>>,
 ) {
     let mut exit_status: Option<u32> = None;
     let pump = async {
@@ -1071,7 +1140,12 @@ async fn run_terminal(
                 },
                 event = shell.next_event() => match event {
                     ShellEvent::Data(bytes) => {
-                        sink(TerminalEvent::Data { data: B64.encode(bytes) });
+                        for chunk in bytes.chunks(OUTPUT_CHUNK) {
+                            if let Some(flow) = &flow {
+                                if !flow.reserve(chunk.len()).await { return; }
+                            }
+                            sink(TerminalEvent::Data { data: B64.encode(chunk) });
+                        }
                     }
                     ShellEvent::Exit { status } => {
                         exit_status = Some(status);
@@ -1090,6 +1164,9 @@ async fn run_terminal(
         }
     };
     tokio::select! {biased; _=shutdown.cancelled()=>{},_=pump=>{}}
+    if let Some(flow) = &flow {
+        flow.close();
+    }
     // The channel is already gone; a failed disconnect has no further effect.
     let _ = tokio::time::timeout(Duration::from_secs(1), session.disconnect()).await;
     if let Ok(mut map) = terminals.lock() {

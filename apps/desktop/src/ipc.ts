@@ -199,6 +199,10 @@ export function terminalInput(sessionId: string, data: string): Promise<void> {
   return invoke<void>('terminal_input', { sessionId, data });
 }
 
+export function terminalAck(sessionId: string, bytes: number): Promise<void> {
+  return invoke<void>('terminal_ack', { sessionId, bytes });
+}
+
 export function terminalResize(sessionId: string, cols: number, rows: number): Promise<void> {
   return invoke<void>('terminal_resize', { sessionId, cols, rows });
 }

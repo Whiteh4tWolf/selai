@@ -13,8 +13,12 @@ mod local_terminal;
 mod network_commands;
 pub mod network_service;
 pub mod provider_service;
+mod resource_limits;
 pub mod service;
 pub mod sftp_service;
+pub mod terminal_flow;
+#[cfg(test)]
+mod terminal_tests;
 pub mod vault_service;
 
 use std::sync::Arc;
@@ -49,14 +53,24 @@ pub fn run() {
             if let Ok(manager) = &vault {
                 let manager = manager.clone();
                 tauri::async_runtime::spawn(async move {
+                    let mut maintained = std::time::Instant::now();
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        manager.publish_status();
                         if manager.idle() {
                             let force = selai_platform::must_lock();
                             let manager = manager.clone();
                             tauri::async_runtime::spawn(async move {
                                 let _ = manager.lock(force).await;
                             });
+                        }
+                        if maintained.elapsed() >= std::time::Duration::from_secs(6 * 60 * 60) {
+                            maintained = std::time::Instant::now();
+                            if let Ok(lease) = manager.services() {
+                                tauri::async_runtime::spawn_blocking(move || {
+                                    let _ = lease.apply_retention(service::now_ms());
+                                });
+                            }
                         }
                     }
                 });
@@ -82,9 +96,11 @@ pub fn run() {
             network_commands::files_action,
             network_commands::transfer_start,
             network_commands::transfer_list,
+            network_commands::transfer_clear,
             network_commands::transfer_cancel,
             commands::app_info,
             commands::vault_status,
+            commands::vault_watch,
             commands::vault_activity,
             commands::vault_lock,
             commands::vault_flush_complete,
@@ -109,6 +125,7 @@ pub fn run() {
             commands::group_delete,
             commands::host_reveal_password,
             commands::terminal_connect,
+            commands::terminal_ack,
             commands::terminal_input,
             commands::terminal_resize,
             commands::terminal_disconnect,

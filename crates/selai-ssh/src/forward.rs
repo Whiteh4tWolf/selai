@@ -3,7 +3,7 @@ use crate::{Session, SshError};
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
     time::Duration,
 };
@@ -13,6 +13,36 @@ use tokio::{
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
+
+// A per-tunnel limit alone allowed 16 * 64 simultaneous connections. This
+// shared budget bounds copy buffers across all tunnels and forwarding modes.
+static CONNECTIONS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+fn connection_budget() -> Arc<tokio::sync::Semaphore> {
+    CONNECTIONS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(128)))
+        .clone()
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::connection_budget;
+
+    #[test]
+    fn all_forwarding_modes_share_a_finite_reusable_connection_budget() {
+        let first = connection_budget();
+        let second = connection_budget();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        let mut permits = Vec::new();
+        for _ in 0..128 {
+            permits.push(first.clone().try_acquire_owned().expect("connection slot"));
+        }
+        assert!(second.clone().try_acquire_owned().is_err());
+        permits.pop();
+        assert!(second.try_acquire_owned().is_ok());
+        drop(permits);
+        assert_eq!(first.available_permits(), 128);
+    }
+}
 
 #[derive(Default)]
 pub struct ForwardCounters {
@@ -72,8 +102,10 @@ impl Forwarder {
                 accepted=async {match self.listener.as_ref(){Some(listener)=>listener.accept().await,None=>std::future::pending().await}}, if self.listener.is_some()=>{
                     let (mut socket,_) = match accepted {Ok(pair)=>pair,Err(e)=>break Err(e.into())};
                     if children.len()>=64 {drop(socket);counts.errors.fetch_add(1,Ordering::Relaxed);continue;}
+                    let Ok(permit)=connection_budget().try_acquire_owned() else {drop(socket);counts.errors.fetch_add(1,Ordering::Relaxed);continue;};
                     let session=self.session.clone();let stats=counts.clone();let target=self.spec.target.clone();let port=self.spec.target_port;let dynamic=self.spec.mode=="dynamic";
                     children.spawn(async move {
+                        let _permit=permit;
                         stats.connections.fetch_add(1,Ordering::Relaxed);
                         let result=async {
                             let (host,port)=if dynamic {tokio::time::timeout(Duration::from_secs(15),socks_request(&mut socket)).await.map_err(|_|SshError::ConnectTimeout)??} else {(target,port)};
@@ -89,8 +121,10 @@ impl Forwarder {
                 incoming=async {match self.remote.as_mut(){Some(remote)=>remote.recv().await,None=>std::future::pending().await}}, if self.remote.is_some()=>{
                     let Some(channel)=incoming else {break Err(SshError::ChannelClosed)};
                     if children.len()>=64 {drop(channel);counts.errors.fetch_add(1,Ordering::Relaxed);continue;}
+                    let Ok(permit)=connection_budget().try_acquire_owned() else {drop(channel);counts.errors.fetch_add(1,Ordering::Relaxed);continue;};
                     let stats=counts.clone();let target=self.spec.target.clone();let port=self.spec.target_port;
                     children.spawn(async move {
+                        let _permit=permit;
                         stats.connections.fetch_add(1,Ordering::Relaxed);
                         let result=async {
                             let socket=tokio::time::timeout(Duration::from_secs(15),TcpStream::connect((target.as_str(),port))).await.map_err(|_|SshError::ConnectTimeout)??;

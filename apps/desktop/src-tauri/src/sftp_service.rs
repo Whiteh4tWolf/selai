@@ -1,7 +1,8 @@
 //! Native file manager and bounded streaming transfers. File bytes never cross IPC.
 use crate::{
     dto::CommandError,
-    network_service::{failed, invalid, state_lock},
+    network_service::{failed, invalid, state_lock, NetworkRegistry},
+    resource_limits::{check_space, MetadataBudget},
     service::Services,
 };
 use russh_sftp::{
@@ -87,6 +88,49 @@ pub struct TransferInput {
     pub overwrite: bool,
 }
 pub type TransferSink = Arc<dyn Fn(TransferView) + Send + Sync>;
+
+impl TransferJob {
+    fn spawn(
+        self: Arc<Self>,
+        registry: Arc<NetworkRegistry>,
+        sink: TransferSink,
+        transfer: impl std::future::Future<Output = Result<(), CommandError>> + Send + 'static,
+    ) {
+        // transfer_start is a synchronous IPC command, so its caller may be the
+        // WebView thread with no entered Tokio runtime. Use Tauri's runtime
+        // explicitly instead of tokio::spawn, which would panic on that thread.
+        tauri::async_runtime::spawn(async move {
+            let permit = tokio::select! {biased;_=self.stop.cancelled()=>None,p=registry.transfer_slots.acquire()=>p.ok()};
+            let result = if permit.is_some() {
+                transfer.await
+            } else {
+                Err(invalid("Transfer cancelled."))
+            };
+            drop(permit);
+            let finished = if let Ok(mut view) = self.view.lock() {
+                view.status = if self.stop.is_cancelled() {
+                    "cancelled"
+                } else if result.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                }
+                .into();
+                view.error = if self.stop.is_cancelled() {
+                    None
+                } else {
+                    result.err().map(|e| e.message)
+                };
+                Some(view.clone())
+            } else {
+                None
+            };
+            if let Some(view) = finished {
+                sink(view);
+            }
+        });
+    }
+}
 fn safe_name(name: &str) -> Result<(), CommandError> {
     if name.is_empty() || [".", ".."].contains(&name) || name.contains(['/', '\\', '\0']) {
         return Err(invalid("An entry has an unsafe file name."));
@@ -339,6 +383,20 @@ impl Services {
             .map(|j| Ok(state_lock(&j.view)?.clone()))
             .collect()
     }
+    pub fn transfer_clear(&self) -> Result<Vec<String>, CommandError> {
+        let mut jobs = state_lock(&self.network.transfers)?;
+        let mut cleared = Vec::new();
+        for (id, job) in jobs.iter() {
+            let view = state_lock(&job.view)?;
+            if matches!(view.status.as_str(), "completed" | "failed" | "cancelled") {
+                cleared.push(id.clone());
+            }
+        }
+        for id in &cleared {
+            jobs.remove(id);
+        }
+        Ok(cleared)
+    }
     pub fn transfer_cancel(&self, id: &str) -> Result<(), CommandError> {
         if let Some(job) = state_lock(&self.network.transfers)?.get(id) {
             job.stop.cancel();
@@ -419,30 +477,8 @@ impl Services {
             }
         });
         sink(initial.clone());
-        tokio::spawn(async move {
-            let permit = tokio::select! {biased;_=job.stop.cancelled()=>None,p=registry.transfer_slots.acquire()=>p.ok()};
-            let result = if permit.is_some() {
-                run_transfer(&connection, &job, &input, &sink).await
-            } else {
-                Err(invalid("Transfer cancelled."))
-            };
-            drop(permit);
-            if let Ok(mut view) = job.view.lock() {
-                view.status = if job.stop.is_cancelled() {
-                    "cancelled"
-                } else if result.is_ok() {
-                    "completed"
-                } else {
-                    "failed"
-                }
-                .into();
-                view.error = if job.stop.is_cancelled() {
-                    None
-                } else {
-                    result.err().map(|e| e.message)
-                };
-                sink(view.clone());
-            }
+        job.clone().spawn(registry, sink.clone(), async move {
+            run_transfer(&connection, &job, &input, &sink).await
         });
         Ok(initial)
     }
@@ -492,6 +528,7 @@ async fn local_list(input: &str) -> Result<DirectoryView, CommandError> {
     let path = fs::canonicalize(path).await.map_err(failed)?;
     let mut reader = fs::read_dir(&path).await.map_err(failed)?;
     let mut entries = Vec::new();
+    let mut budget = MetadataBudget::new(DIRECTORY_LIMIT, 8 * 1024 * 1024);
     while let Some(entry) = reader.next_entry().await.map_err(failed)? {
         if entries.len() >= DIRECTORY_LIMIT {
             return Err(invalid(
@@ -500,7 +537,7 @@ async fn local_list(input: &str) -> Result<DirectoryView, CommandError> {
         }
         let file_type = entry.file_type().await.map_err(failed)?;
         let meta = entry.metadata().await.ok();
-        entries.push(FileEntry {
+        let item = FileEntry {
             name: entry.file_name().to_string_lossy().into(),
             path: local_display(&entry.path()),
             kind: if file_type.is_symlink() {
@@ -516,7 +553,11 @@ async fn local_list(input: &str) -> Result<DirectoryView, CommandError> {
             size: meta.as_ref().map_or(0, |m| m.len()),
             modified_ms: meta.and_then(|m| time_ms(m.modified())),
             permissions: None,
-        });
+        };
+        budget.claim(
+            std::mem::size_of::<FileEntry>() + item.name.len() + item.path.len() + item.kind.len(),
+        )?;
+        entries.push(item);
     }
     sort_entries(&mut entries);
     let parent = path
@@ -545,8 +586,9 @@ async fn remote_list(
     raw.init().await.map_err(failed)?;
     let handle = raw.opendir(path).await.map_err(failed)?.handle;
     let mut entries = Vec::new();
+    let mut budget = MetadataBudget::new(DIRECTORY_LIMIT, 8 * 1024 * 1024);
     let result=async {loop{let batch=tokio::select!{biased;_=connection.stop.cancelled()=>return Err(invalid("SFTP disconnected.")),batch=raw.readdir(&handle)=>batch};match batch {
-        Ok(batch)=>for file in batch.files{if [".",".."].contains(&file.filename.as_str()){continue;}safe_name(&file.filename)?;if entries.len()>=DIRECTORY_LIMIT{return Err(invalid("This folder has more than 20,000 entries. Open a smaller subfolder."));}let attrs=file.attrs;entries.push(FileEntry{name:file.filename.clone(),path:remote_join(path,&file.filename),kind:if attrs.is_symlink(){"symlink"}else if attrs.is_dir(){"directory"}else if attrs.is_regular(){"file"}else{"other"}.into(),size:attrs.size.unwrap_or(0),modified_ms:attrs.mtime.map(|t|u64::from(t)*1000),permissions:attrs.permissions});},
+        Ok(batch)=>for file in batch.files{if [".",".."].contains(&file.filename.as_str()){continue;}safe_name(&file.filename)?;if entries.len()>=DIRECTORY_LIMIT{return Err(invalid("This folder has more than 20,000 entries. Open a smaller subfolder."));}let attrs=file.attrs;let entry=FileEntry{name:file.filename.clone(),path:remote_join(path,&file.filename),kind:if attrs.is_symlink(){"symlink"}else if attrs.is_dir(){"directory"}else if attrs.is_regular(){"file"}else{"other"}.into(),size:attrs.size.unwrap_or(0),modified_ms:attrs.mtime.map(|t|u64::from(t)*1000),permissions:attrs.permissions};budget.claim(std::mem::size_of::<FileEntry>()+entry.name.len()+entry.path.len()+entry.kind.len())?;entries.push(entry);},
         Err(SftpError::Status(status)) if status.status_code==StatusCode::Eof=>break,
         Err(e)=>return Err(failed(e))
     }}Ok(())}.await;
@@ -600,6 +642,7 @@ async fn run_transfer(
         return Err(invalid("Destination must be a folder."));
     }
     let mut pending = Vec::new();
+    let mut metadata = MetadataBudget::new(PLAN_LIMIT, 32 * 1024 * 1024);
     for source in &input.sources {
         let basename = if upload {
             Path::new(source).file_name().and_then(|n| n.to_str())
@@ -614,6 +657,7 @@ async fn run_transfer(
             safe_local_name(basename)?;
             local_display(&Path::new(&destination).join(basename))
         };
+        metadata.claim(std::mem::size_of::<CopyItem>() + source.len() + target.len())?;
         pending.push((source.clone(), target));
     }
     let mut plan = Vec::new();
@@ -671,6 +715,8 @@ async fn run_transfer(
                     safe_local_name(&entry.name)?;
                     local_display(&Path::new(&target).join(&entry.name))
                 };
+                metadata
+                    .claim(std::mem::size_of::<CopyItem>() + entry.path.len() + target.len())?;
                 pending.push((entry.path, target));
             }
         } else {
@@ -785,6 +831,16 @@ async fn copy_file(
 ) -> Result<(), CommandError> {
     let upload = input.direction == "upload";
     let overwrite = input.overwrite;
+    if !upload {
+        let parent = Path::new(&item.destination)
+            .parent()
+            .ok_or_else(|| invalid("Invalid destination folder."))?
+            .to_path_buf();
+        let required = item.size;
+        tokio::task::spawn_blocking(move || check_space(&parent, required))
+            .await
+            .map_err(failed)??;
+    }
     let suffix = HostId::new().to_string();
     let sibling = |name: &str| {
         if upload {
@@ -966,8 +1022,159 @@ async fn copy_bytes<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + 
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    fn queued_job(direction: &str) -> Arc<TransferJob> {
+        Arc::new(TransferJob {
+            stop: CancellationToken::new(),
+            view: Mutex::new(TransferView {
+                id: "test-transfer".into(),
+                connection_id: "test-connection".into(),
+                direction: direction.into(),
+                status: "queued".into(),
+                current_file: String::new(),
+                destination: String::new(),
+                total_bytes: 0,
+                transferred_bytes: 0,
+                total_files: 0,
+                completed_files: 0,
+                skipped_files: 0,
+                bytes_per_second: 0,
+                error: None,
+            }),
+            event: Mutex::new(Arc::new(|_| {})),
+        })
+    }
+
+    #[test]
+    fn clearing_transfer_history_preserves_active_jobs() {
+        let services = Services::in_memory(Arc::new(selai_secrets::MemoryStore::new())).unwrap();
+        for status in [
+            "queued",
+            "scanning",
+            "transferring",
+            "completed",
+            "failed",
+            "cancelled",
+        ] {
+            let job = queued_job("upload");
+            {
+                let mut view = job.view.lock().unwrap();
+                view.id = status.into();
+                view.status = status.into();
+            }
+            services
+                .network
+                .transfers
+                .lock()
+                .unwrap()
+                .insert(status.into(), job);
+        }
+        let mut cleared = services.transfer_clear().unwrap();
+        cleared.sort();
+        assert_eq!(cleared, ["cancelled", "completed", "failed"]);
+        let remaining = services.transfer_list().unwrap();
+        assert_eq!(remaining.len(), 3);
+        for job in services.network.transfers.lock().unwrap().values() {
+            assert!(!job.stop.is_cancelled());
+            assert!(matches!(
+                job.view.lock().unwrap().status.as_str(),
+                "queued" | "scanning" | "transferring"
+            ));
+        }
+        assert!(services.transfer_clear().unwrap().is_empty());
+    }
+
+    // Unlike #[tokio::test], this reproduces the synchronous WebView caller:
+    // neither the caller nor the spawned OS thread has an entered runtime.
+    #[test]
+    fn transfers_start_without_an_entered_tokio_runtime() {
+        for direction in ["upload", "download"] {
+            let job = queued_job(direction);
+            let worker = job.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let registry = Arc::new(NetworkRegistry::default());
+            let slots = registry.clone();
+            std::thread::spawn(move || {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                let sink: TransferSink = Arc::new(move |view| {
+                    tx.send(view).unwrap();
+                });
+                job.spawn(registry, sink, async move {
+                    let dir = tempfile::tempdir().unwrap();
+                    let source = dir.path().join("source.bin");
+                    let destination = dir.path().join("destination.bin");
+                    let payload = vec![42; 3 * 64 * 1024 + 17];
+                    fs::write(&source, &payload).await.map_err(failed)?;
+                    let mut reader = fs::File::open(source).await.map_err(failed)?;
+                    let mut writer = fs::File::create(&destination).await.map_err(failed)?;
+                    copy_bytes(
+                        &mut reader,
+                        &mut writer,
+                        payload.len() as u64,
+                        &worker.stop,
+                        |n| {
+                            worker.view.lock().unwrap().transferred_bytes += n as u64;
+                        },
+                    )
+                    .await?;
+                    writer.shutdown().await.map_err(failed)?;
+                    assert_eq!(fs::read(destination).await.map_err(failed)?, payload);
+                    Ok(())
+                });
+            })
+            .join()
+            .expect("transfer submission must not panic on a sync thread");
+            let finished = rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("terminal event");
+            assert_eq!(finished.status, "completed", "{:?}", finished.error);
+            assert_eq!(finished.direction, direction);
+            assert_eq!(finished.transferred_bytes, 3 * 64 * 1024 + 17);
+            assert_eq!(slots.transfer_slots.available_permits(), 2);
+        }
+    }
+
+    #[test]
+    fn queued_transfer_cancellation_and_copy_failure_report_terminal_events() {
+        for cancelled in [true, false] {
+            let job = queued_job("upload");
+            let registry = Arc::new(NetworkRegistry::default());
+            // Fill both slots so cancellation must work before a job can run.
+            let held = registry.transfer_slots.try_acquire_many(2).unwrap();
+            if cancelled {
+                job.stop.cancel();
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            let sink: TransferSink = Arc::new(move |view| {
+                tx.send(view).unwrap();
+            });
+            job.spawn(registry.clone(), sink, async {
+                Err(invalid("Copy failed."))
+            });
+            if !cancelled {
+                drop(held);
+            }
+            let finished = rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("terminal event");
+            assert_eq!(
+                finished.status,
+                if cancelled { "cancelled" } else { "failed" }
+            );
+            assert_eq!(
+                finished.error.as_deref(),
+                if cancelled {
+                    None
+                } else {
+                    Some("Copy failed.")
+                }
+            );
+        }
+    }
+
     #[test]
     fn transfer_names_cannot_escape_the_destination() {
         for name in [".", "..", "../outside", "a/b", r"a\b", ""] {

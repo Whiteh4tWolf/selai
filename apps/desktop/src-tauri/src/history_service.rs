@@ -186,7 +186,7 @@ fn retention_from(value: Option<Value>) -> u32 {
 
 impl Services {
     /// Removes stored output older than the retention window. Metadata stays and
-    /// the action is audited. Runs once at startup.
+    /// the action is audited. Runs at activation and periodically while unlocked.
     pub(crate) fn apply_retention(&self, now: i64) -> Result<usize, CommandError> {
         let mut db = self.lock_db_pub()?;
         let days = retention_from(db.get_setting(RETENTION_KEY).map_err(|e| storage(&e))?);

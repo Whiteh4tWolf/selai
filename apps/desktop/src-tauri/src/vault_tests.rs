@@ -9,6 +9,78 @@ fn phrase() -> Zeroizing<String> {
 }
 
 #[test]
+fn idle_compaction_reclaims_space_and_retains_encrypted_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = VaultManager::new(dir.path().into()).unwrap();
+    manager.initialize(phrase(), &MemoryStore::new()).unwrap();
+    let lease = manager.services().unwrap();
+    let sentinel = "retained-sensitive-setting";
+    {
+        let mut db = lease.db.lock().unwrap();
+        db.set_setting(
+            "maintenance",
+            &serde_json::json!("x".repeat(2 * 1024 * 1024)),
+            1,
+        )
+        .unwrap();
+        db.set_setting("maintenance", &serde_json::json!(sentinel), 2)
+            .unwrap();
+    }
+    assert!(
+        manager.compact().is_err(),
+        "an existing lease must block maintenance"
+    );
+    let before = lease.db.lock().unwrap().storage_usage().unwrap().0;
+    drop(lease);
+    let result: serde_json::Value = serde_json::from_str(&manager.compact().unwrap()).unwrap();
+    assert!(result["databaseBytes"].as_u64().unwrap() < before);
+    let lease = manager.services().unwrap();
+    assert_eq!(
+        lease.db.lock().unwrap().get_setting("maintenance").unwrap(),
+        Some(serde_json::json!(sentinel))
+    );
+    let (path, key) = {
+        let inner = manager.inner.lock().unwrap();
+        let vault = inner.vault.as_ref().unwrap();
+        (vault.database_path(), *vault.key())
+    };
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes
+        .windows(sentinel.len())
+        .any(|part| part == sentinel.as_bytes()));
+    let reopened = Database::open_encrypted(&path, &key).unwrap();
+    reopened.integrity_check().unwrap();
+    assert_eq!(
+        reopened.get_setting("maintenance").unwrap(),
+        Some(serde_json::json!(sentinel))
+    );
+}
+
+#[tokio::test]
+async fn status_notifications_are_versioned_and_lock_is_published_immediately() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = VaultManager::new(dir.path().into()).unwrap();
+    let statuses = Arc::new(Mutex::new(Vec::new()));
+    let sink = statuses.clone();
+    manager
+        .watch_status(Arc::new(move |status| sink.lock().unwrap().push(status)))
+        .unwrap();
+    manager.publish_status();
+    manager.publish_status();
+    assert_eq!(statuses.lock().unwrap().len(), 1);
+    manager.initialize(phrase(), &MemoryStore::new()).unwrap();
+    manager.publish_status();
+    manager.clone().lock(true).await.unwrap();
+    manager.publish_status();
+    let statuses = statuses.lock().unwrap();
+    assert!(statuses.iter().any(|status| status.phase == "locking"));
+    assert_eq!(statuses.last().unwrap().phase, "locked");
+    assert!(statuses
+        .windows(2)
+        .all(|pair| pair[0].revision < pair[1].revision));
+}
+
+#[test]
 fn generated_key_algorithms_roundtrip_in_the_vault_and_can_be_used_by_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let manager = VaultManager::new(dir.path().into()).unwrap();
