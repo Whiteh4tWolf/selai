@@ -274,7 +274,9 @@ mod tests {
         assert!(CommandRequest::parse("a\0b", 5).is_err());
         assert!(CommandRequest::parse(&"x".repeat(MAX_COMMAND_BYTES + 1), 5).is_err());
         assert!(CommandRequest::parse("id", 0).is_err());
-        assert!(CommandRequest::parse("id", 61).is_err());
+        assert!(CommandRequest::parse("id", 1).is_ok());
+        assert!(CommandRequest::parse("id", MAX_COMMAND_TIMEOUT_SECS).is_ok());
+        assert!(CommandRequest::parse("id", MAX_COMMAND_TIMEOUT_SECS + 1).is_err());
     }
 
     #[test]

@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
 
 permissions:
@@ -85,10 +87,10 @@ jobs:
         run: >-
           sudo -E env "PATH=$PATH" "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}"
           "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}"
-          scripts/ci/with-keyring.sh cargo test --workspace --locked
+          scripts/ci/with-keyring.sh cargo test --workspace --locked --no-fail-fast
       - name: Test (macOS and Windows, OS credential store)
         if: runner.os != 'Linux'
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
 
   audit:
     name: Dependency audit (advisories, licenses, sources)
