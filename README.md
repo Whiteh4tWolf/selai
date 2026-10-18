@@ -17,10 +17,10 @@ Terminals, an AI chat, and command history in one app. You choose where the assi
 </p>
 
 <p align="center">
-  <a href="docs/media/selai-ssh-ai-demo.mp4"><img src="docs/media/selai-ssh-ai-demo-poster.jpg" alt="Watch the Selai demo: add an SSH profile, connect, and use AI Assistant to inspect and restart nginx with command approval" width="920"></a>
+  <img src="docs/media/selai-ssh-ai-demo.gif" alt="Animated Selai walkthrough: add an SSH profile, connect, and use AI Assistant to inspect and restart nginx with command approval" width="960">
 </p>
 
-<p align="center"><a href="docs/media/selai-ssh-ai-demo.mp4">Watch the 59-second demo</a> · English captions · Dark mode</p>
+<p align="center">59-second looping demo · English captions · Dark mode · <a href="docs/media/selai-ssh-ai-demo.mp4?raw=true">Download full-resolution MP4</a></p>
 
 Selai brings SSH hosts, terminal tabs, an AI chat, and command history into one
 desktop app. You choose the machine the assistant may work on. Routine
@@ -48,9 +48,12 @@ never included in requests to an AI provider.
 
 ## Quick demo
 
-[Watch or download the walkthrough](docs/media/selai-ssh-ai-demo.mp4): add an SSH
-profile, review the server fingerprint, connect to the terminal, then select the
+The animated walkthrough above shows how to add an SSH profile, review the
+server fingerprint, connect to the terminal, then select the
 host in AI Assistant, review a proposed command, approve it, and inspect the result.
+
+[Download the full-resolution MP4](docs/media/selai-ssh-ai-demo.mp4?raw=true)
+for playback with video controls.
 
 The video records Selai's frontend with simulated SSH and AI responses; it does
 not contact a live server. The AI provider is already configured for this demo.

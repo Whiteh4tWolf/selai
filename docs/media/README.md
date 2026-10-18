@@ -1,6 +1,7 @@
 # SSH profile and AI Assistant demo
 
-[Review the MP4](selai-ssh-ai-demo.mp4) ·
+[Animated README preview](selai-ssh-ai-demo.gif) ·
+[Download the MP4](selai-ssh-ai-demo.mp4?raw=true) ·
 [Poster](selai-ssh-ai-demo-poster.jpg) ·
 [English subtitles](selai-ssh-ai-demo.en.srt)
 
@@ -9,7 +10,10 @@ and no audio. The application fills the frame in dark mode. There are no
 presentation cards or colored background around the workspace. The small
 caption band identifies the current action and labels the mock backend.
 
-The main project README links to this video through its poster preview and demo section.
+The main project README displays a looping GIF in place of the top screenshot.
+The preview is 960 × 540 at 6 fps with 96 colors; the MP4 retains the original
+resolution and frame rate. Animated playback follows the viewer's GitHub
+accessibility settings.
 
 ## Workflow
 
@@ -43,6 +47,7 @@ pnpm --dir apps/desktop build
 python -m pip install playwright imageio-ffmpeg
 python -m playwright install chromium
 python scripts/docs/record_quickstart.py
+python scripts/docs/render_readme_gif.py
 ```
 
 The harness starts a temporary Vite preview server on loopback port 1426 and a
@@ -50,5 +55,5 @@ headless Chromium recording context. It blocks requests outside that local
 origin and uses `scripts/docs/video_demo_backend.js` only in the recording.
 Neither the fixture nor the recording shell is included in the application bundle.
 
-Generated MP4, poster, and English SRT files are written here. Raw recordings,
+Generated MP4, GIF, poster, and English SRT files are written here. Raw recordings,
 review frames, and command-name checks are written under `target/video-qa/technical`.
