@@ -5,6 +5,9 @@
   localStorage.setItem('selai.chat', 'closed');
   localStorage.setItem('selai.chat.width', '680');
   const hosts = [];
+  const groups = [];
+  let nextGroup = 1;
+  const passwords = new Map();
   const sessions = new Map();
   const local = { id: 'local', label: 'This computer', hostname: 'localhost', username: 'demo', port: 22,
     authMethod: 'password', privateKeyPath: null, groupId: null, connectTimeoutSeconds: 15,
@@ -49,11 +52,32 @@
         case 'local_host': return local;
         case 'host_list': return { items: hosts, nextCursor: null };
         case 'host_get': return hosts.find(h => h.id === args.id);
-        case 'group_list': case 'ssh_key_list': return [];
+        case 'host_move_group': {
+          const host = hosts.find(h => h.id === args.id);
+          if (!host || host.updatedAtMs !== args.expectedUpdatedAtMs) throw new Error('Profile changed. Refresh and try again.');
+          host.groupId = args.groupId; host.updatedAtMs += 1; return { ...host };
+        }
+        case 'ssh_key_list': return [];
+        case 'group_list': return groups;
+        case 'group_create': {
+          const group = { id: `demo-group-${nextGroup++}`, name: args.name, sortOrder: 0 };
+          groups.push(group); return group;
+        }
+        case 'group_rename': {
+          const group = groups.find(g => g.id === args.id); group.name = args.name; return group;
+        }
+        case 'group_delete': {
+          const index = groups.findIndex(g => g.id === args.id);
+          if (index >= 0) groups.splice(index, 1);
+          for (const host of hosts) if (host.groupId === args.id) host.groupId = null;
+          return null;
+        }
+        case 'host_reveal_password': return passwords.get(args.id) ?? null;
         case 'host_save': {
           const { password, keyPassphrase, expectedUpdatedAtMs, ...fields } = args.input;
-          const host = { ...local, ...fields, id: 'staging-web-id', credentialConfigured: true, updatedAtMs: Date.now(), kind: 'ssh' };
+          const host = { ...local, ...fields, id: fields.id ?? (hosts.length ? crypto.randomUUID() : 'staging-web-id'), credentialConfigured: true, updatedAtMs: Date.now(), kind: 'ssh' };
           const index = hosts.findIndex(h => h.id === host.id);
+          if (password) passwords.set(host.id, password);
           if (index < 0) hosts.push(host); else hosts[index] = host;
           return host;
         }
@@ -74,6 +98,12 @@
           state.channel.onmessage({ type: 'data', data: btoa(args.data.replaceAll('\r', '\r\n')) });
           state.input += args.data;
           if (args.data.includes('\r')) {
+            if (state.input.trim() === 'exit') {
+              state.channel.onmessage({ type: 'data', data: btoa('\r\nlogout\r\n') });
+              state.channel.onmessage({ type: 'exit', status: 0 });
+              state.channel.onmessage({ type: 'closed', exitStatus: 0 });
+              terminal.delete(args.sessionId); return null;
+            }
             state.channel.onmessage({ type: 'data', data: btoa('staging-web\r\n 10:42:18 up 3 days, 2:15, 1 user, load average: 0.02, 0.03, 0.01\r\n\r\ndeploy@staging-web:~$ ') });
             state.input = '';
           }

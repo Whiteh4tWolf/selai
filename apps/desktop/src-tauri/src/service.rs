@@ -219,12 +219,8 @@ impl Services {
         let parsed = russh::keys::decode_secret_key(pem, passphrase.as_deref()).map_err(|_| {
             invalid_message("Could not read private key. Check the file and its passphrase.")
         })?;
-        if matches!(
-            parsed.algorithm(),
-            russh::keys::Algorithm::Rsa { .. } | russh::keys::Algorithm::Dsa
-        ) {
-            return Err(invalid_message("RSA and DSA keys cannot be used by Selai. Import Ed25519 or ECDSA P-256/P-384/P-521."));
-        }
+        selai_ssh::validate_private_key(&parsed)
+            .map_err(|err| invalid_message(&err.to_string()))?;
         let view = key_view(name, parsed.public_key());
         let id: HostId = view
             .id
@@ -277,26 +273,37 @@ impl Services {
         algorithm: String,
     ) -> Result<SshKeyView, CommandError> {
         let name = valid_key_name(&name)?;
-        let algorithm = match algorithm.as_str() {
-            "ed25519" => russh::keys::Algorithm::Ed25519,
-            "ecdsa-p256" => russh::keys::Algorithm::Ecdsa {
-                curve: russh::keys::EcdsaCurve::NistP256,
-            },
-            "ecdsa-p384" => russh::keys::Algorithm::Ecdsa {
-                curve: russh::keys::EcdsaCurve::NistP384,
-            },
-            "ecdsa-p521" => russh::keys::Algorithm::Ecdsa {
-                curve: russh::keys::EcdsaCurve::NistP521,
-            },
-            _ => {
-                return Err(invalid_message(
-                    "Choose Ed25519 or ECDSA P-256, P-384, or P-521.",
-                ))
-            }
+        let rsa_bits = match algorithm.as_str() {
+            "rsa-2048" => Some(2048),
+            "rsa-3072" => Some(3072),
+            "rsa-4096" => Some(4096),
+            "rsa-8192" => Some(8192),
+            _ => None,
         };
-        let mut rng = rand::rng();
-        let key = russh::keys::PrivateKey::random(&mut rng, algorithm)
-            .map_err(|e| invalid_message(&e.to_string()))?;
+        let key = if let Some(bits) = rsa_bits {
+            selai_ssh::generate_rsa_key(bits).map_err(|e| invalid_message(&e.to_string()))?
+        } else {
+            let algorithm = match algorithm.as_str() {
+                "ed25519" => russh::keys::Algorithm::Ed25519,
+                "ecdsa-p256" => russh::keys::Algorithm::Ecdsa {
+                    curve: russh::keys::EcdsaCurve::NistP256,
+                },
+                "ecdsa-p384" => russh::keys::Algorithm::Ecdsa {
+                    curve: russh::keys::EcdsaCurve::NistP384,
+                },
+                "ecdsa-p521" => russh::keys::Algorithm::Ecdsa {
+                    curve: russh::keys::EcdsaCurve::NistP521,
+                },
+                _ => {
+                    return Err(invalid_message(
+                        "Choose Ed25519, RSA 2048/3072/4096/8192, or ECDSA P-256/P-384/P-521.",
+                    ))
+                }
+            };
+            let mut rng = rand::rng();
+            russh::keys::PrivateKey::random(&mut rng, algorithm)
+                .map_err(|e| invalid_message(&e.to_string()))?
+        };
         let pem = key
             .to_openssh(ssh_key::LineEnding::LF)
             .map_err(|e| invalid_message(&e.to_string()))?;
@@ -530,6 +537,22 @@ impl Services {
         Ok(())
     }
 
+    pub fn host_move_group(
+        &self,
+        id: &str,
+        group_id: Option<&str>,
+        expected_updated_at_ms: i64,
+    ) -> Result<HostView, CommandError> {
+        let id = parse_id::<HostId>(id, "host")?;
+        let group = group_id
+            .map(|value| parse_id::<HostGroupId>(value, "group"))
+            .transpose()?;
+        self.lock_db()?
+            .move_host_to_group(id, group, expected_updated_at_ms, now_ms())
+            .map(HostView::from)
+            .map_err(storage_error)
+    }
+
     pub fn group_list(&self) -> Result<Vec<GroupView>, CommandError> {
         let db = self.lock_db()?;
         Ok(db
@@ -540,6 +563,28 @@ impl Services {
             .collect())
     }
 
+    /// Explicit reveal in the unlocked profile editor. Ordinary host responses
+    /// never contain credentials, and this value is not written to audit/chat.
+    pub fn host_reveal_password(&self, host_id: &str) -> Result<Option<String>, CommandError> {
+        let id = parse_id::<HostId>(host_id, "host")?;
+        self.refuse_local(id)?;
+        let (host, _) = self.active_host_and_pins(id)?;
+        if host.auth != AuthMethod::Password {
+            return Err(invalid_message(
+                "This profile does not use password authentication.",
+            ));
+        }
+        self.secrets
+            .get(&SecretKey::ssh(id, SshSecretKind::Password))
+            .map_err(secret_error)?
+            .map(|secret| {
+                std::str::from_utf8(secret.expose_for_transport())
+                    .map(str::to_owned)
+                    .map_err(|_| invalid_message("Saved password is not valid UTF-8."))
+            })
+            .transpose()
+    }
+
     pub fn group_create(&self, name: &str, sort_order: i64) -> Result<GroupView, CommandError> {
         let name = GroupName::parse(name).map_err(invalid)?;
         let db = self.lock_db()?;
@@ -547,6 +592,22 @@ impl Services {
             .create_group(HostGroupId::new(), &name, sort_order, now_ms())
             .map_err(storage_error)?;
         Ok(GroupView::from(group))
+    }
+
+    pub fn group_rename(&self, id: &str, name: &str) -> Result<GroupView, CommandError> {
+        let id = parse_id::<HostGroupId>(id, "group")?;
+        let name = GroupName::parse(name).map_err(invalid)?;
+        self.lock_db()?
+            .rename_group(id, &name)
+            .map(GroupView::from)
+            .map_err(storage_error)
+    }
+
+    pub fn group_delete(&self, id: &str) -> Result<(), CommandError> {
+        let id = parse_id::<HostGroupId>(id, "group")?;
+        self.lock_db()?
+            .delete_group(id, now_ms())
+            .map_err(storage_error)
     }
 
     // ---- host-key trust ----------------------------------------------------
@@ -985,6 +1046,7 @@ async fn run_terminal(
                     ShellEvent::Exit { status } => {
                         exit_status = Some(status);
                         sink(TerminalEvent::Exit { status });
+                        break;
                     }
                     ShellEvent::Refused(message) => {
                         sink(TerminalEvent::Error {

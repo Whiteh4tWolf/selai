@@ -69,7 +69,7 @@ export interface HostInput {
   keepAliveSeconds: number;
   terminalType: string;
   notes?: string | null;
-  /** Write-only. Empty or absent keeps the stored value. */
+  /** Empty or absent keeps the stored value; viewing it uses an explicit command. */
   password?: string;
   /** Write-only. Empty or absent keeps the stored value. */
   keyPassphrase?: string;
@@ -136,6 +136,21 @@ export const HOSTS_CHANGED = 'selai:hosts-changed';
 export function hostSave(input: HostInput): Promise<HostView> {
   return invoke<HostView>('host_save', { input });
 }
+
+/** Moves only the group membership; the backend preserves credentials and settings. */
+export function hostMoveGroup(id: string, groupId: string | null, expectedUpdatedAtMs: number): Promise<HostView> {
+  return invoke<HostView>('host_move_group', { id, groupId, expectedUpdatedAtMs });
+}
+
+/** Only called by the password eye button while the vault is unlocked. */
+export function hostRevealPassword(id: string): Promise<string | null> {
+  return invoke<string | null>('host_reveal_password', { id });
+}
+
+export function groupList(): Promise<GroupView[]> { return invoke<GroupView[]>('group_list'); }
+export function groupCreate(name: string): Promise<GroupView> { return invoke<GroupView>('group_create', { name }); }
+export function groupRename(id: string, name: string): Promise<GroupView> { return invoke<GroupView>('group_rename', { id, name }); }
+export function groupDelete(id: string): Promise<void> { return invoke<void>('group_delete', { id }); }
 
 export interface KdbxProfile {
   title: string;

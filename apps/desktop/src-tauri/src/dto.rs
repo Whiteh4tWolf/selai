@@ -118,8 +118,8 @@ impl From<GroupRecord> for GroupView {
     }
 }
 
-/// Create or update request. Secrets are write-only: they are read here, stored
-/// in the OS credential store, and never returned.
+/// Create or update request. Secrets are not returned in host metadata. Viewing
+/// a saved SSH password requires the separate, explicit reveal command.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostInput {

@@ -105,6 +105,9 @@ export const LockIcon = make(
   </>,
 );
 export const ChevronIcon = make(<path d="m9 6 6 6-6 6" />);
+export const FolderIcon = make(<path d="M3 7V5a1 1 0 0 1 1-1h6l2 3h8a1 1 0 0 1 1 1v11H3z" />);
+export const EyeIcon = make(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
+export const EyeOffIcon = make(<><path d="m3 3 18 18M10.6 5.1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3.1 3.8M6.1 6.1A21 21 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5.9-1.8M10 10a3 3 0 0 0 4 4" /></>);
 export const PinIcon = make(
   <>
     <path d="M12 17v5" />

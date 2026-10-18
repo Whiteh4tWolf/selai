@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Workbench as App } from './App';
 import * as ipc from './ipc';
@@ -55,6 +55,7 @@ describe('App shell', () => {
       interruptedExecutionsAtStartup: 0,
     });
     vi.spyOn(ipc, "hostList").mockResolvedValue({ items: [], nextCursor: null });
+    vi.spyOn(ipc, 'groupList').mockResolvedValue([]);
     vi.spyOn(ipc, "providerList").mockResolvedValue({ items: [], nextCursor: null });
     vi.spyOn(ipc, "providerTemplates").mockResolvedValue([]);
   });
@@ -99,6 +100,28 @@ describe('App shell', () => {
     expect(within(tabs).getByRole('tab', { name: 'Providers' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(within(tabs).getByRole('button', { name: 'Close Providers' }));
     expect(screen.queryByRole('tablist', { name: 'Open tabs' })).not.toBeInTheDocument();
+  });
+
+  it('opens key management from a profile and returns with the draft and new key available', async () => {
+    const key = { id: 'work', name: 'Work key', algorithm: 'ssh-ed25519', publicKey: 'ssh-ed25519 AAAA', fingerprintSha256: 'SHA256:demo', createdAtMs: 1 };
+    const list = vi.spyOn(ipc, 'sshKeyList').mockResolvedValue([]);
+    render(<App />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'New host' })[0]!);
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Draft production' } });
+    fireEvent.change(screen.getByLabelText('Host name or IP'), { target: { value: 'example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Private key' }));
+    await screen.findByText(/No managed SSH keys yet/);
+    fireEvent.click(screen.getByRole('button', { name: 'Add SSH key' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await screen.findByRole('heading', { name: 'SSH Keys' });
+    expect(screen.getByRole('tab', { name: 'SSH Keys' })).toHaveAttribute('aria-selected', 'true');
+    list.mockResolvedValue([key]);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to SSH profile' }));
+    expect(screen.getByLabelText('Label')).toHaveValue('Draft production');
+    expect(screen.getByLabelText('Host name or IP')).toHaveValue('example.test');
+    await screen.findByRole('option', { name: 'Work key · ssh-ed25519' });
+    fireEvent.change(screen.getByLabelText('SSH key'), { target: { value: 'vault://key:work' } });
+    expect(screen.getByLabelText('SSH key')).toHaveValue('vault://key:work');
   });
 
   it('keeps a compact window clear and opens Providers from the assistant', async () => {
@@ -175,5 +198,23 @@ describe('App shell', () => {
     await waitFor(() => expect(ipc.terminalConnect).toHaveBeenCalledTimes(2));
     const tabs = screen.getByRole('tablist', { name: 'Open tabs' });
     expect(within(tabs).getAllByRole('tab')).toHaveLength(1);
+  });
+
+  it('removes both terminal tabs when their shells exit in the same event batch', async () => {
+    const host = { id: 'h1', label: 'Production Web', hostname: 'example.test', username: 'ops', port: 22 } as ipc.HostView;
+    vi.spyOn(ipc, 'hostList').mockResolvedValue({ items: [host], nextCursor: null });
+    vi.spyOn(ipc, 'terminalDisconnect').mockResolvedValue();
+    const events: ((event: ipc.TerminalEvent) => void)[] = [];
+    vi.spyOn(ipc, 'terminalConnect').mockImplementation((_host, _cols, _rows, onEvent) => {
+      events.push(onEvent); return Promise.resolve(`session-${events.length}`);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect to Production Web' }));
+    await screen.findByText('Connected');
+    fireEvent.click(screen.getByRole('button', { name: 'Connect to Production Web' }));
+    await waitFor(() => expect(events).toHaveLength(2));
+    act(() => { for (const onEvent of events) onEvent({ type: 'exit', status: 0 }); });
+    await waitFor(() => expect(screen.queryByRole('tab')).not.toBeInTheDocument());
+    expect(screen.getByText('Ready when you are.')).toBeInTheDocument();
   });
 });

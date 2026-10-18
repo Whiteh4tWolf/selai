@@ -58,6 +58,34 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('TerminalPane', () => {
+  it('closes a finished shell once without waiting for the channel close', async () => {
+    let deliver: (event: ipc.TerminalEvent) => void = () => {};
+    vi.spyOn(ipc, 'terminalConnect').mockImplementation((_host, _c, _r, onEvent) => {
+      deliver = onEvent; return Promise.resolve('exit-session');
+    });
+    vi.spyOn(ipc, 'terminalDisconnect').mockResolvedValue();
+    const onClose = vi.fn();
+    render(<TerminalPane host={host} hidden={false} onClose={onClose} />);
+    await screen.findByText('Connected');
+    act(() => deliver({ type: 'data', data: btoa('exit\r\nlogout\r\n') }));
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => deliver({ type: 'exit', status: 0 }));
+    expect(onClose).toHaveBeenCalledOnce();
+    act(() => deliver({ type: 'closed', exitStatus: 0 }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('does not resurrect a shell that exits before connect resolves', async () => {
+    vi.spyOn(ipc, 'terminalConnect').mockImplementation((_host, _c, _r, onEvent) => {
+      onEvent({ type: 'exit', status: 1 }); return Promise.resolve('already-ended');
+    });
+    const disconnect = vi.spyOn(ipc, 'terminalDisconnect').mockResolvedValue();
+    const onClose = vi.fn();
+    render(<TerminalPane host={host} hidden={false} onClose={onClose} />);
+    await waitFor(() => expect(disconnect).toHaveBeenCalledWith('already-ended'));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+  });
   it('uses Ctrl+Plus and Ctrl+Minus in the terminal and refits when the font size changes', () => {
     vi.spyOn(ipc, 'terminalConnect').mockResolvedValue('session-font');
     const onFontSizeChange = vi.fn();

@@ -297,6 +297,48 @@ fn groups_are_listed_in_order_and_hosts_reference_them() {
 }
 
 #[test]
+fn renaming_and_deleting_groups_keep_hosts_and_prevent_stale_edits() {
+    let mut db = Database::open_in_memory().expect("db");
+    let id = HostGroupId::new();
+    db.create_group(id, &GroupName::parse("Production").expect("name"), 0, T0)
+        .expect("group");
+    assert!(matches!(
+        db.create_group(
+            HostGroupId::new(),
+            &GroupName::parse("production").expect("name"),
+            0,
+            T0
+        ),
+        Err(StorageError::Conflict(_))
+    ));
+    let mut s = settings("web", AuthMethod::Password);
+    s.group_id = Some(id);
+    let host = db.create_host(HostId::new(), &s, T0).expect("host");
+    db.rename_group(id, &GroupName::parse("Servers").expect("name"))
+        .expect("rename");
+    assert_eq!(
+        db.get_host(host.id).expect("read").expect("host").group_id,
+        Some(id)
+    );
+    assert_eq!(db.list_groups().expect("groups")[0].name, "Servers");
+    db.delete_group(id, T0 + 1).expect("delete group");
+    let remaining = db.get_host(host.id).expect("read").expect("host kept");
+    assert!(remaining.group_id.is_none());
+    assert!(remaining.archived_at_ms.is_none());
+    assert!(remaining.updated_at_ms > host.updated_at_ms);
+    s.group_id = None;
+    assert!(matches!(
+        db.update_host(host.id, &s, host.updated_at_ms, T0 + 2),
+        Err(StorageError::Conflict(_))
+    ));
+    assert!(db.list_groups().expect("groups").is_empty());
+    assert!(matches!(
+        db.delete_group(id, T0 + 2),
+        Err(StorageError::NotFound(_))
+    ));
+}
+
+#[test]
 fn first_trust_pins_and_same_key_is_unchanged() {
     let mut db = Database::open_in_memory().expect("db");
     let id = HostId::new();

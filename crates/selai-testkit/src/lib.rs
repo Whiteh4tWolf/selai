@@ -10,7 +10,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -28,8 +28,10 @@ pub struct Material {
     pub user_key: PathBuf,
     pub encrypted_key: PathBuf,
     pub encrypted_passphrase: String,
-    /// RSA key, used to prove RSA private keys are refused before authentication.
+    /// RSA OpenSSH key for SHA-2 authentication tests.
     pub rsa_key: PathBuf,
+    /// Encrypted RSA PEM key for import and in-memory authentication tests.
+    pub encrypted_rsa_key: PathBuf,
 }
 
 static MATERIAL: OnceLock<Material> = OnceLock::new();
@@ -66,11 +68,34 @@ fn build_material() -> Material {
         .status()
         .expect("ssh-keygen rsa");
     assert!(rsa.success(), "ssh-keygen rsa failed");
+    let encrypted_rsa_key = dir.join("user_encrypted_rsa");
+    let rsa = Command::new("ssh-keygen")
+        .args([
+            "-q",
+            "-t",
+            "rsa",
+            "-b",
+            "2048",
+            "-m",
+            "PEM",
+            "-N",
+            &encrypted_passphrase,
+            "-f",
+        ])
+        .arg(&encrypted_rsa_key)
+        .status()
+        .expect("ssh-keygen encrypted rsa");
+    assert!(rsa.success(), "ssh-keygen encrypted rsa failed");
 
     ensure_account();
     let password = random_hex(16);
     run_with_stdin("chpasswd", &format!("{USER}:{password}\n"));
-    install_authorized_keys(&[pub_line(&user_key), pub_line(&encrypted_key)]);
+    install_authorized_keys(&[
+        pub_line(&user_key),
+        pub_line(&encrypted_key),
+        pub_line(&rsa_key),
+        pub_line(&encrypted_rsa_key),
+    ]);
 
     Material {
         host_pub: pub_line(&host_key),
@@ -81,6 +106,7 @@ fn build_material() -> Material {
         encrypted_key,
         encrypted_passphrase,
         rsa_key,
+        encrypted_rsa_key,
     }
 }
 
@@ -199,7 +225,16 @@ pub struct Sshd {
 
 impl Sshd {
     pub fn start() -> Self {
+        Self::start_with_pubkey_algorithms("rsa-sha2-512,rsa-sha2-256,ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521")
+    }
+
+    /// Restrict signatures to prove SHA-2 negotiation and SHA-1 refusal.
+    pub fn start_with_pubkey_algorithms(algorithms: &str) -> Self {
         let m = material();
+        // Keep the selected port reserved by a listening sshd before another
+        // parallel test selects its port. free_port() alone has a bind race.
+        static START: Mutex<()> = Mutex::new(());
+        let _start = START.lock().expect("serialize sshd startup");
         let port = free_port();
         let conf = m.dir.join(format!("sshd_{port}.conf"));
         let log = m.dir.join(format!("sshd_{port}.log"));
@@ -210,6 +245,7 @@ impl Sshd {
                 "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nPidFile {}\n\
                  AuthorizedKeysFile .ssh/authorized_keys\nPasswordAuthentication yes\n\
                  KbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM yes\n\
+                 PubkeyAcceptedAlgorithms {algorithms}\n\
                  PermitRootLogin no\nAllowUsers {USER}\nLogLevel VERBOSE\n\
                  Subsystem sftp internal-sftp\n",
                 host_key.display(),

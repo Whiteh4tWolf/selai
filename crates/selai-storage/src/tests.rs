@@ -219,7 +219,7 @@ fn newer_schema_is_refused_not_downgraded() {
         err,
         StorageError::SchemaTooNew {
             found: 99,
-            supported: 7
+            supported: 8
         }
     ));
 }

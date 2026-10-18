@@ -110,6 +110,48 @@ fn to_sql_err(e: &dyn std::fmt::Display) -> rusqlite::Error {
 }
 
 impl Database {
+    /// Moves a profile without reading or rewriting connection credentials.
+    pub fn move_host_to_group(
+        &mut self,
+        id: HostId,
+        group_id: Option<HostGroupId>,
+        expected_updated_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<HostRecord, StorageError> {
+        let tx = self
+            .conn_mut()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: Option<(i64, Option<i64>)> = tx
+            .query_row(
+                "SELECT updated_at_ms, archived_at_ms FROM hosts WHERE id = ?1 AND kind = 'ssh'",
+                params![id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (updated, archived) =
+            current.ok_or_else(|| StorageError::NotFound(format!("host {id}")))?;
+        if archived.is_some() || updated != expected_updated_at_ms {
+            return Err(StorageError::Conflict(format!(
+                "host {id} was changed elsewhere or archived"
+            )));
+        }
+        if let Some(group) = group_id {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM host_groups WHERE id = ?1)",
+                params![group.to_string()],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(StorageError::NotFound(format!("group {group}")));
+            }
+        }
+        tx.execute("UPDATE hosts SET group_id = ?2, updated_at_ms = max(updated_at_ms + 1, ?3) WHERE id = ?1",
+            params![id.to_string(), group_id.map(|group| group.to_string()), now_ms])?;
+        tx.commit()?;
+        self.get_host(id)?
+            .ok_or_else(|| StorageError::NotFound(format!("host {id}")))
+    }
+
     /// Creates an active host. Fails with `Conflict` if an active host already
     /// uses the label (case-insensitively).
     pub fn create_host(
@@ -329,6 +371,7 @@ impl Database {
         sort_order: i64,
         now_ms: i64,
     ) -> Result<GroupRecord, StorageError> {
+        self.ensure_group_name_free(name, None)?;
         self.conn().execute(
             "INSERT INTO host_groups (id, name, sort_order, created_at_ms) VALUES (?1, ?2, ?3, ?4)",
             params![id.to_string(), name.as_str(), sort_order, now_ms],
@@ -355,6 +398,65 @@ impl Database {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    fn ensure_group_name_free(
+        &self,
+        name: &GroupName,
+        except: Option<HostGroupId>,
+    ) -> Result<(), StorageError> {
+        let count: i64 = self.conn().query_row(
+            "SELECT count(*) FROM host_groups WHERE name = ?1 COLLATE NOCASE AND (?2 IS NULL OR id != ?2)",
+            params![name.as_str(), except.map(|id| id.to_string())], |r| r.get(0),
+        )?;
+        if count > 0 {
+            return Err(StorageError::Conflict(
+                "A group with this name already exists.".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn rename_group(
+        &self,
+        id: HostGroupId,
+        name: &GroupName,
+    ) -> Result<GroupRecord, StorageError> {
+        self.ensure_group_name_free(name, Some(id))?;
+        let changed = self.conn().execute(
+            "UPDATE host_groups SET name = ?2 WHERE id = ?1",
+            params![id.to_string(), name.as_str()],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::NotFound(format!("group {id}")));
+        }
+        let sort_order = self.conn().query_row(
+            "SELECT sort_order FROM host_groups WHERE id = ?1",
+            params![id.to_string()],
+            |r| r.get(0),
+        )?;
+        Ok(GroupRecord {
+            id,
+            name: name.as_str().into(),
+            sort_order,
+        })
+    }
+
+    /// Removing a group keeps its profiles and invalidates stale profile edits.
+    pub fn delete_group(&mut self, id: HostGroupId, now_ms: i64) -> Result<(), StorageError> {
+        let tx = self
+            .conn_mut()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE hosts SET group_id = NULL, updated_at_ms = max(updated_at_ms + 1, ?2) WHERE group_id = ?1", params![id.to_string(), now_ms])?;
+        if tx.execute(
+            "DELETE FROM host_groups WHERE id = ?1",
+            params![id.to_string()],
+        )? == 0
+        {
+            return Err(StorageError::NotFound(format!("group {id}")));
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Active pinned keys for a host, one per algorithm.

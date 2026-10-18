@@ -1,30 +1,34 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   describeError,
+  groupList,
   hostForgetSudoPassword,
+  hostRevealPassword,
   hostSave,
-  sshKeyDelete,
-  sshKeyGenerate,
-  sshKeyImport,
   sshKeyList,
   type AuthMethod,
   type HostInput,
   type HostView,
+  type GroupView,
   type SshKeyView,
 } from '../ipc';
 import { Field } from '../ui/Field';
 import { Drawer } from '../ui/Overlay';
-import { ChevronIcon } from '../ui/icons';
+import { PasswordInput } from '../ui/PasswordInput';
+import { ChevronIcon, KeyIcon } from '../ui/icons';
 
 interface Props {
   host: HostView | null;
   onCancel: () => void;
   /** `connect` is true when the operator chose "Save & connect". */
   onSaved: (host: HostView, connect: boolean) => void;
+  onManageKeys?: () => void;
+  suspended?: boolean;
 }
 
 interface FormState {
   label: string;
+  groupId: string;
   hostname: string;
   port: string;
   username: string;
@@ -39,6 +43,7 @@ interface FormState {
 function initial(host: HostView | null): FormState {
   return {
     label: host?.label ?? '',
+    groupId: host?.groupId ?? '',
     hostname: host?.hostname ?? '',
     port: String(host?.port ?? 22),
     username: host?.username ?? '',
@@ -59,54 +64,42 @@ function validate(form: FormState): string | null {
   const port = Number(form.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return 'Port must be 1 to 65535.';
   if (form.authMethod === 'private_key' && !form.privateKeyPath.trim()) {
-    return 'Private key path is required for key authentication.';
+    return 'Choose an SSH key for key authentication.';
   }
   return null;
 }
 
-export function HostForm({ host, onCancel, onSaved }: Props) {
+export function HostForm({ host, onCancel, onSaved, onManageKeys, suspended = false }: Props) {
   const [form, setForm] = useState<FormState>(() => initial(host));
   // Secrets live only in this component's local state until submit. They are
-  // cleared right after a save and never prefilled from the host record.
+  // cleared right after a save. Saved values are revealed only on demand.
   const [password, setPassword] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sudoNote, setSudoNote] = useState<string | null>(null);
   const [keys, setKeys] = useState<SshKeyView[]>([]);
-  const [manageKeys, setManageKeys] = useState(false);
-  const [keyName, setKeyName] = useState('');
-  const [keyPass, setKeyPass] = useState('');
   const [keyError, setKeyError] = useState<string | null>(null);
-  const [keyBusy, setKeyBusy] = useState(false);
+  const [keysLoading, setKeysLoading] = useState(false);
+  const [groups, setGroups] = useState<GroupView[]>([]);
 
-  async function refreshKeys() { setKeys(await sshKeyList()); }
-  useEffect(() => { void refreshKeys().catch((err) => setKeyError(describeError(err))); }, []);
 
-  async function generateKey(algorithm: string) {
-    if (!keyName.trim()) { setKeyError('Enter a name for the key.'); return; }
-    setKeyBusy(true); setKeyError(null);
-    try { const key = await sshKeyGenerate(keyName, algorithm); await refreshKeys(); set('privateKeyPath')(`vault://key:${key.id}`); set('authMethod')('private_key'); setKeyName(''); }
-    catch (err) { setKeyError(describeError(err)); } finally { setKeyBusy(false); }
-  }
-
-  async function importKey(file?: File) {
-    if (!file) return;
-    if (!keyName.trim()) { setKeyError('Enter a name for the key before importing.'); return; }
-    setKeyBusy(true); setKeyError(null);
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      const key = await sshKeyImport(keyName, btoa(binary), keyPass || undefined);
-      await refreshKeys(); set('privateKeyPath')(`vault://key:${key.id}`); set('authMethod')('private_key'); setKeyName(''); setKeyPass('');
-    } catch (err) { setKeyError(describeError(err)); } finally { setKeyBusy(false); }
-  }
-
-  async function removeKey(key: SshKeyView) {
-    if (!window.confirm(`Delete key “${key.name}”?`)) return;
-    try { await sshKeyDelete(key.id); if (form.privateKeyPath === `vault://key:${key.id}`) set('privateKeyPath')(''); await refreshKeys(); }
-    catch (err) { setKeyError(describeError(err)); }
-  }
+  useEffect(() => {
+    if (suspended || form.authMethod !== 'private_key') return;
+    let active = true;
+    setKeysLoading(true);
+    setKeyError(null);
+    sshKeyList().then((items) => { if (active) setKeys(items); })
+      .catch((err) => { if (active) setKeyError(describeError(err)); })
+      .finally(() => { if (active) setKeysLoading(false); });
+    return () => { active = false; };
+  }, [suspended, form.authMethod]);
+  useEffect(() => {
+    let active = true;
+    groupList().then((items) => { if (active) setGroups(items); })
+      .catch((err) => { if (active) setError(describeError(err)); });
+    return () => { active = false; };
+  }, []);
 
   async function forgetSudo() {
     if (!host) return;
@@ -131,7 +124,7 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
       id: host?.id,
       expectedUpdatedAtMs: host?.updatedAtMs,
       label: form.label.trim(),
-      groupId: host?.groupId ?? null,
+      groupId: form.groupId || null,
       hostname: form.hostname.trim(),
       port: Number(form.port),
       username: form.username.trim(),
@@ -162,8 +155,12 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
     void save(false);
   }
 
-  const savedPlaceholder = host?.credentialConfigured ? '•••• saved (leave blank to keep)' : '';
+  const hasSavedPassword = host?.authMethod === 'password' && host.credentialConfigured;
+  const savedPlaceholder = hasSavedPassword ? '•••• saved (leave blank to keep)' : '';
   const formId = 'host-form';
+
+  // Keep the draft in component state while the operator visits SSH Keys.
+  if (suspended) return null;
 
   return (
     <Drawer
@@ -200,6 +197,12 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
               onChange={(e) => set('label')(e.target.value)}
               autoFocus
             />
+          </Field>
+          <Field label="Group" hint="Create groups with + beside SSH hosts in the sidebar. You can also drag profiles into groups.">
+            <select value={form.groupId} onChange={(e) => set('groupId')(e.target.value)}>
+              <option value="">Ungrouped</option>
+              {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+            </select>
           </Field>
           <div className="field-row">
             <label className="field">
@@ -239,45 +242,37 @@ export function HostForm({ host, onCancel, onSaved }: Props) {
             </div>
           </div>
           {form.authMethod === 'password' ? (
-            <Field label="Password" hint="Stored inside your encrypted vault.">
-              <input
-                type="password"
-                autoComplete="off"
+            <Field label="Password" hint={hasSavedPassword ? 'Saved in your encrypted vault. Click the eye to reveal it; leave blank to keep it.' : 'Stored inside your encrypted vault.'}>
+              <PasswordInput
                 value={password}
                 placeholder={savedPlaceholder}
-                onChange={(e) => setPassword(e.target.value)}
+                disabled={busy}
+                onChange={setPassword}
+                loadSaved={hasSavedPassword && host ? () => hostRevealPassword(host.id) : undefined}
               />
             </Field>
           ) : (
             <>
-              <label className="field">SSH key
-                <select aria-label="SSH key" value={form.privateKeyPath.startsWith('vault://key:') ? form.privateKeyPath : form.privateKeyPath.startsWith('vault://') ? form.privateKeyPath : ''} onChange={(e) => set('privateKeyPath')(e.target.value)}>
-                  <option value="">Choose a managed key…</option>
-                  {form.privateKeyPath.startsWith('vault://') && !form.privateKeyPath.startsWith('vault://key:') && <option value={form.privateKeyPath}>Existing key saved for this host</option>}
-                  {form.privateKeyPath && !form.privateKeyPath.startsWith('vault://') && <option value={form.privateKeyPath}>Existing file path: {form.privateKeyPath}</option>}
+              <Field label="SSH key" hint="Select a key from your encrypted vault.">
+                <select value={form.privateKeyPath} disabled={keysLoading}
+                  onChange={(e) => set('privateKeyPath')(e.target.value)}>
+                  <option value="">{keysLoading ? 'Loading keys…' : 'Choose an SSH key…'}</option>
+                  {form.privateKeyPath && !keys.some((key) => form.privateKeyPath === `vault://key:${key.id}`) && (
+                    <option value={form.privateKeyPath}>
+                      {form.privateKeyPath.startsWith('vault://key:') ? 'Previously selected key (unavailable)' :
+                        form.privateKeyPath.startsWith('vault://') ? 'Existing key saved for this host' : 'Existing key file'}
+                    </option>
+                  )}
                   {keys.map((key) => <option key={key.id} value={`vault://key:${key.id}`}>{key.name} · {key.algorithm}</option>)}
                 </select>
-                <span className="hint">Managed keys are stored in the encrypted vault and can be reused across hosts.</span>
-              </label>
-              {form.privateKeyPath && !form.privateKeyPath.startsWith('vault://') && <p className="hint">This profile uses a legacy key file path. Import it into key management to reuse it from other profiles.</p>}
-              <button className="btn btn-sm" type="button" onClick={() => setManageKeys((open) => !open)}>{manageKeys ? 'Hide key manager' : 'Manage SSH keys'}</button>
-              {manageKeys && <div className="form-section" aria-label="SSH key manager">
-                <h3>SSH keys</h3>
-                {keyError && <p role="alert" className="banner" data-tone="danger">{keyError}</p>}
-                <label className="field">Key name<input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="Work laptop" /></label>
-                <div className="field-row">
-                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ed25519')}>Generate Ed25519</button>
-                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ecdsa-p256')}>ECDSA P-256</button>
-                </div>
-                <div className="field-row">
-                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ecdsa-p384')}>ECDSA P-384</button>
-                  <button type="button" className="btn btn-sm" disabled={keyBusy} onClick={() => void generateKey('ecdsa-p521')}>ECDSA P-521</button>
-                </div>
-                <label className="field">Private key passphrase (if encrypted)<input type="password" autoComplete="off" value={keyPass} onChange={(e) => setKeyPass(e.target.value)} /></label>
-                <label className="field">Import private key<input type="file" accept=".pem,.key,id_*" disabled={keyBusy} onChange={(e) => { void importKey(e.target.files?.[0]); e.currentTarget.value = ''; }} /></label>
-                <span className="hint">Supports Ed25519 and ECDSA P-256/P-384/P-521. Imported private keys are encrypted in your vault. Generated private keys never leave the backend.</span>
-                {keys.map((key) => <div key={key.id} className="key-manager-row"><div><strong>{key.name}</strong><div className="hint">{key.algorithm} · {key.fingerprintSha256}</div><code>{key.publicKey}</code></div><div className="field-row"><button type="button" className="btn btn-sm" onClick={() => { void navigator.clipboard.writeText(key.publicKey); }}>Copy public key</button><button type="button" className="btn btn-sm" onClick={() => set('privateKeyPath')(`vault://key:${key.id}`)}>Use</button><button type="button" className="btn btn-sm btn-ghost" onClick={() => void removeKey(key)}>Delete</button></div></div>)}
-              </div>}
+              </Field>
+              {keyError && <p role="alert" className="banner" data-tone="danger">{keyError}</p>}
+              {!keysLoading && !keyError && keys.length === 0 && <p className="hint">No managed SSH keys yet. Generate or import one in SSH Keys, then return to this profile.</p>}
+              {form.privateKeyPath && !form.privateKeyPath.startsWith('vault://') && <p className="hint">This profile uses an existing key file. Import it in SSH Keys to reuse it across profiles.</p>}
+              {onManageKeys && <button className="btn btn-sm" type="button" onClick={onManageKeys}>
+                <KeyIcon size={14} /> {keys.length === 0 ? 'Add SSH key' : 'Manage SSH keys'}
+              </button>}
+
             </>
           )}
         </div>

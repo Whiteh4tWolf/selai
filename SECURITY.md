@@ -12,6 +12,19 @@ vulnerability.
 Include: affected version or commit, reproduction steps, and the impact you
 observed. Do not include real credentials or private keys in a report.
 
+## SSH private keys
+
+RSA keys of 2048-8192 bits use an OpenSSL signer with SHA-256 or SHA-512.
+RSA generation (2048/3072/4096/8192 bits) also uses OpenSSL, with temporary
+private PEM buffers wiped on drop. Generation runs in a background worker,
+limited to one job at a time, and holds its vault lease until it finishes.
+The RustCrypto `rsa` dependency is used for decoding and public verification,
+not RSA private signing or generation, avoiding the private operations covered
+by RUSTSEC-2023-0071. Import and login share RSA component and size validation.
+Legacy `ssh-rsa`/SHA-1 and DSA user authentication are refused. Ed25519 and ECDSA
+use russh's existing signing path. Host-key trust is still required before any
+user authentication.
+
 ## Local vault
 
 The desktop starts locked. Argon2id (64 MiB, three iterations, one lane) derives
@@ -26,6 +39,15 @@ The unencrypted `vault.json` contains format/KDF parameters, salt, a random
 database filename, nonces, and wrapped keys. Display preferences alone remain
 in localStorage. `.selai` backups and `.selai-history` exports are encrypted.
 Explicitly downloaded recovery keys and decrypted JSON exports are plaintext.
+
+The profile editor can explicitly reveal a saved SSH login password through a
+dedicated command admitted only while the vault is unlocked. Ordinary host
+metadata and lists still exclude secrets. The renderer fetches the password only
+when the eye button is clicked, keeps it in component state, and clears the
+preview after 30 seconds, on hide, loss of focus, vault-lock flushing, or editor teardown. It is not
+copied into chat, localStorage, logs, or audit records. JS/runtime copies cannot
+be guaranteed to be physically erased from memory. Private keys, key passphrases,
+sudo passwords, and provider API keys have no equivalent reveal command.
 
 Locking denies new operations, disconnects terminals, drains/cancels agent
 work, closes the encrypted connection, and drops the vault key. The UI reports

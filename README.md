@@ -106,8 +106,8 @@ not contact a live server. The AI provider is already configured for this demo.
 
 | Area | What you can do |
 | --- | --- |
-| **SSH hosts** | Add, edit, filter, and archive profiles; use a password or choose a managed SSH key; save a host and connect in one flow. Labels can contain spaces. |
-| **SSH keys** | Generate named Ed25519 or ECDSA P-256/P-384/P-521 key pairs, import private keys with an optional passphrase, copy public keys, and reuse a key across profiles. Private keys stay in the encrypted vault. |
+| **SSH hosts** | Add, edit, filter, and archive profiles; organize them in collapsible groups; use a password or choose a managed SSH key; save a host and connect in one flow. Reveal a saved login password on demand from the profile editor. Labels can contain spaces. |
+| **SSH keys** | Generate named Ed25519, RSA (2048/3072/4096/8192 bits), or ECDSA P-256/P-384/P-521 key pairs; import existing keys with an optional passphrase; copy public keys and reuse a key across profiles. RSA login uses SHA-2 signatures. Private keys stay in the encrypted vault. |
 | **Host verification** | Inspect and explicitly trust a fingerprint on first connection. A changed host key blocks connection until you confirm its replacement. |
 | **Terminal** | Open interactive SSH terminals in tabs, resize them, adjust the terminal font with Ctrl+Plus or Ctrl+Minus, see connection and exit status, reconnect, and edit a host after a failed login. Open a terminal for **This computer** too. |
 | **AI chat** | Discuss a question without a server, or bind a task to one or more SSH hosts or This computer. Mention hosts with `@` for one message to run independent tasks in parallel, follow the focused terminal, or pin a server in the chat. Each host has its own output and change approvals. Assistant replies render Markdown, tables, task lists, code blocks, and Mermaid diagrams. |
@@ -123,14 +123,32 @@ not contact a live server. The AI provider is already configured for this demo.
 Create a profile with a label, address, port, username, and authentication
 method. Passwords and key passphrases are saved inside the encrypted vault.
 For **Private key** authentication, choose a saved key from the **SSH key**
-selector or open **Manage SSH keys** to generate or import one. Selai asks you to
+selector. Use **SSH Keys** in the left sidebar to generate or import keys;
+the profile's **Add SSH key / Manage SSH keys** button opens the same page and
+keeps your unsaved profile draft. Selai asks you to
 trust an unknown server key *before* sending credentials. It refuses a changed
 key until you inspect and explicitly replace the saved fingerprint.
 
 Each terminal tab stays bound to its host. The host explorer also includes
 **This computer** for a local terminal. Terminal tabs report connection state
-and exit status, and offer a reconnect action. If login fails, you can open the
-host editor from the error flow.
+and close automatically when the shell exits (`exit`), releasing the
+session. If login fails, the tab stays open for retry or editing the profile.
+
+In the profile editor, click the **eye** beside Password to view the stored
+login password while the vault is unlocked. The preview clears when hidden,
+after 30 seconds, on loss of focus, when vault locking starts, or when the editor closes. Viewing the value
+does not replace it when saving; type a new value to change the password.
+
+Click **+** beside **SSH hosts** in the sidebar to create a group. Drag a profile
+onto a group to move it, including collapsed groups; drag it onto **Ungrouped**
+to remove its group. The destination highlights during dragging and expands
+after a successful move. The profile editor's **Group** dropdown can also select
+an existing group. The folder button in the Hosts header opens **SSH groups**
+for renaming and deleting groups. Deleting a group moves its profiles
+to **Ungrouped**, preserving credentials and history. Search matches host labels,
+addresses, usernames, and group names locally; matching groups expand during search.
+Moving a profile changes only group membership and preserves its credentials,
+connection settings, active terminal, and history.
 
 With a terminal focused, press **Ctrl+Plus** or **Ctrl+Minus** to change its font
 size. The setting applies to all terminal tabs and is remembered when Selai
@@ -138,22 +156,29 @@ restarts.
 
 ### SSH key management
 
-In a host profile, select **Private key → Manage SSH keys**. Give a key a name,
-then generate **Ed25519** or **ECDSA P-256, P-384, or P-521**. Alternatively,
-choose an existing OpenSSH or PEM private key file and enter its passphrase if
-it is encrypted. Private key imports are limited to **1 MB**.
+Open **SSH Keys** in the left sidebar. Choose **Generate key**, give it a name,
+and select **Ed25519**, **RSA 2048/3072/4096/8192-bit**, or
+**ECDSA P-256, P-384, or P-521**. To reuse an existing
+key, choose **Import key**, select an OpenSSH or PEM file, and enter its
+passphrase if it is encrypted. Private key imports are limited to **1 MB**.
 
-The manager shows the algorithm, SHA-256 fingerprint, and public key. Use
+The page shows each key's name, algorithm, and SHA-256 fingerprint. Expand
+**Public key** when needed, or use
 **Copy public key** to obtain the public half for the server's `authorized_keys`,
-then select the named key in any host profile that should use it. Generating
+then select the named key from the **SSH key** dropdown in a host profile.
+If you opened key management from a profile, choose **Back to SSH profile**
+to continue with your draft and refreshed key list. Generating
 or importing a key does not install its public key on a server.
 
 Generated private keys stay in the backend and encrypted vault; the manager
 does not export them to the UI. Imported key files remain at their original
 location and need separate protection. A key cannot be deleted while an active
 host profile references it. Existing per-host vault keys remain usable.
-RSA and DSA are not offered by the key manager; Selai's SSH client refuses RSA
-private-key authentication in this release.
+RSA private keys of **2048-8192 bits** can also be imported and used for login.
+RSA authentication uses OpenSSL with **RSA-SHA2-256/512**; the server must support
+one of these signatures. Legacy RSA/SHA-1 and DSA authentication are unsupported.
+Key generation runs locally, one job at a time, without blocking the UI.
+RSA generation uses OpenSSL and can take longer at larger key sizes.
 
 ### Assistant and approvals
 

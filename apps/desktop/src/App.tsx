@@ -7,18 +7,19 @@ import { HostsSidebar } from './tabs/HostsSidebar';
 import { ProvidersPanel } from './tabs/ProvidersPanel';
 import { appInfo, describeError, localHost, storageStatus, type AppInfo, type HostView } from './ipc';
 import type { SessionStatus, TerminalSessionTab } from './tabs/TerminalTab';
-import { ClockIcon, CloseIcon, MaximizeIcon, MinimizeIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon } from './ui/icons';
+import { ClockIcon, CloseIcon, KeyIcon, MaximizeIcon, MinimizeIcon, PlugIcon, PlusIcon, ServerIcon, TerminalIcon } from './ui/icons';
 import { SelaiLogo } from './ui/SelaiLogo';
 import { VaultGate } from './VaultGate';
 
 // xterm.js is large; load it only when a terminal is first needed.
 const TerminalStack = lazy(() => import('./tabs/TerminalTab').then((m) => ({ default: m.TerminalStack })));
+const SshKeysPage = lazy(() => import('./tabs/SshKeysPage').then((m) => ({ default: m.SshKeysPage })));
 
 /** A tab in the centre area: a terminal, or one of the pages that open as a tab. */
-type PageId = 'history' | 'providers';
+type PageId = 'history' | 'providers' | 'keys';
 type EditorTab = ({ kind: 'terminal' } & TerminalSessionTab) | { kind: PageId; key: PageId };
 
-const PAGE_TITLES: Record<PageId, string> = { history: 'History', providers: 'Providers' };
+const PAGE_TITLES: Record<PageId, string> = { history: 'History', providers: 'Providers', keys: 'SSH Keys' };
 
 let nextTabNumber = 0;
 
@@ -139,12 +140,15 @@ export function Workbench() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [storage, setStorage] = useState<{ ok: boolean; text: string }>({ ok: true, text: 'Checking database…' });
   const [tabs, setTabs] = useState<EditorTab[]>([]);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   const [activeKey, setActiveKey] = useState<string | null>(null);
   /** The terminal focused last; the chat follows its host. */
   const [lastTerminal, setLastTerminal] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const statusRef = useRef<Record<string, SessionStatus>>({});
   const [editRequest, setEditRequest] = useState<{ hostId: string; n: number } | null>(null);
+  const [profilePaused, setProfilePaused] = useState(false);
   const [theme, setTheme] = useState<Theme>(storedTheme);
   const [terminalFontSize, setTerminalFontSize] = useState(storedTerminalFontSize);
   const [sidebarOpen, setSidebarOpen] = useState(() => stored('selai.sidebar') !== 'closed');
@@ -219,6 +223,7 @@ export function Workbench() {
   const terminals = tabs.filter((t): t is Extract<EditorTab, { kind: 'terminal' }> => t.kind === 'terminal');
 
   function activate(key: string) {
+    if (key !== 'keys') setProfilePaused(false);
     setActiveKey(key);
     if (tabs.some((t) => t.key === key && t.kind === 'terminal')) setLastTerminal(key);
   }
@@ -245,23 +250,25 @@ export function Workbench() {
   }
 
   function openPage(page: PageId) {
+    if (page !== 'keys') setProfilePaused(false);
     setTabs((prev) => (prev.some((t) => t.key === page) ? prev : [...prev, { kind: page, key: page }]));
     setActiveKey(page);
   }
 
   function closeTab(key: string) {
-    const index = tabs.findIndex((t) => t.key === key);
-    const next = tabs.filter((t) => t.key !== key);
+    if (key === 'keys') setProfilePaused(false);
+    const currentTabs = tabsRef.current;
+    const index = currentTabs.findIndex((t) => t.key === key);
+    const next = currentTabs.filter((t) => t.key !== key);
+    tabsRef.current = next;
     setTabs(next);
+    delete statusRef.current[key];
     setStatuses((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== key)));
-    if (activeKey === key) {
-      const neighbour = next[Math.min(index, next.length - 1)] ?? null;
-      setActiveKey(neighbour?.key ?? null);
-      if (neighbour?.kind === 'terminal') setLastTerminal(neighbour.key);
-    }
-    if (lastTerminal === key) {
-      setLastTerminal(next.find((t) => t.kind === 'terminal')?.key ?? null);
-    }
+    const neighbour = next[Math.min(index, next.length - 1)] ?? null;
+    setActiveKey((current) => current === key ? neighbour?.key ?? null : current);
+    setLastTerminal((current) => current === key
+      ? (neighbour?.kind === 'terminal' ? neighbour.key : next.find((t) => t.kind === 'terminal')?.key ?? null)
+      : current);
   }
 
   const onStatus = useCallback((key: string, status: SessionStatus) => {
@@ -344,13 +351,21 @@ export function Workbench() {
       </header>
       <div className="workbench-main">
         <nav className="activitybar" aria-label="Main">
-          {activity('Hosts', <ServerIcon size={20} />, sidebarOpen, () => setSidebarOpen((o) => !o), 'Ctrl+Shift+E')}
+          {activity('Hosts', <ServerIcon size={20} />, sidebarOpen, () => {
+            if (profilePaused) { setProfilePaused(false); setSidebarOpen(true); }
+            else setSidebarOpen((o) => !o);
+          }, 'Ctrl+Shift+E')}
+          {activity('SSH Keys', <KeyIcon size={20} />, active?.kind === 'keys', () => openPage('keys'))}
           {activity('History', <ClockIcon size={20} />, active?.kind === 'history', () => openPage('history'))}
           {activity('Providers', <PlugIcon size={20} />, active?.kind === 'providers', () => openPage('providers'))}
         </nav>
 
         <aside className="sidebar" hidden={!sidebarOpen} style={{ width: side.width }}>
-          <HostsSidebar onConnect={openTerminal} sessions={sessions} editRequest={editRequest} />
+          <HostsSidebar onConnect={openTerminal} sessions={sessions} editRequest={editRequest}
+            profilePaused={profilePaused} onManageKeys={() => {
+              setProfilePaused(true); openPage('keys');
+              if (window.innerWidth <= 1100) setChatOpen(false);
+            }} />
         </aside>
         {sidebarOpen && <Resizer label="Resize sidebar" direction={1} {...side} />}
 
@@ -371,6 +386,8 @@ export function Workbench() {
                     >
                       {tab.kind === 'terminal' ? (
                         <span className="dot" data-status={statuses[tab.key] ?? 'connecting'} />
+                      ) : tab.kind === 'keys' ? (
+                        <KeyIcon size={13} />
                       ) : tab.kind === 'history' ? (
                         <ClockIcon size={13} />
                       ) : (
@@ -420,6 +437,15 @@ export function Workbench() {
             {tabs.some((t) => t.kind === 'providers') && (
               <div className="editor-page" hidden={active?.kind !== 'providers'}>
                 <ProvidersPanel />
+              </div>
+            )}
+            {tabs.some((t) => t.kind === 'keys') && (
+              <div className="editor-page" hidden={active?.kind !== 'keys'}>
+                <Suspense fallback={<div className="welcome"><span className="spinner spinner-lg" /></div>}>
+                  <SshKeysPage visible={active?.kind === 'keys'} onReturnToProfile={profilePaused ? () => {
+                    setProfilePaused(false); setSidebarOpen(true);
+                  } : undefined} />
+                </Suspense>
               </div>
             )}
           </div>

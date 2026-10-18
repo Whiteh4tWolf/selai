@@ -265,6 +265,16 @@ pub fn host_save(state: State<'_, AppState>, input: HostInput) -> Result<HostVie
 }
 
 #[tauri::command]
+pub fn host_move_group(
+    state: State<'_, AppState>,
+    id: String,
+    group_id: Option<String>,
+    expected_updated_at_ms: i64,
+) -> Result<HostView, CommandError> {
+    services(&state)?.host_move_group(&id, group_id.as_deref(), expected_updated_at_ms)
+}
+
+#[tauri::command]
 pub fn ssh_key_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::dto::SshKeyView>, CommandError> {
@@ -281,13 +291,27 @@ pub fn ssh_key_import(
     services(&state)?.ssh_key_import(name, private_key_base64, passphrase)
 }
 
+static SSH_KEY_GENERATION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 #[tauri::command]
-pub fn ssh_key_generate(
+pub async fn ssh_key_generate(
     state: State<'_, AppState>,
     name: String,
     algorithm: String,
 ) -> Result<crate::dto::SshKeyView, CommandError> {
-    services(&state)?.ssh_key_generate(name, algorithm)
+    let lease = services(&state)?;
+    let permit = SSH_KEY_GENERATION.try_acquire().map_err(|_| {
+        CommandError::new(
+            ErrorCode::StorageBusy,
+            "SSH key generation is already running. Please wait.",
+        )
+    })?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        lease.ssh_key_generate(name, algorithm)
+    })
+    .await
+    .map_err(|_| CommandError::new(ErrorCode::Internal, "SSH key generation failed."))?
 }
 
 #[tauri::command]
@@ -366,6 +390,28 @@ pub fn host_trust(
 #[tauri::command]
 pub fn group_list(state: State<'_, AppState>) -> Result<Vec<GroupView>, CommandError> {
     services(&state)?.group_list()
+}
+
+#[tauri::command]
+pub fn host_reveal_password(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<String>, CommandError> {
+    services(&state)?.host_reveal_password(&id)
+}
+
+#[tauri::command]
+pub fn group_rename(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Result<GroupView, CommandError> {
+    services(&state)?.group_rename(&id, &name)
+}
+
+#[tauri::command]
+pub fn group_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+    services(&state)?.group_delete(&id)
 }
 
 #[tauri::command]

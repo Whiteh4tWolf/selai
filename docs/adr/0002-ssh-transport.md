@@ -50,9 +50,13 @@ host-key bypass. AGENTS.md requires strict pinning after first trust.
 
 - OpenSSH sends `EOF` before `exit-status`. The shell stream therefore ends on
   `Close`, not `EOF`, so the exit status is not lost.
-- RSA private keys are refused before authentication (`RUSTSEC-2023-0071`, no
-  upstream fix). Ed25519 and ECDSA keys are accepted. RSA host keys are still
-  verified by pin comparison, which uses public material only.
+- RSA private keys (2048-8192 bits) authenticate through a custom OpenSSL signer
+  using `rsa-sha2-512` or `rsa-sha2-256`. This avoids RustCrypto RSA private
+  operations affected by `RUSTSEC-2023-0071`; decoding and public verification
+  remain in russh. The same validation runs at import and connection time.
+  Servers without `server-sig-algs` are tried with SHA-512 then SHA-256; SHA-1
+  is never used for user authentication. DSA keys remain unsupported.
+  Ed25519 and ECDSA keys retain the native russh authentication path.
 - `probe_host_key` makes no authentication attempt. Tests check the server log
   for `Accepted` or `Failed` lines to confirm this.
 

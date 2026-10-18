@@ -24,8 +24,9 @@ different store.
    zeroizes on drop, does not implement `Debug`, `Display`, `Clone` or
    `Serialize`, and exposes bytes only through `expose_for_transport()`. Only
    the SSH and HTTP clients call it.
-4. **No read IPC.** No Tauri command returns a stored secret. `host_get` returns
-   `credentialConfigured: bool`.
+4. **No read IPC (original decision).** `host_get` returns `credentialConfigured:
+   bool`. ADR-0006 now permits a separate, user-requested SSH login-password
+   reveal while the vault is unlocked; other credential types remain excluded.
 5. **Write ordering.** A save with a new password (1) writes the secret to the
    store, then (2) commits the host row with `credential_configured = 1`. If step
    1 fails, nothing changes. If step 2 fails, the store may hold a newer value

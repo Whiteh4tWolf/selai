@@ -290,9 +290,75 @@ async fn silent_server_hits_the_connect_timeout() {
 }
 
 #[tokio::test]
-async fn rsa_private_key_is_refused_before_authentication() {
-    let sshd = Sshd::start();
+async fn rsa_private_key_authenticates_with_sha2_only() {
     let m = material();
+    for algorithm in ["rsa-sha2-512", "rsa-sha2-256"] {
+        let sshd = Sshd::start_with_pubkey_algorithms(algorithm);
+        let session = connect(ConnectOptions {
+            endpoint: Endpoint::new("127.0.0.1", sshd.port),
+            username: USER.to_owned(),
+            auth: Auth::PrivateKey {
+                path: m.rsa_key.clone(),
+                passphrase: None,
+            },
+            pinned: vec![host_pin()],
+            connect_timeout: LIMIT,
+            keepalive: None,
+        })
+        .await
+        .expect("RSA SHA-2 login");
+        let mut shell = session
+            .open_shell(80, 24, "xterm-256color")
+            .await
+            .expect("pty");
+        shell.write(b"whoami\n").await.expect("write");
+        read_until(&mut shell, USER, LIMIT).await;
+        assert!(sshd
+            .auth_decisions()
+            .iter()
+            .any(|l| l.contains("Accepted publickey")));
+    }
+}
+
+#[tokio::test]
+async fn encrypted_rsa_pem_authenticates_from_vault_data_and_rejects_wrong_passphrase() {
+    let m = material();
+    let sshd = Sshd::start();
+    let pem = std::fs::read(&m.encrypted_rsa_key).expect("read fixture");
+    let with = |passphrase: &str| ConnectOptions {
+        endpoint: Endpoint::new("127.0.0.1", sshd.port),
+        username: USER.to_owned(),
+        auth: Auth::PrivateKeyData {
+            pem: SecretValue::new(pem.clone()),
+            passphrase: Some(SecretValue::new(passphrase)),
+        },
+        pinned: vec![host_pin()],
+        connect_timeout: LIMIT,
+        keepalive: None,
+    };
+    let err = connect(with("wrong-passphrase"))
+        .await
+        .expect_err("wrong passphrase");
+    assert!(matches!(err, SshError::KeyLoad(_)), "{err:?}");
+    assert!(
+        sshd.auth_decisions().is_empty(),
+        "wrong passphrase must fail locally"
+    );
+    let session = connect(with(&m.encrypted_passphrase))
+        .await
+        .expect("encrypted RSA login");
+    let mut shell = session
+        .open_shell(80, 24, "xterm-256color")
+        .await
+        .expect("pty");
+    shell.write(b"whoami\n").await.expect("write");
+    read_until(&mut shell, USER, LIMIT).await;
+}
+
+#[tokio::test]
+async fn rsa_sha1_only_server_is_rejected() {
+    let m = material();
+    let sshd = Sshd::start_with_pubkey_algorithms("ssh-rsa");
     let err = connect(ConnectOptions {
         endpoint: Endpoint::new("127.0.0.1", sshd.port),
         username: USER.to_owned(),
@@ -305,15 +371,12 @@ async fn rsa_private_key_is_refused_before_authentication() {
         keepalive: None,
     })
     .await
-    .expect_err("RSA private keys are refused in v1");
+    .expect_err("SHA-1 must not be used");
     assert!(
-        matches!(&err, SshError::KeyLoad(msg) if msg.contains("RSA")),
+        matches!(err, SshError::KeyLoad(_) | SshError::AuthFailed),
         "{err:?}"
     );
-    assert!(
-        sshd.auth_decisions().is_empty(),
-        "no authentication may be attempted with RSA"
-    );
+    assert!(!sshd.auth_decisions().iter().any(|l| l.contains("Accepted")));
 }
 
 #[tokio::test]

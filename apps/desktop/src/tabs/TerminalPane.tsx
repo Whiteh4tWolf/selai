@@ -83,6 +83,8 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
   const [attempt, setAttempt] = useState(0);
   const statusCallback = useRef(onStatus);
   statusCallback.current = onStatus;
+  const closeCallback = useRef(onClose);
+  closeCallback.current = onClose;
 
   useEffect(() => {
     statusCallback.current?.(status);
@@ -148,6 +150,7 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
     const term = termRef.current;
     if (!term) return;
     let disposed = false;
+    let ended = false;
     let sessionId: string | null = null;
     setStatus('connecting');
     setFailure(null);
@@ -155,18 +158,26 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
     setExitStatus(null);
     if (attempt > 0) term.write('\r\n\x1b[2m── reconnecting ──\x1b[0m\r\n');
 
+    const finish = (code: number | null) => {
+      if (ended) return;
+      ended = true;
+      sessionRef.current = null;
+      setExitStatus(code);
+      setStatus('closed');
+      closeCallback.current?.();
+    };
+
     const onEvent = (event: TerminalEvent) => {
-      if (disposed) return;
+      if (disposed || ended) return;
       switch (event.type) {
         case 'data':
           term.write(decodeBase64(event.data));
           break;
         case 'exit':
+          finish(event.status);
           break;
         case 'closed':
-          sessionRef.current = null;
-          setExitStatus(event.exitStatus);
-          setStatus('closed');
+          finish(event.exitStatus);
           break;
         case 'error':
           term.writeln(`\r\n\x1b[31m[${event.code}] ${event.message}\x1b[0m`);
@@ -176,8 +187,8 @@ export function TerminalPane({ host, hidden, onStatus, onClose, onEditHost, font
 
     terminalConnect(host.id, term.cols, term.rows, onEvent)
       .then((id) => {
-        if (disposed) {
-          void terminalDisconnect(id);
+        if (disposed || ended) {
+          void terminalDisconnect(id).catch(() => undefined);
           return;
         }
         sessionId = id;

@@ -832,22 +832,32 @@ button {
   font-size: 12px;
 }
 
-.key-manager-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-}
-
-.key-manager-row code {
-  display: block;
-  max-width: 100%;
-  margin-top: 5px;
-  overflow-wrap: anywhere;
-  color: var(--muted);
-  font-size: 11px;
+.ssh-keys-page { min-width: 0; }
+.ssh-key-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ssh-key-return { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--accent-soft); font-size: 12px; }
+.ssh-key-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.ssh-key-search { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 120px; color: var(--muted); }
+.ssh-key-search > input { min-width: 0; width: 100%; }
+.ssh-key-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 44px 16px; color: var(--muted); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+.ssh-key-empty h2 { font-size: 16px; font-weight: 500; color: var(--fg); }
+.ssh-key-empty p { max-width: 42ch; line-height: 1.7; font-size: 13px; }
+.ssh-key-list { list-style: none; display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; }
+.ssh-key-card { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; background: var(--surface); }
+.ssh-key-card-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ssh-key-symbol { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-sm); color: var(--accent); background: var(--accent-soft); }
+.ssh-key-title { flex: 1; min-width: 100px; overflow-wrap: anywhere; }
+.ssh-key-title h2 { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+.ssh-key-fingerprint { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; font-size: 11px; color: var(--muted); }
+.ssh-key-fingerprint code { font-size: 11px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ssh-key-public { margin-top: 14px; font-size: 12px; color: var(--muted); }
+.ssh-key-public summary { width: fit-content; }
+.ssh-key-public pre { min-width: 0; max-width: 100%; max-height: 180px; overflow: auto; margin: 12px 0 0; padding: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.7; }
+.ssh-key-vault-note { display: flex; align-items: flex-start; gap: 7px; margin-top: 20px; font-size: 11px; line-height: 1.7; color: var(--muted); }
+.ssh-key-vault-note svg { flex: none; margin-top: 3px; }
+.ssh-key-form { display: flex; flex-direction: column; gap: 18px; }
+@container (max-width: 460px) {
+  .ssh-key-card-head > .ssh-key-actions { width: 100%; justify-content: flex-end; }
+  .ssh-keys-page .page-head { gap: 12px; }
 }
 
 .icon-btn {
@@ -938,6 +948,30 @@ textarea {
   grid-template-columns: 1fr 110px;
   gap: 0.75rem;
 }
+
+.password-input { position: relative; width: 100%; }
+.password-input input { width: 100%; padding-right: 40px; }
+.password-input > .icon-btn { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
+.group-select-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.group-select-row > input, .group-select-row > select { flex: 1; min-width: 0; }
+.group-select-row > .btn { flex: none; }
+.group-manager-list { display: flex; flex-direction: column; gap: 4px; margin: 16px 0; }
+.tree-heading { display: flex; align-items: center; padding-right: 6px; }
+.tree-heading > .tree-group { flex: 1; min-width: 0; }
+.tree-heading > .icon-btn { flex: none; width: 24px; height: 24px; }
+.host-group { border-radius: var(--radius-sm); }
+.host-group[data-drop-active='true'] { background: var(--accent-soft); outline: 1px solid var(--accent); outline-offset: -1px; }
+.tree-open[draggable='true'] { cursor: grab; }
+.tree-open[draggable='true']:active { cursor: grabbing; }
+.host-move-note { color: var(--muted); font-size: 11px; line-height: 1.5; padding: 8px 14px; margin: 0; flex: none; }
+.group-manager-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.group-manager-row > .group-select-row { flex: 1; }
+.group-manager-row > .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-manager-row > svg { flex: none; color: var(--muted); }
+.tree-group.tree-subgroup { padding-left: 23px; font-size: 11px; letter-spacing: 0; text-transform: none; }
+.group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-group .tree-list { margin-bottom: 6px; padding-left: 17px; }
+.group-empty { color: var(--faint); font-size: 11px; margin: 2px 0 10px 40px; }
 
 .field-grid {
   display: grid;

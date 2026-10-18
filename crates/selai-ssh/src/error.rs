@@ -61,3 +61,9 @@ impl From<russh::Error> for SshError {
         }
     }
 }
+
+impl From<russh::SendError> for SshError {
+    fn from(_: russh::SendError) -> Self {
+        Self::ChannelClosed
+    }
+}

@@ -125,6 +125,86 @@ async fn trusted_password_host(h: &Harness, sshd: &Sshd, label: &str) -> String 
 }
 
 #[tokio::test]
+async fn imported_rsa_keys_are_selectable_and_authenticate_from_managed_storage() {
+    let h = harness();
+    let m = material();
+    for (label, path, passphrase) in [
+        ("RSA OpenSSH", &m.rsa_key, None),
+        (
+            "RSA encrypted PEM",
+            &m.encrypted_rsa_key,
+            Some(m.encrypted_passphrase.clone()),
+        ),
+    ] {
+        let bytes = std::fs::read(path).expect("fixture key");
+        let key = h
+            .services
+            .ssh_key_import(label.into(), B64.encode(&bytes), passphrase)
+            .expect("import RSA");
+        assert_eq!(key.algorithm, "ssh-rsa");
+        assert!(key.public_key.starts_with("ssh-rsa "));
+        assert!(h
+            .services
+            .ssh_key_list()
+            .expect("keys")
+            .iter()
+            .any(|saved| saved.id == key.id));
+        let sshd = Sshd::start();
+        let mut input = password_host(label, sshd.port, "");
+        input.auth_method = "private_key".into();
+        input.password = None;
+        input.private_key_path = Some(format!("vault://key:{}", key.id));
+        let host = h
+            .services
+            .host_save(input)
+            .expect("save managed key profile");
+        let probe = h.services.host_probe(&host.id).await.expect("probe");
+        h.services
+            .host_trust(
+                &host.id,
+                &probe.observed.fingerprint_sha256,
+                TrustMode::First,
+            )
+            .expect("trust");
+        let (sink, mut rx) = new_sink();
+        let session = h
+            .services
+            .terminal_connect(&host.id, 80, 24, sink)
+            .await
+            .expect("RSA terminal login");
+        h.services
+            .terminal_input(&session, "echo managed-rsa-$((6*7))\n".into())
+            .await
+            .expect("input");
+        expect_output(&mut rx, "managed-rsa-42").await;
+        h.services
+            .terminal_disconnect(&session)
+            .await
+            .expect("disconnect");
+        assert!(sshd
+            .auth_decisions()
+            .iter()
+            .any(|l| l.contains("Accepted publickey")));
+    }
+}
+
+#[test]
+fn encrypted_rsa_import_with_wrong_passphrase_saves_nothing() {
+    let h = harness();
+    let bytes = std::fs::read(&material().encrypted_rsa_key).expect("fixture key");
+    let err = h
+        .services
+        .ssh_key_import(
+            "Invalid RSA".into(),
+            B64.encode(bytes),
+            Some("wrong-passphrase".into()),
+        )
+        .expect_err("invalid passphrase");
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert!(h.services.ssh_key_list().expect("keys").is_empty());
+}
+
+#[tokio::test]
 async fn first_contact_is_blocked_until_the_user_trusts_the_probed_key() {
     let h = harness();
     let sshd = Sshd::start();
@@ -247,7 +327,7 @@ async fn the_key_shown_by_a_refused_connect_can_be_trusted_without_a_separate_pr
 }
 
 #[tokio::test]
-async fn saved_secret_is_never_in_any_response_or_the_database() {
+async fn saved_secret_is_not_in_ordinary_host_responses_or_the_legacy_database() {
     let h = harness();
     let sshd = Sshd::start();
     let sentinel = "sentinel-password-never-leak";

@@ -7,6 +7,72 @@ const PHRASE: &str = "forest river orange telescope";
 fn phrase() -> Zeroizing<String> {
     Zeroizing::new(PHRASE.into())
 }
+
+#[test]
+fn generated_key_algorithms_roundtrip_in_the_vault_and_can_be_used_by_profiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = VaultManager::new(dir.path().into()).unwrap();
+    manager.initialize(phrase(), &MemoryStore::new()).unwrap();
+    let lease = manager.services().unwrap();
+    for (algorithm, prefix) in [
+        ("ed25519", "ssh-ed25519"),
+        ("rsa-2048", "ssh-rsa"),
+        ("rsa-3072", "ssh-rsa"),
+        ("rsa-4096", "ssh-rsa"),
+        ("rsa-8192", "ssh-rsa"),
+        ("ecdsa-p256", "ecdsa-sha2-nistp256"),
+        ("ecdsa-p384", "ecdsa-sha2-nistp384"),
+        ("ecdsa-p521", "ecdsa-sha2-nistp521"),
+    ] {
+        let key = lease
+            .ssh_key_generate(algorithm.into(), algorithm.into())
+            .unwrap();
+        assert_eq!(key.algorithm, prefix);
+        assert!(key.public_key.starts_with(&format!("{prefix} ")));
+        assert!(key.fingerprint_sha256.starts_with("SHA256:"));
+        let private_bytes = lease
+            .secrets
+            .get(&SecretKey::managed_ssh_key(
+                key.id.parse().unwrap(),
+                SshSecretKind::ManagedPrivateKey,
+            ))
+            .unwrap()
+            .unwrap();
+        let private = russh::keys::decode_secret_key(
+            std::str::from_utf8(private_bytes.expose_for_transport()).unwrap(),
+            None,
+        )
+        .unwrap();
+        selai_ssh::validate_private_key(&private).unwrap();
+        assert_eq!(private.public_key().to_openssh().unwrap(), key.public_key);
+        if let Some(rsa) = private.key_data().rsa() {
+            assert_eq!(
+                rsa.key_size().to_string(),
+                algorithm.strip_prefix("rsa-").unwrap()
+            );
+        }
+        let mut profile = host();
+        profile.label = algorithm.into();
+        profile.auth_method = "private_key".into();
+        profile.password = None;
+        profile.private_key_path = Some(format!("vault://key:{}", key.id));
+        assert!(lease.host_save(profile).unwrap().credential_configured);
+    }
+    assert_eq!(lease.ssh_key_list().unwrap().len(), 8);
+    assert!(!serde_json::to_string(&lease.ssh_key_list().unwrap())
+        .unwrap()
+        .contains("PRIVATE KEY"));
+    for unsupported in ["rsa-1024", "dsa", "invalid"] {
+        assert_eq!(
+            lease
+                .ssh_key_generate("Unsupported".into(), unsupported.into())
+                .unwrap_err()
+                .code,
+            selai_domain::ErrorCode::InvalidInput
+        );
+    }
+    assert_eq!(lease.ssh_key_list().unwrap().len(), 8);
+}
 fn host() -> HostInput {
     HostInput {
         id: None,
@@ -72,6 +138,10 @@ async fn migrates_all_data_then_closes_database_and_denies_locked_access() {
     assert!(legacy.is_empty());
     let lease = manager.services().unwrap();
     let retained_db = lease.db.clone();
+    assert_eq!(
+        lease.host_reveal_password(&host.id).unwrap().as_deref(),
+        Some("synthetic-password-marker")
+    );
     assert_eq!(lease.host_get(&host.id).unwrap().label, "synthetic-server");
     let id = host.id.parse().unwrap();
     assert_eq!(

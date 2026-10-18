@@ -44,6 +44,19 @@ Unknown Windows lock state fails closed. Linux/macOS currently support manual
 and idle locking; OS lock/suspend integration is pending. The small Win32 FFI
 adapter is isolated in selai-platform; other crates continue forbidding unsafe.
 
+## Explicit profile password reveal
+
+The unlocked host editor may retrieve a saved SSH login password only through
+`host_reveal_password`. This is a deliberate exception to ADR-0003's original
+no-read-IPC rule. The normal operation lease checks lock/locking/idle state;
+local, archived, and key-authentication profiles are refused. Ordinary host
+DTOs never carry a password. The UI requests it on the eye-button click and
+clears preview state on hide, blur/visibility loss, vault-lock flushing, editor teardown, or a
+30-second timeout. It never treats a revealed preview as a password edit.
+Private keys and all other stored credential types remain outside this API.
+No reveal value is persisted or included in chat or audit. JS/runtime copies
+retain the memory-erasure limitations described above.
+
 ## Migration and files
 
 One process owns `vault.lock`. The old application must be closed before setup.

@@ -200,9 +200,10 @@ pub struct GroupName(String);
 
 impl GroupName {
     pub fn parse(input: &str) -> Result<Self, HostFieldError> {
-        let len = input.chars().count();
+        let trimmed = input.trim();
+        let len = trimmed.chars().count();
         if (1..=64).contains(&len) && !input.chars().any(char::is_control) {
-            Ok(Self(input.trim().to_owned()))
+            Ok(Self(trimmed.to_owned()))
         } else {
             Err(HostFieldError::GroupName)
         }
@@ -285,6 +286,17 @@ impl HostSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_names_trim_spaces_and_refuse_empty_or_control_characters() {
+        assert_eq!(
+            GroupName::parse(" Production ").expect("group").as_str(),
+            "Production"
+        );
+        for invalid in ["", "   ", "Production\n", "A\u{0}B", &"x".repeat(65)] {
+            assert!(GroupName::parse(invalid).is_err());
+        }
+    }
 
     #[test]
     fn hostnames_accept_dns_and_ip_literals() {

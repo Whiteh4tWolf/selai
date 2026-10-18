@@ -16,12 +16,26 @@ of the last update.
 
 | Task | Status | Evidence | Gaps |
 |---|---|---|---|
-| S-010 Host CRUD, labels, groups | done | `selai-storage/tests/hosts.rs` (15), `selai-domain` label and host-field tests; UI host list, add, edit, archive exercised through the real app | Group UI is not built (groups exist in the API). |
+| S-010 Host CRUD, labels, groups | done | `selai-storage/tests/hosts.rs` (18), domain field tests, profile-management service tests; frontend checks cover group creation, selection, rename/delete and local search; browser fixture verifies collapsible groups and the profile editor | Latest group UI runtime check uses a mock IPC backend; native Windows/macOS UI remains unverified locally. |
 | S-011 Native credential store | done on Linux | `selai-secrets/tests/keyring_backend.rs` against a live Secret Service; in-app check: secret stored under `service=selai, username=ssh/<id>/password`; database has zero occurrences of the password | macOS Keychain and Windows Credential Manager tests run in CI but were not run here. Locked-store behaviour is tested with an in-memory store only. |
-| S-012 SSH transport, host-key verification | done on Linux | 13 tests against OpenSSH 9.6 (`selai-ssh/tests/ssh_integration.rs`): unknown key blocks before auth, changed key blocks before auth, password and Ed25519 and encrypted-key login, wrong password, RSA refused before auth, connect timeout, unreachable port | ECDSA keys are not tested. Algorithm negotiation is tested against OpenSSH 9.6 only. |
+| S-012 SSH transport, host-key verification | done on Linux | 19 transport integration tests against OpenSSH 9.2p1 on 2026-10-18 (`selai-ssh/tests/ssh_integration.rs`): host trust, password/Ed25519 login, RSA-SHA2-256/512 login, encrypted RSA PEM from memory, incorrect passphrases, SHA-1 refusal, terminal/exec and timeouts; 10 unit tests and 5 sudo integration tests also pass | ECDSA login is not tested. Latest RSA runtime evidence is Linux only; native Windows and macOS login remain unverified locally. |
 | S-013 Interactive PTY | partial | In-app: prompt, command output, exit status 0 reported; restart and reconnect works; service test with five concurrent sessions bound to their own hosts; resize reaches the PTY | `vim` and `top` are not tested. Backpressure is not implemented: the IPC queue is unbounded. Terminal scrollback is bounded by xterm (5000 lines). |
 
+RSA service coverage (2026-10-18): `cargo test -p selai-desktop --test service_e2e
+--locked rsa -- --test-threads=1` passes two tests on Linux. The tests import
+OpenSSH and encrypted PEM RSA keys, select each managed key in a profile, trust
+the server fingerprint, execute through a terminal, and reject an incorrect
+import passphrase without saving a key. Transport coverage uses
+`cargo test -p selai-ssh --locked` (34 tests pass).
+
 ### M1 milestone gate
+
+Workbench update (2026-10-18): terminal exit now closes its tab and releases the
+SSH worker without waiting for a channel-close message. Profile password reveal
+is explicit, clears on vault flushing, and is tested against locked storage and
+the encrypted vault lifecycle. Deleting a group keeps profiles and credentials;
+its transaction also invalidates stale host-editor revisions. Tests cover
+simultaneous terminal exits and discard late password-reveal responses.
 
 The gate is: configure `production-web`, trust its fingerprint, connect by
 password and by key, use the terminal, restart Selai, and use it again.

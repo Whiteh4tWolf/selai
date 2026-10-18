@@ -149,20 +149,40 @@ async fn authenticate(
                 Auth::Password(_) => unreachable!(),
             }
             .map_err(|e| SshError::KeyLoad(e.to_string()))?;
-            // RSA private-key operations are affected by RUSTSEC-2023-0071 and have
-            // no fix yet. Refuse them before any authentication is attempted.
             if matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
-                return Err(SshError::KeyLoad(
-                    "RSA private keys are not supported in v1; use an Ed25519 or ECDSA key"
-                        .to_owned(),
-                ));
+                let mut signer = crate::private_key::RsaSigner::new(&key)?;
+                let hashes = match handle.best_supported_rsa_hash().await? {
+                    // Some servers advertise SHA-512 globally even when the
+                    // account's policy only permits SHA-256. Retry SHA-256 on
+                    // an authentication refusal, never SHA-1.
+                    Some(Some(russh::keys::HashAlg::Sha512)) => vec![
+                        russh::keys::HashAlg::Sha512, russh::keys::HashAlg::Sha256,
+                    ],
+                    Some(Some(hash)) => vec![hash],
+                    Some(None) => return Err(SshError::KeyLoad(
+                        "Server only supports legacy ssh-rsa/SHA-1. Enable rsa-sha2-256 or rsa-sha2-512 on the server, or use an Ed25519/ECDSA key.".into()
+                    )),
+                    // Older servers may omit server-sig-algs but accept SHA-2.
+                    None => vec![russh::keys::HashAlg::Sha512, russh::keys::HashAlg::Sha256],
+                };
+                for hash in hashes {
+                    let result = handle
+                        .authenticate_publickey_with(
+                            username,
+                            key.public_key().clone(),
+                            Some(hash),
+                            &mut signer,
+                        )
+                        .await?;
+                    if result.success() {
+                        return Ok(());
+                    }
+                }
+                return Err(SshError::AuthFailed);
             }
-            let hash_alg = handle.best_supported_rsa_hash().await?.flatten();
+            crate::validate_private_key(&key)?;
             handle
-                .authenticate_publickey(
-                    username,
-                    PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
-                )
+                .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::new(key), None))
                 .await?
         }
     };

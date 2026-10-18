@@ -15,6 +15,20 @@ layout. Windows fixes cover the vault-setup stack overflow, installer artwork
 overlapping default text, and startup background/theme handling to reduce
 white WebView flashes around the passphrase screen.
 
+## Unreleased source changes
+
+- Terminal tabs close when their shell exits. SSH workers stop at the exit
+  status instead of waiting for a second channel-close message.
+- Saved SSH login passwords can be revealed explicitly with the eye button in
+  the unlocked profile editor, with automatic hiding and no change-on-save.
+- SSH groups: create/select groups in the host editor, collapse groups in the
+  sidebar, search by group, and rename or delete groups without deleting hosts.
+
+- Import and authenticate with existing RSA private keys (2048-8192 bits),
+  including passphrase-protected keys. Signing uses OpenSSL with RSA-SHA2-256/512;
+  legacy RSA/SHA-1 and DSA authentication remain unsupported. This change requires
+  a new build and is not included in the original 0.1.1 installers.
+
 ## Download
 
 | System | File | Notes |
@@ -54,10 +68,16 @@ On Windows: `Get-FileHash -Algorithm SHA256 .\<file>` and compare with `SHA256SU
   request on this host**. The in-memory grant ends with the task, cancellation,
   or vault lock; it does not cover another host or request. Commands remain
   recorded in History and the audit log.
-- SSH key management: generate Ed25519 or ECDSA P-256/P-384/P-521 key pairs,
+- A dedicated **SSH Keys** page in the left sidebar: generate Ed25519,
+  RSA 2048/3072/4096/8192-bit, or ECDSA P-256/P-384/P-521 key pairs,
   import private keys with an optional passphrase, view fingerprints, copy
   public keys, and select a reusable named key in each host profile. Private
-  key material stays in the encrypted vault. RSA and DSA are not offered.
+  key material stays in the encrypted vault. RSA (2048–8192 bits) can be imported
+  and used with SHA-2 signatures; DSA is unsupported. Profile forms use a key
+  dropdown and preserve drafts when visiting key management.
+- Create groups with **+** beside **SSH hosts**, then drag profiles onto a group
+  or **Ungrouped**. Moves preserve credentials and connection settings; profile
+  forms select existing groups without an inline group-creation flow.
 - A passphrase vault: your data is encrypted at rest, with a recovery key,
   auto-lock, an encrypted backup, and encrypted `.selai-history` exports.
 - Saved chat sessions, and tasks that span several hosts, each with its own approvals.
