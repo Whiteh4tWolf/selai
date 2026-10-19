@@ -1,6 +1,6 @@
 # Selai feature walkthrough
 
-[Animated README preview](selai-ssh-ai-demo.gif) ·
+[Play the walkthrough](https://github.com/user-attachments/assets/2e0f8ef4-4df9-4208-8b55-97e4cbb33f00) ·
 [Download the MP4](selai-ssh-ai-demo.mp4?raw=true) ·
 [Poster](selai-ssh-ai-demo-poster.jpg) ·
 [English subtitles](selai-ssh-ai-demo.en.srt)
@@ -8,9 +8,10 @@
 The walkthrough covers **SSH Profile**, **AI Assistant**, **Port forwarding**,
 and **Proxies** using Selai's current production frontend. The 104-second recording fills
 1600 × 900 frames in dark mode, with a small English caption band and no audio.
-The MP4 uses H.264/yuv420p with fast-start playback. The looping README GIF is
-960 × 540 at 6 fps with 96 colors. Animated playback follows the viewer's GitHub
-accessibility settings.
+The MP4 uses H.264/yuv420p with fast-start playback. The project README embeds
+the MP4 as a GitHub attachment, providing native play/pause, seeking, and
+fullscreen controls. The GIF is retained as an optional
+fallback asset and is no longer embedded in the README.
 
 ## Workflows
 
@@ -51,7 +52,6 @@ pnpm --dir apps/desktop build
 python -m pip install playwright imageio-ffmpeg
 python -m playwright install chromium
 python scripts/docs/record_quickstart.py
-python scripts/docs/render_readme_gif.py
 ```
 
 The harness starts a temporary Vite preview server on loopback port 1426 and a
@@ -59,8 +59,13 @@ fresh headless Chromium context. Requests outside that origin are blocked.
 `scripts/docs/video_demo_backend.js` is loaded only into this recording context;
 it is not imported by the application bundle.
 
-Generated MP4, GIF, poster, and English SRT files are written here. The README's
-four primary screenshots are captured from the app without the caption band:
+Generated MP4, poster, and English SRT files are written here. After re-recording,
+upload the MP4 through GitHub's Markdown editor and update the attachment links
+in both READMEs. Keep the `https://github.com/user-attachments/assets/...` URL
+on its own line in the project README so GitHub renders a player. A repository file link alone does not produce the native player.
+To regenerate the optional GIF fallback, run `python scripts/docs/render_readme_gif.py`.
+
+The README's four primary screenshots are captured from the app without the caption band:
 
 - `docs/screenshots/ssh-profile.png`
 - `docs/screenshots/ai-assistant.png`

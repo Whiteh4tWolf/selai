@@ -16,11 +16,9 @@ SSH profiles, terminals, AI chat, port forwarding, and proxies in one app. You c
   <a href="#documentation">Docs</a>
 </p>
 
-<p align="center">
-  <img src="docs/media/selai-ssh-ai-demo.gif" alt="Animated Selai walkthrough covering SSH profiles, AI command approval, local/remote/dynamic port forwarding, and reusable SOCKS5/HTTP CONNECT proxies" width="960">
-</p>
+https://github.com/user-attachments/assets/2e0f8ef4-4df9-4208-8b55-97e4cbb33f00
 
-<p align="center">104-second looping demo · English captions · Dark mode · <a href="docs/media/selai-ssh-ai-demo.mp4?raw=true">Download full-resolution MP4</a></p>
+<p align="center">104-second walkthrough · Play inline or fullscreen · English captions · Dark mode · <a href="docs/media/selai-ssh-ai-demo.mp4?raw=true">Download full-resolution MP4</a></p>
 
 Selai brings SSH profiles, terminal tabs, AI assistance, port forwarding, and
 reusable proxies into one desktop app. You choose the machine the assistant may work on. Routine
@@ -72,8 +70,8 @@ The walkthrough covers the four main workflows in the current UI:
 3. **Port forwarding** — create and start a local database tunnel, then save remote and dynamic SOCKS5 tunnels.
 4. **Proxies** — save SOCKS5 and HTTP CONNECT profiles, then assign a proxy to an SSH profile.
 
-[Download the full-resolution MP4](docs/media/selai-ssh-ai-demo.mp4?raw=true)
-for playback with video controls, or use the
+Play the video above directly in GitHub, including fullscreen playback.
+[Download the original MP4](docs/media/selai-ssh-ai-demo.mp4?raw=true) or get the
 [English subtitles](docs/media/selai-ssh-ai-demo.en.srt).
 
 The recording uses Selai's production frontend with simulated SSH, AI, proxy,
