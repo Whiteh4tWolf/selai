@@ -2,8 +2,8 @@
 
 <h1 align="center">Selai</h1>
 
-<p align="center"><strong>A desktop SSH workbench with a host-scoped AI assistant.</strong><br>
-Terminals, an AI chat, and command history in one app. You choose where the assistant may work and approve its commands, with optional root approval for one request on one host.</p>
+<p align="center"><strong>A desktop SSH workbench with AI assistance, tunnels, and proxies.</strong><br>
+SSH profiles, terminals, AI chat, port forwarding, and proxies in one app. You choose where the assistant may work and approve its commands, with optional root approval for one request on one host.</p>
 
 <p align="center"><sub>Preview 0.2.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
 
@@ -17,13 +17,13 @@ Terminals, an AI chat, and command history in one app. You choose where the assi
 </p>
 
 <p align="center">
-  <img src="docs/media/selai-ssh-ai-demo.gif" alt="Animated Selai walkthrough: add an SSH profile, connect, and use AI Assistant to inspect and restart nginx with command approval" width="960">
+  <img src="docs/media/selai-ssh-ai-demo.gif" alt="Animated Selai walkthrough covering SSH profiles, AI command approval, local/remote/dynamic port forwarding, and reusable SOCKS5/HTTP CONNECT proxies" width="960">
 </p>
 
-<p align="center">59-second looping demo · English captions · Dark mode · <a href="docs/media/selai-ssh-ai-demo.mp4?raw=true">Download full-resolution MP4</a></p>
+<p align="center">104-second looping demo · English captions · Dark mode · <a href="docs/media/selai-ssh-ai-demo.mp4?raw=true">Download full-resolution MP4</a></p>
 
-Selai brings SSH hosts, terminal tabs, an AI chat, and command history into one
-desktop app. You choose the machine the assistant may work on. Routine
+Selai brings SSH profiles, terminal tabs, AI assistance, port forwarding, and
+reusable proxies into one desktop app. You choose the machine the assistant may work on. Routine
 diagnostics use fixed commands; other commands need approval before they run.
 For a multi-step root task, you can approve further root commands for that
 request on that host. SSH credentials stay in your passphrase-protected local vault and are
@@ -65,59 +65,51 @@ and the [release notes](docs/release/RELEASE_NOTES.md).
 
 ## Quick demo
 
-The animated walkthrough above shows how to add an SSH profile, review the
-server fingerprint, connect to the terminal, then select the
-host in AI Assistant, review a proposed command, approve it, and inspect the result.
+The walkthrough covers the four main workflows in the current UI:
+
+1. **SSH Profile** — save a grouped host, verify its fingerprint, and connect to its terminal.
+2. **AI Assistant** — select a host and model, inspect diagnostics, approve a proposed root command, and review the result.
+3. **Port forwarding** — create and start a local database tunnel, then save remote and dynamic SOCKS5 tunnels.
+4. **Proxies** — save SOCKS5 and HTTP CONNECT profiles, then assign a proxy to an SSH profile.
 
 [Download the full-resolution MP4](docs/media/selai-ssh-ai-demo.mp4?raw=true)
-for playback with video controls.
+for playback with video controls, or use the
+[English subtitles](docs/media/selai-ssh-ai-demo.en.srt).
 
-The video records Selai's frontend with simulated SSH and AI responses; it does
-not contact a live server. The AI provider is already configured for this demo.
-[English subtitles](docs/media/selai-ssh-ai-demo.en.srt) are also available.
+The recording uses Selai's production frontend with simulated SSH, AI, proxy,
+and tunnel responses. The provider is already configured. No live server or
+provider is contacted. [Recording details and reproduction steps](docs/media/README.md).
 
 ## Screenshots
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/approval.png" alt="An approval card asking to run sudo id -u as root on This computer, with Deny and Approve as root buttons">
-      <br><strong>Approve before it runs</strong><br>
-      A command that is not a fixed diagnostic shows its exact text and target. Root requests are marked, and a sudo password goes to the machine, never to the model.
+      <img src="docs/screenshots/ssh-profile.png" alt="SSH profile editor with a Staging group, server address, proxy routing option, and encrypted credentials beside a connected terminal">
+      <br><strong>SSH Profile</strong><br>
+      Organize hosts into groups, choose password or managed-key authentication, and save connection settings. Verify the server fingerprint before connecting.
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/assistant-diagram.png" alt="The assistant panel widened to show a Mermaid flowchart of the command approval flow">
-      <br><strong>Replies that read well</strong><br>
-      Markdown, tables, and Mermaid diagrams render in the chat. Chat with no server selected runs nothing and contacts no host.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/history-session.png" alt="History showing one AI session with its request, the command that ran, and its completed status and exit code">
-      <br><strong>History you can audit</strong><br>
-      Open a session to see its requests, the commands that ran on each server, their status and exit codes, and token usage.
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/screenshots/providers.png" alt="The AI Providers page showing a verified OpenAI-compatible provider with a Test button">
-      <br><strong>Bring your own model</strong><br>
-      Use OpenAI, Anthropic, or a compatible gateway. <strong>Test</strong> checks a real tool-call round trip before a provider can work on a server.
+      <img src="docs/screenshots/ai-assistant.png" alt="AI Assistant showing host-scoped nginx diagnostics and an approval card for sudo systemctl restart nginx, alongside the SSH terminal">
+      <br><strong>AI Assistant</strong><br>
+      Choose a provider, model, and target host from chat. Inspect diagnostics, review the exact command, and approve changes before they run.
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/vault-setup.png" alt="The Protect your workspace screen asking for a new passphrase and a confirmation">
-      <br><strong>Encrypted vault</strong><br>
-      One passphrase protects hosts, credentials, chat, and history on this computer. Selai generates a separate recovery key during setup.
+      <img src="docs/screenshots/port-forwarding.png" alt="Port forwarding page with a running local PostgreSQL tunnel, saved remote and dynamic SOCKS5 tunnels, and connection and traffic counters">
+      <br><strong>Port forwarding</strong><br>
+      Save local, remote, and dynamic SOCKS5 tunnels. Start or stop a route and inspect its endpoints, active connections, and traffic.
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/workspace-light.png" alt="The workbench in the light theme with a saved chat session about disk usage">
-      <br><strong>Dark, light, or system</strong><br>
-      Switch the theme from the status bar. Chats are saved as named sessions you can search and reopen.
+      <img src="docs/screenshots/proxies.png" alt="Proxies page listing a SOCKS5 office gateway with authentication and an HTTP CONNECT corporate gateway">
+      <br><strong>Proxies</strong><br>
+      Reuse SOCKS5 and HTTP CONNECT profiles, with optional authentication. Assign a route to an SSH profile for terminal, AI, SFTP, and forwarding connections.
     </td>
   </tr>
 </table>
 
-<sub>Screenshots use sample hosts and a mock AI provider.</sub>
+<sub>Captured from the current frontend with sample hosts and a recording-only simulated backend.</sub>
 
 ## Features
 

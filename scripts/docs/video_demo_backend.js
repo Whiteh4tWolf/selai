@@ -5,7 +5,10 @@
   localStorage.setItem('selai.chat', 'closed');
   localStorage.setItem('selai.chat.width', '680');
   const hosts = [];
-  const groups = [];
+  const groups = [{ id: 'staging-group', name: 'Staging', sortOrder: 0 }];
+  const proxies = [];
+  const forwards = [];
+  let forwardChannel;
   let nextGroup = 1;
   const passwords = new Map();
   const sessions = new Map();
@@ -22,7 +25,7 @@
   let trusted = false;
   let agentChannel;
   let taskId = 'demo-task';
-  let preferences = { lastProviderId: provider.id, pinnedHostId: null, outputRetentionDays: 30 };
+  let preferences = { lastProviderId: provider.id, pinnedHostId: null, outputRetentionDays: 30, taskMaxSteps: 30, taskMaxMinutes: 30 };
   const emit = (event) => agentChannel?.onmessage({ taskId, ...event });
   const later = (delay, event) => setTimeout(() => emit(event), delay);
   const finish = () => {
@@ -34,7 +37,7 @@
     later(4600, { type: 'usage', inputTokens: 910, outputTokens: 170 });
     later(4900, { type: 'completed', text: '' });
   };
-  window.__DEMO_RECORDING__ = { calls: [], hosts };
+  window.__DEMO_RECORDING__ = { calls: [], hosts, proxies, forwards };
   window.isTauri = true;
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
@@ -44,10 +47,10 @@
       window.__DEMO_RECORDING__.calls.push(command);
       if (command.startsWith('plugin:')) return null;
       switch (command) {
-        case 'vault_status': return { phase: 'unlocked', legacyFound: false, timeoutMinutes: 15,
+        case 'vault_watch': case 'vault_status': return { phase: 'unlocked', legacyFound: false, timeoutMinutes: 15,
           activeTasks: 0, terminals: terminal.size, cleanupPending: false, retryAfterMs: 0, flushRequired: false };
         case 'vault_activity': case 'vault_flush_complete': return null;
-        case 'app_info': return { name: 'Selai', version: '0.2.0' };
+        case 'app_info': return { name: 'Selai', version: '0.2.1' };
         case 'storage_status': return { schemaVersion: 9, journalMode: 'memory', interruptedTasksAtStartup: 0, interruptedExecutionsAtStartup: 0 };
         case 'local_host': return local;
         case 'host_list': return { items: hosts, nextCursor: null };
@@ -90,7 +93,7 @@
           return id;
         }
         case 'host_trust': trusted = true; return { outcome: 'pinned', fingerprintSha256: fingerprint };
-        case 'terminal_resize': return null;
+        case 'terminal_resize': case 'terminal_ack': return null;
         case 'terminal_disconnect': terminal.delete(args.sessionId); return null;
         case 'terminal_input': {
           const state = terminal.get(args.sessionId);
@@ -109,6 +112,41 @@
           }
           return null;
         }
+        case 'proxy_list': return proxies;
+        case 'proxy_save': {
+          const { password, clearPassword, ...fields } = args.input;
+          const previous = proxies.find(p => p.id === fields.id);
+          const profile = { ...fields, id: fields.id ?? crypto.randomUUID(),
+            passwordConfigured: !clearPassword && Boolean(password || previous?.passwordConfigured) };
+          const index = proxies.findIndex(p => p.id === profile.id);
+          if (index < 0) proxies.push(profile); else proxies[index] = profile;
+          return profile;
+        }
+        case 'forward_watch': forwardChannel = args.onEvent; return forwards;
+        case 'forward_list': return forwards;
+        case 'forward_save': {
+          const profile = { ...args.profile, id: args.profile.id || crypto.randomUUID() };
+          const view = { profile, status: 'stopped', actualPort: 0, connections: 0,
+            sent: 0, received: 0, connectionErrors: 0, error: null };
+          const index = forwards.findIndex(v => v.profile.id === profile.id);
+          if (index < 0) forwards.push(view); else forwards[index] = view;
+          return view;
+        }
+        case 'forward_start': {
+          const view = forwards.find(v => v.profile.id === args.id);
+          Object.assign(view, { status: 'running', actualPort: view.profile.bindPort || 49152,
+            connections: 2, sent: 18432, received: 1572864 });
+          args.onEvent.onmessage(view);
+          forwardChannel?.onmessage(view);
+          return view;
+        }
+        case 'forward_stop': {
+          const view = forwards.find(v => v.profile.id === args.id);
+          Object.assign(view, { status: 'stopped', connections: 0 });
+          forwardChannel?.onmessage(view);
+          return null;
+        }
+        case 'provider_models': return { models: [provider.modelId, 'demo-chat-model'], source: 'provider' };
         case 'provider_list': return { items: [provider], nextCursor: null };
         case 'provider_templates': return [];
         case 'preferences_get': return preferences;

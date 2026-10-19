@@ -16,6 +16,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "docs/media"
+SCREENSHOTS = ROOT / "docs/screenshots"
 WORK = ROOT / "target/video-qa/technical"
 URL = "http://127.0.0.1:1426"
 
@@ -28,7 +29,7 @@ iframe{display:block;border:0;width:100%;height:calc(100vh - 72px)}
 #cursor{position:fixed;pointer-events:none;z-index:999999;width:24px;height:28px;left:60px;top:90px;filter:drop-shadow(0 1px 3px #000)}
 #ring{position:fixed;pointer-events:none;z-index:999998;width:36px;height:36px;border:2px solid #ced8e2;border-radius:50%;opacity:0;transform:translate(-50%,-50%)}
 </style></head><body><iframe id="app-frame" src="http://127.0.0.1:1426"></iframe>
-<div id="caption"><span id="step">SSH PROFILE</span><span id="text">Add a host, verify its fingerprint, then use AI with command approval.</span><span id="badge">DEMO · MOCK SSH / AI</span></div>
+<div id="caption"><span id="step">SSH PROFILE</span><span id="text">SSH profiles, AI assistance, port forwarding, and reusable proxies.</span><span id="badge">DEMO · SIMULATED BACKEND</span></div>
 <svg id="cursor" viewBox="0 0 24 28"><path d="M2 1 2 23 8 17 12 26 16 24 12 15 21 15Z" fill="#f5f7fa" stroke="#111315" stroke-width="1.4"/></svg><div id="ring"></div>
 </body></html>"""
 
@@ -40,9 +41,10 @@ def timestamp(seconds):
 
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    SCREENSHOTS.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
     log = (WORK / "vite.log").open("w", encoding="utf-8")
-    args = ["pnpm", "exec", "vite", "preview", "--host", "127.0.0.1", "--port", "1426"]
+    args = ["pnpm", "exec", "vite", "preview", "--host", "127.0.0.1", "--port", "1426", "--strictPort"]
     flags = {}
     if os.name == "nt":
         args = ["cmd.exe", "/d", "/c", "pnpm.cmd", *args[1:]]
@@ -72,6 +74,7 @@ def main():
             context.route("**/*", route_request)
             context.add_init_script(path=str(ROOT / "scripts/docs/video_demo_backend.js"))
             page = context.new_page()
+            page.set_default_timeout(15000)
             recording_begin = time.monotonic()
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(URL + "/__recording-shell__")
@@ -95,7 +98,13 @@ def main():
                 page.wait_for_timeout(250)
                 locator.click()
 
-            def fill(label, value, delay=65):
+            def screenshot(name):
+                # Capture only the real app, excluding the recording caption and pointer.
+                page.evaluate("document.getElementById('cursor').style.visibility='hidden'")
+                page.screenshot(path=str(SCREENSHOTS / name), clip={"x":0,"y":0,"width":1600,"height":828})
+                page.evaluate("document.getElementById('cursor').style.visibility='visible'")
+
+            def fill(label, value, delay=40):
                 locator=app.get_by_label(label,exact=True)
                 click(locator)
                 locator.fill("")
@@ -105,12 +114,13 @@ def main():
             page.wait_for_timeout(1800)
             click(app.get_by_role("button",name="New host",exact=True).first)
             fill("Label","staging-web")
+            app.get_by_label("Group", exact=True).select_option("staging-group")
             fill("Host name or IP","192.0.2.42")
             fill("Port","22")
             fill("Username","deploy")
             fill("Password","demo-only-password",45)
             page.wait_for_timeout(1400)
-            cue("02 / CONNECT", "Save & connect opens the terminal. Credentials are not sent until the server key is trusted.")
+            cue("CONNECT", "Save & connect opens the terminal. Credentials are not sent until the server key is trusted.")
             click(app.get_by_role("button",name="Save & connect",exact=True))
             app.get_by_role("heading",name="Verify the server",exact=True).wait_for()
             page.screenshot(path=str(WORK / "verify-server.png"))
@@ -125,11 +135,21 @@ def main():
             page.keyboard.press("Enter")
             page.wait_for_timeout(2800)
 
-            cue("03 / AI ASSISTANT", "Open AI Assistant. The demo provider is already configured and tool-calling verified.")
+            click(app.get_by_role("button", name="Edit staging-web", exact=True))
+            app.get_by_role("dialog", name="Edit staging-web", exact=True).wait_for()
+            app.locator(".drawer-body").evaluate("el => el.scrollTop = 0")
+            page.wait_for_timeout(600)
+            screenshot("ssh-profile.png")
+            click(app.get_by_role("button", name="Cancel", exact=True))
+            screenshot("workspace-dark.png")
+
+            cue("02 / AI ASSISTANT", "Open AI Assistant. The demo provider is already configured and tool-calling verified.")
             click(app.get_by_role("button",name="AI Assistant",exact=True))
             app.get_by_label("Request",exact=True).wait_for(state="visible")
             page.wait_for_timeout(1800)
             fill("Session title","Staging nginx maintenance",45)
+            app.get_by_label("Provider", exact=True).select_option("demo-provider")
+            app.get_by_label("Model", exact=True).select_option("demo-tool-model")
             cue("SELECT TARGET", "Use @ to target staging-web explicitly; the selected host scopes this request.")
             fill("Request","@stag",150)
             page.wait_for_timeout(1300)
@@ -142,8 +162,9 @@ def main():
             click(app.get_by_role("button",name="Send",exact=True))
             approve=app.get_by_role("button",name="Approve as root",exact=True)
             approve.wait_for(state="visible")
-            page.screenshot(path=str(WORK / "approval.png"))
-            cue("04 / REVIEW COMMAND", "Review the host and exact command: sudo systemctl restart nginx. Approve only this command.")
+            screenshot("ai-assistant.png")
+            screenshot("approval.png")
+            cue("REVIEW COMMAND", "Review the host and exact command: sudo systemctl restart nginx. Approve only this command.")
             page.wait_for_timeout(5200)
             click(approve)
             cue("VERIFY RESULT", "After approval, Selai runs the command and the assistant verifies nginx again.")
@@ -152,9 +173,83 @@ def main():
             cue("COMPLETE", "nginx is active; restart exit code is 0. The response includes disk usage and the target host.")
             page.wait_for_timeout(4200)
             page.screenshot(path=str(OUTPUT / "selai-ssh-ai-demo-poster.jpg"),type="jpeg",quality=92)
+
+            click(app.get_by_role("button", name="Close chat", exact=True))
+            cue("03 / PORT FORWARDING", "Create an encrypted tunnel to reach a database through your SSH host.")
+            click(app.get_by_role("navigation", name="Main", exact=True).get_by_role("button", name="Port forwarding", exact=True))
+            click(app.get_by_role("button", name="New tunnel", exact=True))
+            fill("Name", "Staging PostgreSQL")
+            fill("Listen port", "15432")
+            fill("Destination host", "db.internal")
+            fill("Destination port", "5432")
+            page.wait_for_timeout(1400)
+            click(app.get_by_role("button", name="Save & start", exact=True))
+            app.get_by_role("article", name="Staging PostgreSQL", exact=True).get_by_text("running", exact=True).wait_for()
+            cue("MONITOR THE TUNNEL", "127.0.0.1:15432 reaches db.internal:5432. Inspect connections and traffic, or stop the tunnel.")
+            page.wait_for_timeout(2400)
+            # Show all three supported modes, using the same real editor for each.
+            click(app.get_by_role("button", name="New tunnel", exact=True))
+            fill("Name", "Preview webhook", 20)
+            click(app.get_by_role("radio", name=re.compile("^Remote")))
+            fill("Listen port", "9000", 20)
+            fill("Destination port", "3000", 20)
+            click(app.get_by_role("button", name="Save", exact=True))
+            click(app.get_by_role("button", name="New tunnel", exact=True))
+            fill("Name", "Staging SOCKS", 20)
+            click(app.get_by_role("radio", name=re.compile("^Dynamic")))
+            fill("Listen port", "1080", 20)
+            click(app.get_by_role("button", name="Save", exact=True))
+            cue("THREE TUNNEL MODES", "Save local, remote, or dynamic SOCKS5 tunnels. Start each route only when needed.")
+            page.wait_for_timeout(1800)
+            screenshot("port-forwarding.png")
+
+            cue("04 / PROXIES", "Save reusable SOCKS5 or HTTP CONNECT routes for your SSH profiles.")
+            click(app.get_by_role("navigation", name="Main", exact=True).get_by_role("button", name="Proxies", exact=True))
+            click(app.get_by_role("button", name="New proxy", exact=True))
+            fill("Name", "Office SOCKS5")
+            fill("Proxy host", "socks.example.com")
+            click(app.get_by_role("checkbox", name="Use proxy authentication", exact=True))
+            fill("Username", "deploy")
+            fill("Password", "demo-proxy-password", 20)
+            page.wait_for_timeout(1200)
+            click(app.get_by_role("button", name="Save proxy", exact=True))
+            click(app.get_by_role("button", name="New proxy", exact=True))
+            fill("Name", "Corporate HTTP", 20)
+            app.get_by_label("Proxy protocol", exact=True).select_option("http")
+            fill("Proxy host", "proxy.example.com", 20)
+            click(app.get_by_role("button", name="Save proxy", exact=True))
+            page.wait_for_timeout(1200)
+            screenshot("proxies.png")
+
+            cue("ASSIGN A ROUTE", "Enable a proxy in the SSH profile. Terminal, AI, SFTP, and forwarding share this route.")
+            click(app.get_by_role("button", name="Edit staging-web", exact=True))
+            click(app.get_by_role("checkbox", name="Connect through a proxy", exact=True))
+            proxy = app.get_by_label("Proxy profile", exact=True)
+            proxy.select_option(label="Office SOCKS5 / SOCKS5")
+            page.wait_for_timeout(2300)
+            screenshot("ssh-profile-proxy.png")
+            click(app.get_by_role("button", name="Save", exact=True))
+            cue("WORKSPACE READY", "One workspace for SSH profiles, AI assistance, port forwarding, and proxies.")
+            page.wait_for_timeout(2500)
             duration=time.monotonic()-started
             frame=page.frames[1]
             calls=frame.evaluate("window.__DEMO_RECORDING__.calls")
+            required = {"host_save", "host_trust", "terminal_connect", "agent_start", "approval_decide",
+                        "provider_models", "forward_save", "forward_start", "proxy_save"}
+            missing = required.difference(calls)
+            if missing:
+                raise RuntimeError(f"Demo is missing feature interactions: {sorted(missing)}")
+            evidence = frame.evaluate("""() => ({
+                hosts: window.__DEMO_RECORDING__.hosts.map(({label, groupId, proxyId}) => ({label,groupId,proxyId})),
+                tunnels: window.__DEMO_RECORDING__.forwards.map(({profile, status}) => ({name:profile.name,mode:profile.mode,status})),
+                proxies: window.__DEMO_RECORDING__.proxies.map(({name,kind}) => ({name,kind}))
+            })""")
+            assert len(evidence["tunnels"]) == 3
+            assert len(evidence["proxies"]) == 2
+            assert {v["kind"] for v in evidence["proxies"]} == {"socks5", "http"}
+            assert any(v["status"] == "running" for v in evidence["tunnels"])
+            assert evidence["hosts"][0]["proxyId"]
+            assert {v["mode"] for v in evidence["tunnels"]} == {"local", "remote", "dynamic"}
             video=page.video
             raw=Path(video.path())
             context.close()
@@ -171,7 +266,7 @@ def main():
             srt.append(f"{i+1}\n{timestamp(start)} --> {timestamp(end)}\n{step}: {text}\n")
         (OUTPUT / "selai-ssh-ai-demo.en.srt").write_text("\n".join(srt),encoding="utf-8")
         (WORK / "recording-checks.json").write_text(json.dumps({"durationSeconds":duration,"frontendErrors":errors,
-            "commands":sorted(set(calls)),"mockBackend":True,"network":"loopback-only"},indent=2),encoding="utf-8")
+            "commands":sorted(set(calls)),"features":evidence,"mockBackend":True,"network":"loopback-only"},indent=2),encoding="utf-8")
         print(f"Recorded {duration:.1f}s, full-frame dark UI with English captions.",flush=True)
     finally:
         if os.name=="nt":

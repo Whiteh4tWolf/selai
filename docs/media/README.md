@@ -1,46 +1,50 @@
-# SSH profile and AI Assistant demo
+# Selai feature walkthrough
 
 [Animated README preview](selai-ssh-ai-demo.gif) ·
 [Download the MP4](selai-ssh-ai-demo.mp4?raw=true) ·
 [Poster](selai-ssh-ai-demo-poster.jpg) ·
 [English subtitles](selai-ssh-ai-demo.en.srt)
 
-This video is about 59 seconds, 1600 × 900, H.264/yuv420p, with English captions
-and no audio. The application fills the frame in dark mode. There are no
-presentation cards or colored background around the workspace. The small
-caption band identifies the current action and labels the mock backend.
-
-The main project README displays a looping GIF in place of the top screenshot.
-The preview is 960 × 540 at 6 fps with 96 colors; the MP4 retains the original
-resolution and frame rate. Animated playback follows the viewer's GitHub
+The walkthrough covers **SSH Profile**, **AI Assistant**, **Port forwarding**,
+and **Proxies** using Selai's current production frontend. The 104-second recording fills
+1600 × 900 frames in dark mode, with a small English caption band and no audio.
+The MP4 uses H.264/yuv420p with fast-start playback. The looping README GIF is
+960 × 540 at 6 fps with 96 colors. Animated playback follows the viewer's GitHub
 accessibility settings.
 
-## Workflow
+## Workflows
 
-1. Add `staging-web` with address `192.0.2.42`, port `22`, deployment user
-   `deploy`, and password authentication.
-2. Save and connect, inspect the Ed25519 SHA-256 server fingerprint, then trust it.
-3. Open the terminal and run `hostname; uptime`.
-4. Open AI Assistant, name the session, and select `staging-web` through `@`.
-5. Ask it to check nginx and disk space, restarting nginx only if stopped.
-6. Inspect the diagnostics and proposed `sudo systemctl restart nginx` command.
-7. Approve that command and inspect the service verification and disk summary.
+1. **SSH Profile:** create `staging-web` in the Staging group, enter the sample
+   address `192.0.2.42`, port `22`, deployment username, and password. Save and
+   connect, inspect the Ed25519 fingerprint, trust it, and run `hostname; uptime`
+   in the terminal. Reopen the saved profile to show the editor.
+2. **AI Assistant:** name a session, choose the preconfigured provider and its
+   server-ready model, and target `staging-web` with `@`. Ask for nginx and disk
+   diagnostics, inspect the proposed `sudo systemctl restart nginx`, approve
+   that command, and review the verification and disk summary.
+3. **Port forwarding:** save and start a local PostgreSQL tunnel from
+   `127.0.0.1:15432` to `db.internal:5432`. Inspect its connection and traffic
+   counters. Save a remote webhook tunnel and a dynamic SOCKS5 tunnel to show
+   all three forwarding modes.
+4. **Proxies:** save an authenticated SOCKS5 office gateway and an HTTP CONNECT
+   corporate gateway. Edit the SSH profile, enable proxy routing, select the
+   office gateway, and save the profile.
 
 ## Recording scope
 
-This records real clicks, typing, dialogs, terminal rendering, and AI transcript
-updates in Selai's production frontend bundle. SSH and AI responses are fixtures
-from a recording-only mock IPC backend. No server is contacted, no shell command
-is executed, and no real provider key, vault, or saved host is used.
+The recording uses real clicks, typing, dialogs, terminal rendering, and AI
+transcript updates. SSH, AI, proxy, and tunnel responses come from a
+recording-only mock IPC backend. Traffic counters are fixture values, not
+measurements. No server is contacted, no shell command or network tunnel is
+started, and no real provider key, vault, or saved host is used.
 
-The AI provider is preconfigured and marked verified in the fixture so the video
-can focus on SSH profile creation and assistant use. The demo's sudo fixture does
-not ask for a password. Real hosts can prompt for one. The optional task root
-approval checkbox is left unchecked in the recording.
+The AI provider is preconfigured and marked tool-calling verified. The sudo
+fixture does not ask for a password; real hosts can prompt for one. The optional
+root approval for the rest of the task remains unchecked.
 
 ## Re-record
 
-Build the frontend, then run the isolated recording harness from the repository root:
+From the repository root, build the frontend and run the isolated harness:
 
 ```sh
 pnpm --dir apps/desktop build
@@ -51,9 +55,19 @@ python scripts/docs/render_readme_gif.py
 ```
 
 The harness starts a temporary Vite preview server on loopback port 1426 and a
-headless Chromium recording context. It blocks requests outside that local
-origin and uses `scripts/docs/video_demo_backend.js` only in the recording.
-Neither the fixture nor the recording shell is included in the application bundle.
+fresh headless Chromium context. Requests outside that origin are blocked.
+`scripts/docs/video_demo_backend.js` is loaded only into this recording context;
+it is not imported by the application bundle.
 
-Generated MP4, GIF, poster, and English SRT files are written here. Raw recordings,
-review frames, and command-name checks are written under `target/video-qa/technical`.
+Generated MP4, GIF, poster, and English SRT files are written here. The README's
+four primary screenshots are captured from the app without the caption band:
+
+- `docs/screenshots/ssh-profile.png`
+- `docs/screenshots/ai-assistant.png`
+- `docs/screenshots/port-forwarding.png`
+- `docs/screenshots/proxies.png`
+
+Additional captures show the SSH profile's selected proxy, connected workspace,
+and AI approval. Raw video and recording checks are saved under
+`target/video-qa/technical`. The harness checks for all four workflows' IPC calls,
+three tunnel modes, two proxy protocols, an assigned proxy, and frontend errors.
