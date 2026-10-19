@@ -5,7 +5,7 @@
 <p align="center"><strong>A desktop SSH workbench with AI assistance, tunnels, and proxies.</strong><br>
 SSH profiles, terminals, AI chat, port forwarding, and proxies in one app. You choose where the assistant may work and approve its commands, with optional root approval for one request on one host.</p>
 
-<p align="center"><sub>Preview 0.2.1 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
+<p align="center"><sub>Preview 0.3.0 · Apache 2.0 · Windows, Linux, and macOS · Tauri 2, Rust, and React</sub></p>
 
 <p align="center">
   <a href="#quick-demo">Demo</a> ·
@@ -37,29 +37,26 @@ never included in requests to an AI provider.
 - **Everything is recorded.** Each request, command, outcome, and token count is
   saved to History, with an audit record written before remote execution.
 
-> **Version 0.2.1 is a preview.** Automated coverage includes Linux SSH and agent
+> **Version 0.3.0 is a preview.** Automated coverage includes Linux SSH and agent
 > flows with an OpenSSH fixture and mock AI providers, plus Windows encryption
 > and vault checks in the release build profile. Full interactive SSH and live
 > provider coverage across all platforms is not established. See [current milestone evidence](docs/release/milestones.md)
 > and [known security limits](SECURITY.md) before using Selai with sensitive
 > systems.
 
-## New in 0.2.1
+## New in 0.3.0
 
-- Fixed a native transfer-start panic affecting uploads and downloads.
-- A collapsible **Transfers** tray with **Clear** for finished jobs. Clearing
-  removes session transfer records; it does not delete transferred files or cancel active jobs.
-- More compact port-forwarding cards retain route, status, connection and traffic details.
-- Terminal backgrounds and ANSI colors now follow light, dark, or system theme
-  without reconnecting. Programs using explicit RGB colors can still choose their own colors.
-- Bounded terminal output queues and forwarding connections, smaller rendered chat
-  history, and coalesced autosaves keep background work and queued data under control.
-- Disk-space checks for downloads/backups, periodic output-preview retention, and
-  optional idle vault compaction under **Security → Storage**.
+- Choose a provider and any available model directly in the chat composer. Provider
+  settings focus on connecting and testing tool support; server tasks still require
+  the model verified for tool calling.
+- Set the AI task budget in **History**: up to 30 steps and 30 minutes per task.
+  Defaults are 30 steps and 30 minutes; saved changes apply to new tasks.
+- Updated screenshots and an inline MP4 walkthrough cover SSH profiles, AI Assistant,
+  port forwarding, and proxies.
 
-These changes add resource limits; they do not establish a measured CPU/RAM
-reduction. See [resource limits and performance evidence](docs/release/performance.md)
-and the [release notes](docs/release/RELEASE_NOTES.md).
+See the [0.3.0 release notes](docs/release/RELEASE_NOTES.md),
+[resource limits and performance evidence](docs/release/performance.md), and
+[known security limits](SECURITY.md).
 
 ## Quick demo
 
@@ -412,7 +409,7 @@ Keep the old folder until you have verified the restored hosts and history.
 
 ### Install a preview build
 
-Download [Selai 0.2.1 from GitHub Releases](https://github.com/f3ci/selai/releases/tag/v0.2.1).
+Download [Selai 0.3.0 from GitHub Releases](https://github.com/f3ci/selai/releases/tag/v0.3.0).
 Builds are also available from the **Release packaging** workflow artifacts.
 Packages are provided for:
 

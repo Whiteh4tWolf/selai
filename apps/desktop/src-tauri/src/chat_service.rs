@@ -143,8 +143,8 @@ impl Services {
             .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "provider not found"))?;
         let mut settings = settings_from_record(&rec)?;
         if let Some(model_id) = model_id {
-            settings.model_id = ModelId::parse(model_id)
-                .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+            settings.model_id =
+                ModelId::parse(model_id).map_err(|e| CommandError::new(e.code(), e.to_string()))?;
         }
         let api_key = self
             .secrets

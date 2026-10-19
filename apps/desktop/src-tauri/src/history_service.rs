@@ -414,12 +414,14 @@ impl Services {
             .and_then(|v| v.as_str().map(str::to_owned))
             .filter(|id| !id.is_empty());
         let task_max_steps = preference_u32(
-            db.get_setting(TASK_MAX_STEPS_KEY).map_err(|e| storage(&e))?,
+            db.get_setting(TASK_MAX_STEPS_KEY)
+                .map_err(|e| storage(&e))?,
             DEFAULT_TASK_MAX_STEPS,
             1..=30,
         );
         let task_max_minutes = preference_u32(
-            db.get_setting(TASK_MAX_MINUTES_KEY).map_err(|e| storage(&e))?,
+            db.get_setting(TASK_MAX_MINUTES_KEY)
+                .map_err(|e| storage(&e))?,
             DEFAULT_TASK_MAX_MINUTES,
             1..=30,
         );

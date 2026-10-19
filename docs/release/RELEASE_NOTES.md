@@ -7,6 +7,23 @@ fixtures and mock providers. Windows packaging also checks encryption and the
 vault in the release build profile. This is not complete interactive coverage
 of every platform and live AI provider. The installers are not code-signed.
 
+## New in 0.3.0
+
+This minor release adds model selection to chat and lets operators configure
+agent task budgets from the UI.
+
+- **Choose chat models in the composer:** select a provider and load its available
+  models while chatting. Provider settings are for connecting and testing. Server
+  tasks remain restricted to the model verified for tool calling.
+- **Configurable task budgets:** choose up to 30 agent steps and 30 minutes in
+  History. The default is 30 steps or 30 minutes; changing a saved preference
+  affects tasks started afterward. Existing task records and provider profiles
+  are retained.
+- **Refreshed walkthrough:** the README now has current screenshots and an inline
+  MP4 player covering SSH profiles, AI Assistant, port forwarding and proxies.
+
+Existing vault data is retained; no database migration is required.
+
 ## New in 0.2.1
 
 This patch improves transfer stability, the network workspace, terminal themes,

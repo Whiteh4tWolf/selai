@@ -50,7 +50,7 @@
         case 'vault_watch': case 'vault_status': return { phase: 'unlocked', legacyFound: false, timeoutMinutes: 15,
           activeTasks: 0, terminals: terminal.size, cleanupPending: false, retryAfterMs: 0, flushRequired: false };
         case 'vault_activity': case 'vault_flush_complete': return null;
-        case 'app_info': return { name: 'Selai', version: '0.2.1' };
+        case 'app_info': return { name: 'Selai', version: '0.3.0' };
         case 'storage_status': return { schemaVersion: 9, journalMode: 'memory', interruptedTasksAtStartup: 0, interruptedExecutionsAtStartup: 0 };
         case 'local_host': return local;
         case 'host_list': return { items: hosts, nextCursor: null };
