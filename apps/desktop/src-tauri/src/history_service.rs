@@ -27,6 +27,10 @@ pub const EXPORT_ROW_LIMIT: usize = 1000;
 const RETENTION_KEY: &str = "ai.output_retention_days";
 const LAST_PROVIDER_KEY: &str = "ai.last_provider_id";
 const PINNED_HOST_KEY: &str = "ai.pinned_host_id";
+const TASK_MAX_STEPS_KEY: &str = "ai.task_max_steps";
+const TASK_MAX_MINUTES_KEY: &str = "ai.task_max_minutes";
+pub const DEFAULT_TASK_MAX_STEPS: u32 = 30;
+pub const DEFAULT_TASK_MAX_MINUTES: u32 = 30;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +136,8 @@ pub struct AiPreferences {
     pub output_retention_days: u32,
     /// The server the chat is pinned to. Messages without an `@` mention run there.
     pub pinned_host_id: Option<String>,
+    pub task_max_steps: u32,
+    pub task_max_minutes: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -141,6 +147,8 @@ pub struct AiPreferencesInput {
     pub output_retention_days: Option<u32>,
     /// `""` unpins the chat; a host id pins it to that host.
     pub pinned_host_id: Option<String>,
+    pub task_max_steps: Option<u32>,
+    pub task_max_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -405,10 +413,22 @@ impl Services {
             .map_err(|e| storage(&e))?
             .and_then(|v| v.as_str().map(str::to_owned))
             .filter(|id| !id.is_empty());
+        let task_max_steps = preference_u32(
+            db.get_setting(TASK_MAX_STEPS_KEY).map_err(|e| storage(&e))?,
+            DEFAULT_TASK_MAX_STEPS,
+            1..=30,
+        );
+        let task_max_minutes = preference_u32(
+            db.get_setting(TASK_MAX_MINUTES_KEY).map_err(|e| storage(&e))?,
+            DEFAULT_TASK_MAX_MINUTES,
+            1..=30,
+        );
         Ok(AiPreferences {
             last_provider_id: last,
             output_retention_days: days,
             pinned_host_id: pinned,
+            task_max_steps,
+            task_max_minutes,
         })
     }
 
@@ -466,9 +486,37 @@ impl Services {
             db.set_setting(RETENTION_KEY, &json!(days), now)
                 .map_err(|e| storage(&e))?;
         }
+        if let Some(steps) = input.task_max_steps {
+            if !(1..=30).contains(&steps) {
+                return Err(CommandError::new(
+                    ErrorCode::InvalidInput,
+                    "task step limit must be 1 to 30",
+                ));
+            }
+            db.set_setting(TASK_MAX_STEPS_KEY, &json!(steps), now)
+                .map_err(|e| storage(&e))?;
+        }
+        if let Some(minutes) = input.task_max_minutes {
+            if !(1..=30).contains(&minutes) {
+                return Err(CommandError::new(
+                    ErrorCode::InvalidInput,
+                    "task time limit must be 1 to 30 minutes",
+                ));
+            }
+            db.set_setting(TASK_MAX_MINUTES_KEY, &json!(minutes), now)
+                .map_err(|e| storage(&e))?;
+        }
         drop(db);
         self.preferences_get()
     }
+}
+
+fn preference_u32(value: Option<Value>, default: u32, range: std::ops::RangeInclusive<u32>) -> u32 {
+    value
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| range.contains(value))
+        .unwrap_or(default)
 }
 
 /// The export folder sits next to the database file. Used by `Services::open`.

@@ -541,6 +541,7 @@ pub async fn agent_start(
     state: State<'_, AppState>,
     host_id: String,
     provider_id: String,
+    model_id: Option<String>,
     prompt: String,
     history: Option<Vec<ChatMessageInput>>,
     on_event: Channel<AgentEventView>,
@@ -552,9 +553,10 @@ pub async fn agent_start(
     });
     let lease = services(&state)?;
     lease
-        .run(lease.agent_start(
+        .run(lease.agent_start_with_model(
             &host_id,
             &provider_id,
+            model_id.as_deref(),
             &prompt,
             &history.unwrap_or_default(),
             sink,
@@ -566,6 +568,7 @@ pub async fn agent_start(
 pub async fn chat_send(
     state: State<'_, AppState>,
     provider_id: String,
+    model_id: Option<String>,
     messages: Vec<ChatMessageInput>,
     on_event: Channel<ChatEventView>,
 ) -> Result<String, CommandError> {
@@ -574,7 +577,7 @@ pub async fn chat_send(
     });
     let lease = services(&state)?;
     lease
-        .run(lease.chat_send(&provider_id, &messages, sink))
+        .run(lease.chat_send_with_model(&provider_id, model_id.as_deref(), &messages, sink))
         .await
 }
 

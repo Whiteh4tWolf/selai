@@ -13,7 +13,7 @@ use selai_agent::{
 };
 use selai_domain::AuthMethod;
 use selai_domain::{
-    ApprovalId, ErrorCode, HostId, Page, PageRequest, ProviderId, SelaiError, TaskId,
+    ApprovalId, ErrorCode, HostId, ModelId, Page, PageRequest, ProviderId, SelaiError, TaskId,
 };
 use selai_secrets::{SecretKey, SecretValue, SshSecretKind};
 use selai_ssh::{connect_via, ConnectOptions, Endpoint, ExecOutput, Session, SshError, SudoStatus};
@@ -492,6 +492,19 @@ impl Services {
         history: &[ChatMessageInput],
         on_event: Arc<dyn Fn(AgentEventView) + Send + Sync>,
     ) -> Result<String, CommandError> {
+        self.agent_start_with_model(host_id, provider_id, None, prompt, history, on_event)
+            .await
+    }
+
+    pub async fn agent_start_with_model(
+        &self,
+        host_id: &str,
+        provider_id: &str,
+        model_id: Option<&str>,
+        prompt: &str,
+        history: &[ChatMessageInput],
+        on_event: Arc<dyn Fn(AgentEventView) + Send + Sync>,
+    ) -> Result<String, CommandError> {
         let history = prior_messages(history)?;
         let host: HostId = host_id
             .parse()
@@ -513,13 +526,16 @@ impl Services {
             .get_provider(provider)
             .map_err(|e| storage(&e))?
             .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "provider not found"))?;
-        if tool_calling_view(&rec).status != "verified" {
+        let selected_model = model_id.unwrap_or(&rec.model_id);
+        if selected_model != rec.model_id || tool_calling_view(&rec).status != "verified" {
             return Err(CommandError::new(
                 ErrorCode::ProviderToolUnsupported,
                 "run the tool calling test for this provider before starting a task",
             ));
         }
-        let settings = settings_from_record(&rec)?;
+        let mut settings = settings_from_record(&rec)?;
+        settings.model_id = ModelId::parse(selected_model)
+            .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
         let api_key = self
             .secrets
             .get(&SecretKey::provider_api_key(provider))
@@ -536,7 +552,14 @@ impl Services {
             api_key,
             history,
             prompt: prompt.to_owned(),
-            limits: Limits::default(),
+            limits: {
+                let prefs = self.preferences_get()?;
+                Limits {
+                    max_steps: prefs.task_max_steps,
+                    max_wall: Duration::from_secs(u64::from(prefs.task_max_minutes) * 60),
+                    ..Limits::default()
+                }
+            },
         };
         let sink: EventSink = Arc::new(move |event| on_event(wire_event(task, event)));
         let store = DbStore::new(Arc::clone(&self.db));

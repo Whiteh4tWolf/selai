@@ -13,6 +13,7 @@ import {
   localHost,
   preferencesGet,
   preferencesSet,
+  providerModels,
   providerList,
   type HostKeyProblem,
   type SudoAnswer,
@@ -67,6 +68,7 @@ interface PendingKey {
   host: HostView;
   problem: HostKeyProblem;
   executionProviderId: string;
+  modelId: string;
   history: ChatMessage[];
 }
 
@@ -90,6 +92,11 @@ interface Props {
 export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost = null, contextRequest = null }: Props = {}) {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [providerId, setProviderId] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const modelChoices = useRef(new Map<string, string>());
   /** A server mentioned with `@` in the message being written: this message only. */
   const [hosts, setHosts] = useState<HostView[]>([]);
   /**
@@ -156,6 +163,51 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
       window.removeEventListener(PROVIDERS_CHANGED, load);
     };
   }, []);
+
+  const provider = providers.find((p) => p.id === providerId);
+  useEffect(() => {
+    let active = true;
+    if (!provider) {
+      setModels([]);
+      setModelId('');
+      setModelsError(null);
+      return;
+    }
+    setModels([]);
+    setModelsLoading(true);
+    setModelsError(null);
+    void providerModels({
+      id: provider.id,
+      protocol: provider.protocol,
+      baseUrl: provider.baseUrl,
+      allowInsecureHttp: provider.allowInsecureHttp,
+    }).then((result) => {
+      if (!active) return;
+      const available = [...new Set(result.models)];
+      if (available.length === 0) available.push(provider.modelId);
+      setModels(available);
+      const remembered = modelChoices.current.get(provider.id);
+      const next = (remembered && available.includes(remembered) ? remembered : null)
+        ?? (available.includes(provider.modelId) ? provider.modelId : null)
+        ?? available[0]
+        ?? provider.modelId;
+      setModelId(next);
+      modelChoices.current.set(provider.id, next);
+    }).catch((err: unknown) => {
+      if (!active) return;
+      setModels([provider.modelId]);
+      setModelId(provider.modelId);
+      setModelsError(describeError(err));
+    }).finally(() => {
+      if (active) setModelsLoading(false);
+    });
+    return () => { active = false; };
+  }, [provider?.id, provider?.protocol, provider?.baseUrl, provider?.allowInsecureHttp, provider?.modelId]);
+
+  function chooseModel(id: string) {
+    setModelId(id);
+    if (provider) modelChoices.current.set(provider.id, id);
+  }
 
   useEffect(() => {
     let active = true;
@@ -312,8 +364,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     preferencesSet({ lastProviderId: id }).catch(() => undefined);
   }
 
-  const provider = providers.find((p) => p.id === providerId);
   const verified = provider?.toolCalling.status === 'verified';
+  const modelVerified = verified && modelId === provider?.modelId;
   // An archived or deleted server drops out of the list and so out of the chat.
   const contextHost =
     targets.find((t) => t.id === contextId) ??
@@ -323,7 +375,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
   // (plain discussion, which any provider can answer). A server needs tool calling.
   const messageHosts = hosts.length ? hosts : contextHost ? [contextHost] : [];
   const target = hosts[0] ?? contextHost;
-  const canSend = sessions.ready && !sessions.loading && !running && provider !== undefined && (messageHosts.length === 0 || verified) && prompt.trim().length > 0;
+  const canSend = sessions.ready && !sessions.loading && !running && !modelsLoading && !!modelId && provider !== undefined && (messageHosts.length === 0 || modelVerified) && prompt.trim().length > 0;
 
   /** Pinned servers are remembered across restarts; a failed save keeps the choice for now. */
   function rememberPin(id: string | null) {
@@ -396,18 +448,18 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     pendingText.current.clear();
   }, []);
 
-  async function startTurn(turn: Turn, target: HostView, executionProviderId = providerId, history = conversation()) {
+  async function startTurn(turn: Turn, target: HostView, executionProviderId = providerId, executionModelId = modelId, history = conversation()) {
     try {
       // The new message has no reply yet, so it is not part of its own history.
       const id = await agentStart(target.id, executionProviderId, turn.taskPrompt, history, (event) => {
         displayEvent(turn.id, event);
-      });
+      }, executionModelId);
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
     } catch (err) {
       const problem = hostKeyProblem(err);
       if (problem) {
         updateTurn(turn.id, (t) => ({ ...t, running: false, notice: 'Waiting for you to approve the server key…' }));
-        const promptForKey = { turn, host: target, problem, executionProviderId, history };
+        const promptForKey = { turn, host: target, problem, executionProviderId, modelId: executionModelId, history };
         keyPromptQueue.current.push(promptForKey);
         if (!keyPromptRef.current) {
           keyPromptRef.current = keyPromptQueue.current.shift() ?? null;
@@ -434,12 +486,12 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     return out;
   }
 
-  async function startChat(turn: Turn, history: { role: 'user' | 'assistant'; content: string }[]) {
+  async function startChat(turn: Turn, selectedModelId: string, history: { role: 'user' | 'assistant'; content: string }[]) {
     try {
       const id = await chatSend(providerId, [...history, { role: 'user', content: turn.prompt }], (event) => {
         const asTask = event.type === 'completed' ? ({ type: 'completed', text: '' } as const) : event;
         displayEvent(turn.id, asTask);
-      });
+      }, selectedModelId);
       updateTurn(turn.id, (t) => ({ ...t, taskId: id }));
     } catch (err) {
       updateTurn(turn.id, (t) => ({ ...t, running: false, error: describeError(err) }));
@@ -448,6 +500,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
 
   async function send() {
     if (!canSend) return;
+    const selectedModelId = modelId;
     const selectedTargets = hosts.length ? hosts : contextHost ? [contextHost] : [];
     const originalPrompt = prompt.trim();
     const taskPrompt = draftMentions.reduce((text, mention) => text.replaceAll(mention, ''), originalPrompt).replace(/\s{2,}/g, ' ').trim();
@@ -473,8 +526,8 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
     setHosts([]);
     setMention(null);
     setError(null);
-    if (selectedTargets.length) await Promise.all(newTurns.map((turn, index) => startTurn(turn, selectedTargets[index]!)));
-    else await startChat(newTurns[0]!, history);
+    if (selectedTargets.length) await Promise.all(newTurns.map((turn, index) => startTurn(turn, selectedTargets[index]!, providerId, selectedModelId)));
+    else await startChat(newTurns[0]!, selectedModelId, history);
   }
 
   async function stop() {
@@ -653,13 +706,15 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
             {error}
           </p>
         )}
-        {(providers.length === 0 || (messageHosts.length > 0 && !verified)) && (
+        {(providers.length === 0 || (messageHosts.length > 0 && !modelVerified)) && (
           <div className="banner" data-tone="warning" style={{ maxWidth: 820, margin: '0 auto 0.6rem' }}>
             <AlertIcon />
             <span className="grow">
               {providers.length === 0
                 ? 'Add an AI provider first.'
-                : 'Working on a server needs a provider whose tool calling test passed.'}
+                : provider && modelId !== provider.modelId
+                  ? `Server tasks need the model tested for tool calling (${provider?.modelId}).`
+                  : 'Working on a server needs a provider whose tool calling test passed.'}
             </span>
             {providers.length > 0 && hosts.length === 0 && contextHost && (
               <button type="button" className="btn btn-sm" onClick={() => chooseContext(null)}>
@@ -803,7 +858,7 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
             </button>
             <select
               aria-label="Provider"
-              className="model-select"
+              className="model-select provider-choice"
               value={providerId}
               onChange={(e) => chooseProvider(e.target.value)}
               disabled={running}
@@ -816,8 +871,25 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
               )}
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} · {p.modelId}
+                  {p.name}
                   {p.toolCalling.status === 'verified' ? '' : ' (chat only)'}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Model"
+              className="model-select model-choice"
+              value={modelId}
+              onChange={(e) => chooseModel(e.target.value)}
+              disabled={!provider || modelsLoading || running || models.length === 0}
+              title={modelsError ? `Could not refresh models: ${modelsError}` : undefined}
+            >
+              {!provider && <option value="">No model</option>}
+              {provider && modelsLoading && <option value={modelId}>Loading models…</option>}
+              {provider && !modelsLoading && models.length === 0 && <option value="">No models available</option>}
+              {models.map((model) => (
+                <option key={model} value={model}>
+                  {model}{model === provider?.modelId && provider.toolCalling.status === 'verified' ? ' · server ready' : ''}
                 </option>
               ))}
             </select>
@@ -858,11 +930,11 @@ export function AgentPanel({ onOpenProviders, onOpenHosts, onClose, activeHost =
           address={`${keyPrompt.host.hostname}:${keyPrompt.host.port}`}
           problem={keyPrompt.problem}
           onTrusted={() => {
-            const { turn, host: target, executionProviderId, history } = keyPrompt;
+            const { turn, host: target, executionProviderId, modelId: executionModelId, history } = keyPrompt;
             keyPromptRef.current = null;
             setKeyPrompt(null);
             updateTurn(turn.id, (t) => ({ ...t, running: true, notice: null }));
-            void startTurn(turn, target, executionProviderId, history);
+            void startTurn(turn, target, executionProviderId, executionModelId, history);
             keyPromptRef.current = keyPromptQueue.current.shift() ?? null;
             setKeyPrompt(keyPromptRef.current);
           }}

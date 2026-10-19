@@ -288,6 +288,8 @@ export function HostHistoryTab({ visible }: { visible: boolean }) {
   const [selected, setSelected] = useState<ExecutionView | null>(null);
   const [timeline, setTimeline] = useState<ExecutionView[] | null>(null);
   const [retention, setRetention] = useState(30);
+  const [taskMaxSteps, setTaskMaxSteps] = useState(30);
+  const [taskMaxMinutes, setTaskMaxMinutes] = useState(30);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -303,7 +305,12 @@ export function HostHistoryTab({ visible }: { visible: boolean }) {
       })
       .catch((err: unknown) => active && setError(describeError(err)));
     preferencesGet()
-      .then((prefs) => active && setRetention(prefs.outputRetentionDays))
+      .then((prefs) => {
+        if (!active) return;
+        setRetention(prefs.outputRetentionDays);
+        setTaskMaxSteps(prefs.taskMaxSteps);
+        setTaskMaxMinutes(prefs.taskMaxMinutes);
+      })
       .catch(() => undefined);
     return () => {
       active = false;
@@ -400,6 +407,17 @@ export function HostHistoryTab({ visible }: { visible: boolean }) {
       const prefs = await preferencesSet({ outputRetentionDays: retention });
       setRetention(prefs.outputRetentionDays);
       setNotice(`Output is kept for ${prefs.outputRetentionDays} day(s).`);
+    } catch (err) {
+      setError(describeError(err));
+    }
+  }
+
+  async function saveTaskLimits() {
+    try {
+      const prefs = await preferencesSet({ taskMaxSteps, taskMaxMinutes });
+      setTaskMaxSteps(prefs.taskMaxSteps);
+      setTaskMaxMinutes(prefs.taskMaxMinutes);
+      setNotice(`Task limit saved: ${prefs.taskMaxSteps} steps or ${prefs.taskMaxMinutes} minutes.`);
     } catch (err) {
       setError(describeError(err));
     }
@@ -620,6 +638,21 @@ export function HostHistoryTab({ visible }: { visible: boolean }) {
           Save retention
         </button>
         <span className="muted">Older output is removed automatically. Command records and token counts are kept.</span>
+      </div>
+
+      <div className="card task-limits" aria-label="Task limits">
+        <label className="field" style={{ width: 180 }}>
+          Maximum steps
+          <input type="number" min={1} max={30} value={taskMaxSteps}
+            onChange={(e) => setTaskMaxSteps(Number(e.target.value))} />
+        </label>
+        <label className="field" style={{ width: 180 }}>
+          Time limit (minutes)
+          <input type="number" min={1} max={30} value={taskMaxMinutes}
+            onChange={(e) => setTaskMaxMinutes(Number(e.target.value))} />
+        </label>
+        <button type="button" className="btn" onClick={saveTaskLimits}>Save task limits</button>
+        <span className="muted">Tasks stop when either limit is reached. Applies to tasks started after saving.</span>
       </div>
 
       {openTask && <TaskDrawer task={openTask} onClose={() => setOpenTask(null)} />}

@@ -98,13 +98,12 @@ describe('ProvidersPanel', () => {
 
     fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://10.1.2.3:4000/v1' } });
     fireEvent.click(screen.getByLabelText('Allow plain HTTP'));
-    fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'gpt-4o' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
     await waitFor(() => expect(save).toHaveBeenCalled());
     expect(save.mock.calls[0]?.[0]).toMatchObject({ baseUrl: 'http://10.1.2.3:4000/v1', allowInsecureHttp: true });
   });
 
-  it('applies a template without filling a model ID and sends the key only once', async () => {
+  it('applies a template without asking for a model and sends the key only once', async () => {
     vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [], nextCursor: null });
     mockTemplates();
     const save = vi.spyOn(ipc, 'providerSave').mockResolvedValue(provider);
@@ -112,17 +111,15 @@ describe('ProvidersPanel', () => {
     fireEvent.click((await screen.findAllByRole('button', { name: 'Add provider' }))[0]!);
     fireEvent.change(screen.getByLabelText('Start from a template'), { target: { value: 'vllm' } });
     expect(screen.getByLabelText('Base URL')).toHaveValue('http://localhost:8000/v1');
-    expect(screen.getByLabelText('Model ID')).toHaveValue('');
-
-    fireEvent.change(screen.getByLabelText(/Model ID/), { target: { value: 'qwen-tools' } });
+    expect(screen.queryByLabelText('Model ID')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'k-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
     await waitFor(() => expect(save).toHaveBeenCalled());
-    expect(save.mock.calls[0]?.[0]).toMatchObject({ modelId: 'qwen-tools', apiKey: 'k-1' });
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ modelId: 'default', apiKey: 'k-1' });
     await waitFor(() => expect(screen.queryByLabelText(/API key/)).not.toBeInTheDocument());
   });
 
-  it('checks the API key, then offers the available models as a dropdown', async () => {
+  it('checks the API key and leaves model choice to the chat composer', async () => {
     vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [], nextCursor: null });
     mockTemplates();
     const models = vi
@@ -138,7 +135,7 @@ describe('ProvidersPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Check API key' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('PROVIDER_UNAUTHORIZED');
-    expect(screen.getByLabelText('Model ID')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Model ID')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-right' } });
     fireEvent.click(screen.getByRole('button', { name: 'Check API key' }));
@@ -147,25 +144,20 @@ describe('ProvidersPanel', () => {
       expect.objectContaining({ baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-right', protocol: 'openai_chat' }),
     );
 
-    const select = screen.getByLabelText('Model');
-    expect(select).toHaveValue('gpt-4o');
-    fireEvent.change(select, { target: { value: 'gpt-4o-mini' } });
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
     await waitFor(() => expect(save).toHaveBeenCalled());
-    expect(save.mock.calls[0]?.[0]).toMatchObject({ modelId: 'gpt-4o-mini', apiKey: 'sk-right' });
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ modelId: 'gpt-4o', apiKey: 'sk-right' });
   });
 
-  it('a model missing from the list can still be typed', async () => {
+  it('does not ask for a model in provider connection settings', async () => {
     vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [], nextCursor: null });
     mockTemplates();
-    vi.spyOn(ipc, 'providerModels').mockResolvedValue({ models: ['a', 'b'], latencyMs: 1 });
     render(<ProvidersPanel />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Add provider' }))[0]!);
     fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://127.0.0.1:4000/v1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Check API key' }));
-    fireEvent.change(await screen.findByLabelText('Model'), { target: { value: '__other__' } });
-    fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'custom-finetune' } });
-    expect(screen.getByLabelText('Model ID')).toHaveValue('custom-finetune');
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Model ID')).not.toBeInTheDocument();
   });
 });
 

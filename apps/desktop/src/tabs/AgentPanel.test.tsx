@@ -121,6 +121,7 @@ describe('AgentPanel', () => {
     expect(await screen.findByText('Keepalive checks whether the connection is alive.')).toBeInTheDocument();
     expect(screen.getByLabelText('Session title')).toHaveValue('SSH troubleshooting');
     fireEvent.change(screen.getByLabelText('Request'), { target: { value: 'What interval should I use?' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(chat).toHaveBeenCalledTimes(2));
     expect(chat.mock.calls[1]![1]).toEqual([
@@ -167,7 +168,7 @@ describe('AgentPanel', () => {
     await sendRequest(textarea, 'check disk usage');
 
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function), 'qwen-tools'),
     );
     // The sent message stays in the thread with the mention highlighted.
     expect(await screen.findByText('@production-web', { selector: '.mention' })).toBeInTheDocument();
@@ -189,9 +190,10 @@ describe('AgentPanel', () => {
     expect(screen.queryByRole('list', { name: 'Matching hosts' })).not.toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: 'restart @Production Web nginx' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     fireEvent.keyDown(textarea, { key: 'Enter' });
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('h7', 'p1', 'restart nginx', [], expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('h7', 'p1', 'restart nginx', [], expect.any(Function), 'qwen-tools'),
     );
   });
 
@@ -208,11 +210,12 @@ describe('AgentPanel', () => {
     fireEvent.change(textarea, { target: { value: '@production-web @stag' } });
     fireEvent.click(await screen.findByRole('button', { name: /staging-db/ }));
     fireEvent.change(textarea, { target: { value: '@production-web @staging-db check disk usage' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(agent.start).toHaveBeenCalledTimes(2));
-    expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function));
-    expect(agent.start).toHaveBeenCalledWith('h2', 'p1', 'check disk usage', [], expect.any(Function));
+    expect(agent.start).toHaveBeenCalledWith('h1', 'p1', 'check disk usage', [], expect.any(Function), 'qwen-tools');
+    expect(agent.start).toHaveBeenCalledWith('h2', 'p1', 'check disk usage', [], expect.any(Function), 'qwen-tools');
     expect(screen.getAllByText('check disk usage', { selector: '.bubble' })).toHaveLength(1);
     expect(screen.getByText('production-web', { selector: '.host-tag' })).toBeInTheDocument();
     expect(screen.getByText('staging-db', { selector: '.host-tag' })).toBeInTheDocument();
@@ -226,7 +229,7 @@ describe('AgentPanel', () => {
     expect(screen.queryByLabelText('Remove production-web')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() =>
-      expect(chat).toHaveBeenCalledWith('p1', [{ role: 'user', content: 'what does df -h show?' }], expect.any(Function)),
+      expect(chat).toHaveBeenCalledWith('p1', [{ role: 'user', content: 'what does df -h show?' }], expect.any(Function), 'qwen-tools'),
     );
     expect(start).not.toHaveBeenCalled();
   });
@@ -304,6 +307,23 @@ describe('AgentPanel', () => {
       { role: 'user', content: 'and on macOS?' },
     ]);
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it('loads the provider model list in the composer and sends the chosen model', async () => {
+    vi.spyOn(ipc, 'providerList').mockResolvedValue({ items: [verified], nextCursor: null });
+    vi.spyOn(ipc, 'providerModels').mockResolvedValue({ models: ['qwen-tools', 'qwen-chat'], latencyMs: 12 });
+    const chat = vi.spyOn(ipc, 'chatSend').mockResolvedValue('c1');
+    render(<AgentPanel />);
+    const model = await screen.findByLabelText('Model');
+    await waitFor(() => expect(model).toHaveValue('qwen-tools'));
+    expect(screen.getByRole('option', { name: 'qwen-chat' })).toBeInTheDocument();
+    fireEvent.change(model, { target: { value: 'qwen-chat' } });
+    fireEvent.change(screen.getByLabelText('Request'), { target: { value: 'Explain SSH multiplexing' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(chat).toHaveBeenCalledWith(
+      'p1', [{ role: 'user', content: 'Explain SSH multiplexing' }], expect.any(Function), 'qwen-chat',
+    ));
   });
 
   it('a host task shows each command as one quiet line, not its output', async () => {
@@ -460,9 +480,10 @@ describe('AgentPanel', () => {
     expect(option).toHaveTextContent('This machine · local shell');
     fireEvent.click(option);
     fireEvent.change(textarea, { target: { value: '@This computer how much disk is free?' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     fireEvent.keyDown(textarea, { key: 'Enter' });
     await waitFor(() =>
-      expect(agent.start).toHaveBeenCalledWith('local', 'p1', 'how much disk is free?', [], expect.any(Function)),
+      expect(agent.start).toHaveBeenCalledWith('local', 'p1', 'how much disk is free?', [], expect.any(Function), 'qwen-tools'),
     );
   });
 
@@ -498,7 +519,7 @@ describe('AgentPanel', () => {
       // decides whether it needs to run anything there.
       await send('what does df -h show?');
       await waitFor(() =>
-        expect(agent.start).toHaveBeenLastCalledWith('h1', 'p1', 'what does df -h show?', [], expect.any(Function)),
+        expect(agent.start).toHaveBeenLastCalledWith('h1', 'p1', 'what does df -h show?', [], expect.any(Function), 'qwen-tools'),
       );
       agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
 
@@ -507,12 +528,12 @@ describe('AgentPanel', () => {
       fireEvent.click(await screen.findByRole('button', { name: /staging-db/ }));
       await send('@staging-db check the logs');
       await waitFor(() =>
-        expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', 'check the logs', expect.any(Array), expect.any(Function)),
+        expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', 'check the logs', expect.any(Array), expect.any(Function), 'qwen-tools'),
       );
       agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
       await send('and the memory?');
       await waitFor(() =>
-        expect(agent.start).toHaveBeenLastCalledWith('h1', 'p1', 'and the memory?', expect.any(Array), expect.any(Function)),
+        expect(agent.start).toHaveBeenLastCalledWith('h1', 'p1', 'and the memory?', expect.any(Array), expect.any(Function), 'qwen-tools'),
       );
       agent.play({ taskId: 't1', type: 'state', state: 'completed', errorCode: null });
 
@@ -546,7 +567,7 @@ describe('AgentPanel', () => {
 
     it('restores a remembered pin, and "No server" in the menu makes the chat plain', async () => {
       const { agent, chat, save } = setup();
-      vi.spyOn(ipc, 'preferencesGet').mockResolvedValue({ lastProviderId: null, outputRetentionDays: 30, pinnedHostId: 'h2' });
+      vi.spyOn(ipc, 'preferencesGet').mockResolvedValue({ lastProviderId: null, outputRetentionDays: 30, pinnedHostId: 'h2', taskMaxSteps: 30, taskMaxMinutes: 30 });
       render(<AgentPanel activeHost={host} />);
       expect(await screen.findByRole('button', { name: 'Unpin staging-db' })).toHaveAttribute('aria-pressed', 'true');
 
@@ -567,7 +588,7 @@ describe('AgentPanel', () => {
       fireEvent.click(await screen.findByRole('menuitemradio', { name: /staging-db/ }));
       expect(save).toHaveBeenLastCalledWith({ pinnedHostId: 'h2' });
       await send('uptime');
-      await waitFor(() => expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', 'uptime', [], expect.any(Function)));
+      await waitFor(() => expect(agent.start).toHaveBeenLastCalledWith('h2', 'p1', 'uptime', [], expect.any(Function), 'qwen-tools'));
     });
 
     it('a host chosen in another view becomes the pinned chat server', async () => {

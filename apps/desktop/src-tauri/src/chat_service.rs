@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use selai_domain::{ErrorCode, ProviderId, SelaiError, TaskId};
+use selai_domain::{ErrorCode, ModelId, ProviderId, SelaiError, TaskId};
 use selai_llm::{AgentEvent as ModelEvent, Message, TurnRequest};
 use selai_secrets::SecretKey;
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,17 @@ impl Services {
         messages: &[ChatMessageInput],
         on_event: Arc<dyn Fn(ChatEventView) + Send + Sync>,
     ) -> Result<String, CommandError> {
+        self.chat_send_with_model(provider_id, None, messages, on_event)
+            .await
+    }
+
+    pub async fn chat_send_with_model(
+        &self,
+        provider_id: &str,
+        model_id: Option<&str>,
+        messages: &[ChatMessageInput],
+        on_event: Arc<dyn Fn(ChatEventView) + Send + Sync>,
+    ) -> Result<String, CommandError> {
         let provider: ProviderId = provider_id
             .parse()
             .map_err(|_| CommandError::new(ErrorCode::InvalidInput, "invalid provider id"))?;
@@ -130,7 +141,11 @@ impl Services {
             .get_provider(provider)
             .map_err(|e| CommandError::new(e.code(), e.to_string()))?
             .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "provider not found"))?;
-        let settings = settings_from_record(&rec)?;
+        let mut settings = settings_from_record(&rec)?;
+        if let Some(model_id) = model_id {
+            settings.model_id = ModelId::parse(model_id)
+                .map_err(|e| CommandError::new(e.code(), e.to_string()))?;
+        }
         let api_key = self
             .secrets
             .get(&SecretKey::provider_api_key(provider))

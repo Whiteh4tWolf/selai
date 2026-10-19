@@ -87,8 +87,6 @@ type KeyCheck =
   | { state: 'ok'; models: string[]; latencyMs: number }
   | { state: 'fail'; message: string };
 
-const OTHER_MODEL = '__other__';
-
 interface TestRun {
   connectivity?: Step;
   toolCalling?: Step;
@@ -102,7 +100,6 @@ export function ProvidersPanel() {
   const [form, setForm] = useState<FormState | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [check, setCheck] = useState<KeyCheck>({ state: 'idle' });
-  const [manualModel, setManualModel] = useState(false);
   const [clearKey, setClearKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -132,14 +129,12 @@ export function ProvidersPanel() {
     setClearKey(false);
     setFormError(null);
     setCheck({ state: 'idle' });
-    setManualModel(false);
   }
 
   /** Any change to where or how we connect makes an earlier check stale. */
   function changeEndpoint(next: FormState) {
     setForm(next);
     setCheck({ state: 'idle' });
-    setManualModel(false);
   }
 
   async function checkKey() {
@@ -154,13 +149,13 @@ export function ProvidersPanel() {
         apiKey: apiKey || undefined,
       });
       setCheck({ state: 'ok', models: result.models, latencyMs: result.latencyMs });
-      // Keep a model the profile already has; otherwise preselect the first one.
+      // Keep the model used by the provider test if it is still available;
+      // otherwise use the first model as the profile's tool-test model.
       setForm((prev) =>
-        prev && !result.models.includes(prev.modelId) && result.models.length > 0 && !prev.modelId
-          ? { ...prev, modelId: result.models[0] ?? '' }
+        prev && result.models.length > 0 && !result.models.includes(prev.modelId)
+          ? { ...prev, modelId: result.models[0] ?? prev.modelId }
           : prev,
       );
-      setManualModel(result.models.length === 0 || (!!form.modelId && !result.models.includes(form.modelId)));
     } catch (err) {
       setCheck({ state: 'fail', message: describeError(err) });
     }
@@ -188,7 +183,9 @@ export function ProvidersPanel() {
       name: form.name.trim(),
       protocol: form.protocol,
       baseUrl: form.baseUrl.trim(),
-      modelId: form.modelId.trim(),
+      // The profile retains a model only as the target for its tool-calling
+      // verification; ordinary chat model choice lives in the composer.
+      modelId: form.modelId.trim() || 'default',
       timeoutSeconds: Number(form.timeoutSeconds),
       maxOutputTokens: Number(form.maxOutputTokens),
       allowInsecureHttp: remoteHttp && form.allowInsecureHttp,
@@ -257,7 +254,7 @@ export function ProvidersPanel() {
       <header className="page-head">
         <div className="grow">
           <h1>AI Providers</h1>
-          <p>Models the agent can use. A provider is usable once its test passes.</p>
+          <p>Connect a provider and test it here. Choose its model from the chat composer.</p>
         </div>
         <button type="button" className="btn btn-primary" onClick={() => openForm({ ...EMPTY })}>
           <PlusIcon /> Add provider
@@ -297,7 +294,7 @@ export function ProvidersPanel() {
                 <div className="provider-main">
                   <strong>{p.name}</strong>
                   <div className="meta">
-                    {p.modelId} · {p.baseUrl}
+                    {p.baseUrl}
                   </div>
                   <div className="provider-tags">
                     <span className="badge" data-status={p.toolCalling.status}>
@@ -459,48 +456,7 @@ export function ProvidersPanel() {
                   <span className="hint">Checks the key and loads the model list.</span>
                 )}
               </div>
-              {check.state === 'ok' && check.models.length > 0 && !manualModel ? (
-                <Field label="Model" hint="Models this key can use, from the provider.">
-                  <select
-                    value={check.models.includes(form.modelId) ? form.modelId : ''}
-                    onChange={(e) => {
-                      if (e.target.value === OTHER_MODEL) {
-                        setManualModel(true);
-                        return;
-                      }
-                      setForm({ ...form, modelId: e.target.value });
-                    }}
-                  >
-                    {!check.models.includes(form.modelId) && (
-                      <option value="" disabled>
-                        Choose a model
-                      </option>
-                    )}
-                    {check.models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                    <option value={OTHER_MODEL}>Other (type an ID)…</option>
-                  </select>
-                </Field>
-              ) : (
-                <Field
-                  label="Model ID"
-                  hint={
-                    check.state === 'ok' && check.models.length > 0
-                      ? 'Typed by hand. Use the list above unless your model is missing.'
-                      : 'Check the API key to pick from a list, or type the ID exactly.'
-                  }
-                >
-                  <input value={form.modelId} onChange={(e) => setForm({ ...form, modelId: e.target.value })} />
-                </Field>
-              )}
-              {manualModel && check.state === 'ok' && check.models.length > 0 && (
-                <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setManualModel(false)}>
-                  Pick from the list instead
-                </button>
-              )}
+              <p className="hint">Choose a provider and model in the chat composer. The first available model is used for the tool calling test.</p>
             </div>
             <div className="form-section">
               <h3>Limits</h3>

@@ -295,9 +295,23 @@ async fn preferences_persist_and_refuse_bad_values() {
             last_provider_id: None,
             output_retention_days: Some(0),
             pinned_host_id: None,
+            task_max_steps: None,
+            task_max_minutes: None,
         })
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidInput);
+
+    let refused_task_limit = h
+        .services
+        .preferences_set(selai_desktop_lib::history_service::AiPreferencesInput {
+            last_provider_id: None,
+            output_retention_days: None,
+            pinned_host_id: None,
+            task_max_steps: Some(31),
+            task_max_minutes: None,
+        })
+        .unwrap_err();
+    assert_eq!(refused_task_limit.code, ErrorCode::InvalidInput);
 
     let unknown = h
         .services
@@ -305,6 +319,8 @@ async fn preferences_persist_and_refuse_bad_values() {
             last_provider_id: Some("00000000-0000-4000-8000-0000000000aa".into()),
             output_retention_days: None,
             pinned_host_id: None,
+            task_max_steps: None,
+            task_max_minutes: None,
         })
         .unwrap_err();
     assert_eq!(unknown.code, ErrorCode::NotFound);
@@ -314,6 +330,8 @@ async fn preferences_persist_and_refuse_bad_values() {
             last_provider_id: Some(provider.clone()),
             output_retention_days: Some(14),
             pinned_host_id: None,
+            task_max_steps: Some(24),
+            task_max_minutes: Some(25),
         })
         .expect("set");
 
@@ -322,4 +340,6 @@ async fn preferences_persist_and_refuse_bad_values() {
     let saved = reopened.preferences_get().expect("saved");
     assert_eq!(saved.last_provider_id, Some(provider));
     assert_eq!(saved.output_retention_days, 14);
+    assert_eq!(saved.task_max_steps, 24);
+    assert_eq!(saved.task_max_minutes, 25);
 }

@@ -223,6 +223,8 @@ async fn a_pinned_server_is_remembered_and_archived_ones_cannot_be_pinned() {
         last_provider_id: None,
         output_retention_days: None,
         pinned_host_id: id.map(str::to_owned),
+        task_max_steps: None,
+        task_max_minutes: None,
     };
 
     assert_eq!(

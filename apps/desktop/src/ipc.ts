@@ -397,10 +397,11 @@ export function agentStart(
   prompt: string,
   history: ChatMessage[],
   onEvent: (event: AgentEvent) => void,
+  modelId?: string,
 ): Promise<string> {
   const channel = new Channel<AgentEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>('agent_start', { hostId, providerId, prompt, history, onEvent: channel });
+  return invoke<string>('agent_start', { hostId, providerId, modelId, prompt, history, onEvent: channel });
 }
 
 /** Events of a plain discussion reply. No host and no tools are involved. */
@@ -439,10 +440,11 @@ export function chatSend(
   providerId: string,
   messages: ChatMessage[],
   onEvent: (event: ChatEvent) => void,
+  modelId?: string,
 ): Promise<string> {
   const channel = new Channel<ChatEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>('chat_send', { providerId, messages, onEvent: channel });
+  return invoke<string>('chat_send', { providerId, modelId, messages, onEvent: channel });
 }
 
 export function agentCancel(taskId: string): Promise<boolean> {
@@ -544,6 +546,8 @@ export interface AiPreferences {
   outputRetentionDays: number;
   /** The server the chat is pinned to. Null or "" when none is pinned. */
   pinnedHostId: string | null;
+  taskMaxSteps: number;
+  taskMaxMinutes: number;
 }
 
 export function historyQuery(
